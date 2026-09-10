@@ -1,0 +1,47 @@
+# Illustrative Method 3 draft. No released runner accepts this format yet.
+# Helper entrypoints, model profiles, and game adapter are not supplied here.
+# This example selects a goal from a supplied observation. It does not play a game.
+format: method/3-draft
+name: Choose a factory goal
+goal: Use a fast calculation and a model decision to select the next production goal.
+inputs:
+  observation:
+    type: record
+    description: A recorded factory observation supplied by the game adapter.
+    fields:
+      iron_plates: number
+      copper_plates: number
+steps:
+  calculate:
+    purpose: Calculate material shortages without a model call.
+    in:
+      observation: inputs.observation
+    do:
+      kind: run
+      runtime: python
+      entrypoint: helpers/shortages.py
+    out:
+      shortages:
+        type: list
+        description: Material needs calculated from the observation.
+        items: text
+    limits:
+      timeout_ms: 1000
+  decide:
+    purpose: Select one goal that addresses the calculated shortages.
+    in:
+      shortages: shortages
+    do:
+      kind: call
+      model: planner
+      prompt: Choose one production goal from the supplied shortages and give its reason. If there are no shortages, choose to inspect the next production requirement.
+    out:
+      decision:
+        type: record
+        description: The next goal and the reason for choosing it.
+        fields:
+          goal: text
+          reason: text
+    limits:
+      timeout_ms: 5000
+result: decision

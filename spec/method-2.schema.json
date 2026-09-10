@@ -1,0 +1,371 @@
+{
+  "type": "object",
+  "properties": {
+    "format": {
+      "type": "string",
+      "enum": [
+        "method/2",
+        "workflow/2"
+      ]
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16000
+    },
+    "goal": {
+      "$ref": "#/properties/name"
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "text",
+              "number",
+              "boolean",
+              "record",
+              "list",
+              "file"
+            ]
+          },
+          "description": {
+            "$ref": "#/properties/name"
+          },
+          "fields": {
+            "type": "object",
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "$ref": "#/properties/inputs/additionalProperties/properties/type"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "$ref": "#/properties/inputs/additionalProperties/properties/type"
+                    },
+                    "description": {
+                      "$ref": "#/properties/name"
+                    },
+                    "fields": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "$ref": "#/properties/inputs/additionalProperties/properties/fields/additionalProperties"
+                      }
+                    },
+                    "items": {
+                      "$ref": "#/properties/inputs/additionalProperties/properties/fields/additionalProperties"
+                    },
+                    "format": {
+                      "$ref": "#/properties/name"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "items": {
+            "$ref": "#/properties/inputs/additionalProperties/properties/fields/additionalProperties"
+          },
+          "format": {
+            "$ref": "#/properties/name"
+          },
+          "default": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/properties/inputs/additionalProperties/properties/default"
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/properties/inputs/additionalProperties/properties/default"
+                }
+              }
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "description"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "browser",
+              "service",
+              "desktop",
+              "files",
+              "tool"
+            ]
+          },
+          "description": {
+            "$ref": "#/properties/name"
+          }
+        },
+        "required": [
+          "type",
+          "description"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "$ref": "#/properties/inputs/additionalProperties/properties/type"
+          },
+          "description": {
+            "$ref": "#/properties/name"
+          },
+          "fields": {
+            "$ref": "#/properties/inputs/additionalProperties/properties/fields"
+          },
+          "items": {
+            "$ref": "#/properties/inputs/additionalProperties/properties/items"
+          },
+          "format": {
+            "$ref": "#/properties/inputs/additionalProperties/properties/format"
+          },
+          "default": {
+            "$ref": "#/properties/inputs/additionalProperties/properties/default"
+          },
+          "file": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "type",
+          "description",
+          "file"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "steps": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "$ref": "#/properties/name"
+          },
+          "in": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*|\\.[0-9]+)*$"
+            }
+          },
+          "do": {
+            "$ref": "#/properties/name"
+          },
+          "ask": {
+            "$ref": "#/properties/name"
+          },
+          "out": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "$ref": "#/properties/inputs/additionalProperties/properties/type"
+                },
+                "description": {
+                  "$ref": "#/properties/name"
+                },
+                "fields": {
+                  "$ref": "#/properties/inputs/additionalProperties/properties/fields"
+                },
+                "items": {
+                  "$ref": "#/properties/inputs/additionalProperties/properties/items"
+                },
+                "format": {
+                  "$ref": "#/properties/inputs/additionalProperties/properties/format"
+                }
+              },
+              "required": [
+                "type",
+                "description"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "check": {
+            "anyOf": [
+              {
+                "$ref": "#/properties/name"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "equals": {
+                    "type": "object",
+                    "properties": {
+                      "actual": {
+                        "$ref": "#/properties/steps/additionalProperties/properties/in/additionalProperties"
+                      },
+                      "expected": {
+                        "$ref": "#/properties/steps/additionalProperties/properties/in/additionalProperties"
+                      }
+                    },
+                    "required": [
+                      "actual",
+                      "expected"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "equals"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "count": {
+                    "type": "object",
+                    "properties": {
+                      "value": {
+                        "$ref": "#/properties/steps/additionalProperties/properties/in/additionalProperties"
+                      },
+                      "min": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "max": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "required": [
+                      "value"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "count"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "present": {
+                    "$ref": "#/properties/steps/additionalProperties/properties/in/additionalProperties"
+                  }
+                },
+                "required": [
+                  "present"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "$ref": "#/properties/steps/additionalProperties/properties/in/additionalProperties"
+                  }
+                },
+                "required": [
+                  "file"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "each": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/properties/steps/additionalProperties/properties/in/additionalProperties"
+            }
+          },
+          "when": {
+            "$ref": "#/properties/steps/additionalProperties/properties/in/additionalProperties"
+          },
+          "after": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*$",
+                "maxLength": 80
+              },
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/properties/steps/additionalProperties/properties/after/anyOf/0"
+                }
+              }
+            ]
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/properties/steps/additionalProperties/properties/in/additionalProperties"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "result": {
+      "anyOf": [
+        {
+          "$ref": "#/properties/steps/additionalProperties/properties/in/additionalProperties"
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/properties/steps/additionalProperties/properties/in/additionalProperties"
+          }
+        }
+      ]
+    }
+  },
+  "required": [
+    "format",
+    "name",
+    "goal",
+    "steps",
+    "result"
+  ],
+  "additionalProperties": false,
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}
