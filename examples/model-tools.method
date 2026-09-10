@@ -1,0 +1,28 @@
+format: method/3
+name: A model call and a tool-using agent
+goal: Extract a number, then use a checked tool to increase it.
+inputs:
+  message: {type: text, description: A message containing a number., default: "The number is 41."}
+  expected: {type: number, description: The expected final value., default: 42}
+steps:
+  extract:
+    purpose: Extract the number in one structured model call.
+    in: {message: inputs.message}
+    do: {kind: call, model: planner, prompt: Return the number in the message as value.}
+    out:
+      value: {type: number, description: The extracted number.}
+    limits: {timeout_ms: 60000, max_model_requests: 1}
+  increase:
+    purpose: Use the allowed tool to add one and return the result.
+    in: {value: value, expected: inputs.expected}
+    do:
+      kind: agent
+      model: planner
+      prompt: Call increment with value. Return its result as answer.
+      tools: [increment]
+    out:
+      answer: {type: number, description: The tool result.}
+    check:
+      equals: {actual: answer, expected: expected}
+    limits: {timeout_ms: 60000, max_agent_turns: 3, max_model_requests: 3}
+result: answer

@@ -1,0 +1,17 @@
+{
+  "limits": { "timeout_ms": 150000, "max_model_requests": 4, "max_invocations": 4, "max_tool_calls": 2, "max_output_bytes": 1048576, "max_request_bytes": 1048576 },
+  "allow_local_processes": true,
+  "runtimes": { "node": { "command": "node", "version": "22 or later" } },
+  "models": {
+    "planner": { "backend": "openai-responses", "model": "gpt-6-astra", "api_key_env": "OPENAI_API_KEY", "max_output_tokens": 1024 }
+  },
+  "tools": {
+    "increment": {
+      "description": "Add one to value.",
+      "in": { "value": { "type": "number", "description": "The starting value." } },
+      "out": { "result": { "type": "number", "description": "The increased value." } },
+      "run": { "kind": "run", "runtime": "node", "entrypoint": "helpers/increment.mjs" },
+      "effects": []
+    }
+  }
+}

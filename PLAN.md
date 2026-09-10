@@ -1,6 +1,6 @@
 # Implementation plan
 
-Status: design only. Do not present these stages as complete.
+Status: stages 1 and 2 have a first implementation. The public runtime supports all three execution types, script and exact checks, typed state, each/repeat, limits, traces, and explicit migration. Local execution and deterministic provider fixtures are tested. Live API and Factorio comparisons remain to be run; stages 3–5 are not completed by runtime tests.
 
 ## 1. Publish and review the boundary
 

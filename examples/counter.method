@@ -1,0 +1,20 @@
+format: method/3
+name: A checked counter
+goal: Increase a saved count to three through checked script operations.
+inputs:
+  target: {type: number, description: The number to reach., default: 3}
+state:
+  count: {type: number, description: The last accepted count., default: 0}
+steps:
+  advance:
+    purpose: Increase the count once and stop when the target is reached.
+    in: {count: state.count, target: inputs.target}
+    do: {kind: run, runtime: node, entrypoint: helpers/counter.mjs}
+    out:
+      current: {type: number, description: The new count.}
+      done: {type: boolean, description: Whether the target has been reached.}
+    changes: [state.count]
+    check: {kind: run, runtime: node, entrypoint: helpers/check-counter.mjs}
+    repeat: {max_iterations: 5, until: done}
+    limits: {timeout_ms: 2000}
+result: {final_count: current, target_reached: done}

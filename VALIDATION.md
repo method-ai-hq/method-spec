@@ -1,0 +1,23 @@
+# Runtime 0.1.0 validation
+
+Date: 10 September 2026. Scope: the public Method 3 reference executor, not gameplay performance.
+
+## Local results
+
+- `npm run check`: 40 tests passed. Generated schemas match the source grammar.
+- `npm run example`: the checked counter completed three real script iterations and committed count 3 with zero model requests.
+- All three supplied Method 3 examples pass semantic validation with their configuration files.
+- `npm pack`: created `withmethod-runtime-0.1.0.tgz` with public source, examples, schemas, and license.
+- A fresh installation of that tarball in a temporary directory reports version 0.1.0 and successfully runs the bundled counter example.
+- `npm install` audit after updating the two direct dependencies reported zero known vulnerabilities.
+- Local Markdown links and Git whitespace checks passed.
+
+The suite covers dependency order, typed inputs and outputs, exact/script/agent checks, state commit boundaries, each/repeat, limits, subprocess termination, tool restrictions, uncertain external actions, file hashes, bundle changes, and explicit Method 2 migration.
+
+Model and agent tests use deterministic response fixtures. The real Responses HTTP adapter is exercised with a mocked HTTP transport. These tests check request format, tool dispatch, structured output validation, cancellation, error handling, and usage accounting; they do not establish compatibility with a live account or measure model quality.
+
+## CI and release
+
+The public `Check runtime` workflow runs the same suite, example, and package check on Node.js 22 for macOS and Linux. Its run status on the release commit is the source of truth for CI results.
+
+No live billed API call, Factorio comparison, policy-search improvement, or hosted-product deployment is claimed. The repository has no deployment target. Source and an installable package are published through GitHub.

@@ -1,0 +1,179 @@
+# Method 3 reference
+
+Implemented by `@withmethod/runtime` 0.1.0. This is the first public reference executor. The hosted Method product and SDK 0.3.0 do not automatically gain Method 3 support.
+
+Use `format: method/3`. The machine-readable grammar is [method-3.schema.json](method-3.schema.json). Operator configuration uses [runtime-config.schema.json](runtime-config.schema.json). The validator also checks references, dependencies, data declarations, loop conditions, and effects; JSON Schema alone is insufficient.
+
+## Installation and commands
+
+Node.js 22 or later is required. From this repository:
+
+```sh
+npm ci --ignore-scripts
+npm run check
+npm run example
+```
+
+To install the CLI from a public Git revision:
+
+```sh
+npm install -g github:method-ai-hq/method-spec#v0.1.0
+method3 --version
+```
+
+The command is `method3`, so installation does not replace the earlier `method` CLI. The source needs no build step. This package is distributed through GitHub; publication to the npm registry is not claimed.
+
+```sh
+method3 validate example.method --config runtime.json
+method3 run example.method --config runtime.json --inputs inputs.json
+method3 schema method
+method3 schema config
+```
+
+`validate` checks the Method and, when supplied, the configuration grammar. `run` additionally resolves profiles, tools, capabilities, environment bindings, and bundle files. A validation pass alone does not establish executable setup or task correctness.
+
+`run` prints status, elapsed time, model request count, and the run directory. Read `result.json` in that directory for the result. Exit codes are 0 for completion, 1 for failure, and 2 for a human-input request. Existing run directories are never reused.
+
+## Document and data
+
+Root fields are `format`, `name`, `goal`, `inputs`, `state`, `environment`, `files`, `steps`, and `result`. Only format, name, goal, steps, and result are required.
+
+Inputs and state declarations have a type, description, and optional default. Supply missing initial values through `--inputs` and `--state`, each pointing to a JSON object. Unknown or wrongly typed values fail before any operation. State is saved as one atomic `state.json` checkpoint in the run directory. Method 3 does not use Method 2's per-state `file` field.
+
+Types are `text`, `number`, `boolean`, `record`, `list`, and `file`. Records require `fields`. Lists require exactly one of `items` or `fields`; the latter describes each record in the list. Nested fields may use a short type name or a full shape. All declared fields are required and extra fields fail. Defaults must meet the declared type.
+
+References such as `inputs.target`, `state.count`, and `decision.goal` connect data. `run.started_at` contains an ISO timestamp. Named step outputs must be unique across the Method. Reserved namespaces cannot be reused as output names. Data references determine execution order; `after` adds explicit dependencies. Cycles fail validation. Independent steps currently run sequentially.
+
+The `environment` declarations describe connections. Operator configuration supplies a non-secret string for each connection, such as a local endpoint. Bind these values through `in` where needed. Credentials belong in environment variables, not in the Method or configuration data.
+
+## Executable steps
+
+Every step requires `purpose` and finite `limits.timeout_ms`. Use exactly one of `do` or `ask`. The three `do` forms are:
+
+```yaml
+do:
+  kind: run
+  runtime: node
+  entrypoint: helpers/select.mjs
+  args: []
+```
+
+```yaml
+do:
+  kind: call
+  model: planner
+  prompt: Select one goal from the supplied inputs and explain the choice.
+```
+
+```yaml
+do:
+  kind: agent
+  model: planner
+  prompt: Inspect the situation with the permitted tools, then return a decision.
+  tools: [observe, act]
+```
+
+`in` maps local aliases to references. `out` declares output values. The process or model returns a JSON object whose keys match `out` exactly, plus the state replacements described below. Inputs are supplied as JSON data; prompts and command lines do not receive text interpolation.
+
+### Scripts
+
+Runtime profiles name an executable, optional fixed arguments, a declared version, and optional environment-variable names. Commands use argument arrays without shell expansion. Node, Python, or another JSON-speaking executable can be registered.
+
+A script reads one JSON object on standard input, writes one JSON output object on standard output, and sends diagnostics to standard error. It runs from a saved copy of the bundle. Only PATH, LANG, METHOD_OUTPUT_DIR, and explicitly named environment variables are passed. Missing explicit variables fail. The executor hashes the resolved runtime binary and records the operator's declared version.
+
+The operator must set `allow_local_processes: true`. These are trusted local processes, **not an OS sandbox**. They can access resources allowed to the operating-system user. A script can call a trained model or an external API, but those internal calls are not metered or restricted by the executor's model-request counter. Use managed `call`/`agent` steps for measured model use.
+
+On timeout or process exit, the runner kills the process group on POSIX systems. The first release is tested on macOS and Linux. Windows process-tree termination and runtime compatibility are not claimed.
+
+### Models and agents
+
+The included provider is the [OpenAI Responses API](https://developers.openai.com/api/docs/guides/function-calling). Model profiles specify `backend: openai-responses`, the exact model identifier, `api_key_env`, a required `max_output_tokens`, and optional `reasoning_effort`. No model is silently substituted. Use a model supporting strict structured outputs; incompatible settings return a recorded provider error.
+
+`call` sends one request with a strict JSON output schema and no tools. The runner validates the response locally. It does not issue repair calls or transport retries.
+
+`agent` uses a fresh conversation and an explicit function-tool loop. The allowed tools are operator-configured scripts with typed inputs and outputs. The runner validates tool arguments, invokes the allowed script, validates its result, and sends the result back to the model. Reasoning items are retained between requests. Unknown tools, malformed arguments, refusal, or incomplete responses stop the operation.
+
+Each agent tool has `effects: []` for an observation/pure operation, or a list of environment names it can change. Action tools with effects require corresponding step `changes`. Checker agents can only use tools with empty effects. This enforces which registered functions the model can call; the truth of a tool's effect declaration depends on its trusted implementation. The runner does not give the model a built-in arbitrary shell.
+
+Computer-use support can be supplied through registered tools. No browser driver, screenshot transport, built-in computer-use model backend, or Codex subscription backend ships in 0.1.0. The included backend uses an API key, not a Codex login.
+
+## State updates and checks
+
+Declare state changes with `changes: [state.count]`. The output must then include a `state` object with complete replacement values for exactly those state names, alongside its ordinary outputs. This example returns one output and updates one state value:
+
+```json
+{"current": 3, "state": {"count": 3}}
+```
+
+The runner records candidate outputs, validates them, runs the requested check, and then replaces the state checkpoint. A failed or unknown check prevents that state commit. Already completed external actions remain possible; withholding a local state update does not undo them.
+
+Exact checks retain their named-reference forms:
+
+```yaml
+check:
+  equals: {actual: current, expected: target}
+```
+
+Other forms are `count: {value: items, min: 1, max: 10}`, `present: output_name`, and `file: artifact`. Count requires a list. Present checks that a referenced value exists and is non-null; it does not test truthiness or nonempty text.
+
+Checks can also use `kind: run` or `kind: agent`. They receive:
+
+```json
+{"inputs": {}, "outputs": {}, "state_before": {}, "state_after": {}, "evidence": []}
+```
+
+They return exactly:
+
+```json
+{"status": "pass", "reason": "Explain the observed result.", "evidence": []}
+```
+
+Status is `pass`, `fail`, or `unknown`. Evidence entries are string references, not automatic proofs. The incoming evidence list is empty in this release; observations can be bound as data or obtained through a trusted read tool. Script checks run as trusted local code and are not isolated from the action's filesystem.
+
+Output types are always checked. An omitted task check is recorded as `unchecked`, not `pass`. An external `changes: [environment.game]` declaration requires an explicit check in this release. A check of an action's completion does not establish that it was strategically useful.
+
+## Loops and stopping
+
+- `when` references a boolean. False skips the entire step. Skipped outputs do not exist; a consumer fails if it requests one.
+- `each: {item: inputs.items}` runs sequentially, once per item. One collection alias is supported. Each output becomes a list in the original item order. An empty collection produces empty output lists.
+- `repeat: {max_iterations: 5}` performs exactly five accepted invocations.
+- `repeat: {max_iterations: 5, until: done}` checks a boolean step output after each accepted invocation. It stops when true. Reaching the limit without true fails the step. The last accepted state remains in the checkpoint.
+
+Repeated inputs bound to state are refreshed each iteration. Other upstream values are fixed. Repeat returns the final accepted outputs; each returns collected lists. They cannot be combined. Multi-step loop bodies and parallel shared-state execution are not included.
+
+`ask` creates a `needs_input` record and exits. This release does not implement interactive continuation or accept generated answers as human input.
+
+## Limits and accounting
+
+Operator configuration requires run limits for elapsed milliseconds, model requests, step invocations, tool calls, and input/output bytes. Model requests and tool calls may be zero. A Method cannot increase those caps.
+
+A model-using step requires `max_model_requests`; an agent-using step also requires `max_agent_turns`. Action and check share these limits and `timeout_ms` for each invocation. One agent turn is one model response. Repeated invocations share the run caps. The runner does not dispatch a tool when no follow-up model request or agent turn remains.
+
+Provider calls have no automatic retries. Usage from completed provider responses is recorded; unavailable usage remains unknown. `cost_usd` is null because this release does not calculate prices or enforce a monetary budget. Request counts and output-token limits are resource caps, not a dollar guarantee. The operator must decide the spending allowance before live runs.
+
+Run `elapsed_ms` starts after document/configuration validation, initial-value checks, and runtime resolution. It includes bundle capture, execution, checks, and recording. Measure CLI wall-clock time separately when comparing full startup overhead. Game time and pause settings belong to the game adapter; this runner does not control or pause simulation.
+
+## Files, traces, and recovery
+
+`files` explicitly lists additional helper/dependency files. Direct script and tool entrypoints are included automatically. Files are copied into the run's bundle and hashed. Relative paths cannot escape the source directory, including through symlinks. Large model weights should be external with their version/hash supplied through an explicit input or locked helper dependency; there is no managed model registry.
+
+The runner verifies bundle hashes before each script execution. It records the Method and configuration hashes, runtime binary hashes, inputs, candidate outputs, state changes, checks, model requests/responses, tool dispatches/results, errors, and timestamps. User-supplied model aliases resolve to the recorded settings. Hosted model weights can still change behind a provider identifier.
+
+File outputs use `{path, sha256}`. Write them beneath `METHOD_OUTPUT_DIR`; paths are resolved relative to that artifacts directory. The runner checks their hashes. Imported input files are operator-supplied dependencies and are not automatically copied; list required policy files in `files`.
+
+Run files are private local artifacts by default (directory mode 0700, files 0600). Known configured environment-secret values are redacted from traces and result files when at least four characters long. This is a convenience, not a comprehensive secret detector. State checkpoints contain actual state values; keep state and inputs free of credentials. Do not publish raw run directories without review.
+
+Failures do not trigger retries or resume. Inspect `events.jsonl`, `summary.json`, `state.json`, and external state before deciding whether to start a new run. Supplying an old checkpoint as `--state` starts the whole Method again; it is **not** a resume operation and can repeat external actions. An abruptly killed process may leave a summary marked running; inspect the last dispatch records before recovery.
+
+## Migration and validation evidence
+
+The Method 2 baseline remains unchanged. The new runner rejects old formats until migration is explicit:
+
+```sh
+method3 migrate old.method --model planner --timeout-ms 60000 \
+  --max-agent-turns 4 --max-model-requests 8 --output new.method
+```
+
+Migration preserves text instructions, exact checks, data bindings, and applicable control flow. It adds explicit profiles and limits, changes text instructions to agent objects, removes legacy state-file locations, and prints review notes. Tool lists start empty. It does not promise identical behavior to Codex execution or load old state files. Review unsupported old constructs and tool access before running.
+
+The test suite executes real local scripts and the complete model/tool orchestration against deterministic response fixtures. The HTTP request format, error handling, output validation, and accounting are tested with a mocked HTTP transport. No live billed model call or game performance result is claimed by those tests. See [the contribution record](../HACKATHON.md).

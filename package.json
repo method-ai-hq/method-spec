@@ -1,0 +1,37 @@
+{
+  "name": "@withmethod/runtime",
+  "version": "0.1.0",
+  "description": "Open-source Method 3 validator and local executor",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "method3": "src/cli.js"
+  },
+  "exports": "./src/index.js",
+  "files": [
+    "src",
+    "spec",
+    "examples",
+    "proposals",
+    "vendor",
+    "*.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "schema": "node scripts/emit-schema.js",
+    "check": "npm run schema -- --check && npm test",
+    "example": "node src/cli.js run examples/counter.method --config examples/local.config.json"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/method-ai-hq/method-spec.git"
+  },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "yaml": "2.9.0"
+  }
+}

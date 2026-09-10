@@ -1,7 +1,6 @@
-# Illustrative Method 3 draft. No released runner accepts this format yet.
-# Helper entrypoints, model profiles, and game adapter are not supplied here.
+# Example for Method 3. Use openai.config.json; this makes a billed model call.
 # This example selects a goal from a supplied observation. It does not play a game.
-format: method/3-draft
+format: method/3
 name: Choose a factory goal
 goal: Use a fast calculation and a model decision to select the next production goal.
 inputs:
@@ -18,8 +17,8 @@ steps:
       observation: inputs.observation
     do:
       kind: run
-      runtime: python
-      entrypoint: helpers/shortages.py
+      runtime: node
+      entrypoint: helpers/shortages.mjs
     out:
       shortages:
         type: list
@@ -43,5 +42,6 @@ steps:
           goal: text
           reason: text
     limits:
-      timeout_ms: 5000
+      timeout_ms: 60000
+      max_model_requests: 1
 result: decision

@@ -1,0 +1,256 @@
+import { mkdir, readFile, appendFile, realpath } from 'node:fs/promises';
+import { resolve as pathResolve, dirname } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import { validateMethod, validateConfig, assertSchema, outputSchema, dataSchema, resolve, own, fail, safeData, shape } from './validate.js';
+import { checkResultSchema, object } from './schema.js';
+import { readDocument, hash, snapshotBundle, writeJSON, executeProcess, containedFile, executable } from './io.js';
+import { executeModel } from './model.js';
+
+function initialValues(defs = {}, supplied = {}) {
+  const result = {};
+  for (const [key, def] of Object.entries(defs)) {
+    if (own(supplied, key)) result[key] = supplied[key];
+    else if (own(def, 'default')) result[key] = structuredClone(def.default);
+    else fail(`Missing required initial value: ${key}`, 'preflight');
+  }
+  for (const key of Object.keys(supplied)) if (!own(defs, key)) fail(`Unknown initial value: ${key}`, 'preflight');
+  safeData(result); assertSchema(outputSchema(defs), result, 'Initial data');
+  return result;
+}
+const timeoutError = () => Object.assign(new Error('Execution deadline exceeded'), { code: 'timeout' });
+function boundedSignal(ms, parent) {
+  const controller = new AbortController();
+  const abort = () => controller.abort(parent.reason);
+  parent?.addEventListener('abort', abort, { once: true });
+  if (parent?.aborted) abort();
+  const timer = setTimeout(() => controller.abort(timeoutError()), Math.max(1, ms));
+  return { signal: controller.signal, close: () => { clearTimeout(timer); parent?.removeEventListener('abort', abort); } };
+}
+
+export async function runMethod(file, config, options = {}) {
+  const method = await readDocument(file);
+  const { order } = validateMethod(method);
+  validateConfig(config);
+  const sourceRoot = await realpath(dirname(pathResolve(file)));
+  const inputs = initialValues(method.inputs, options.inputs);
+  let state = initialValues(method.state, options.state);
+  const profiles = config.models ?? {}, runtimeProfiles = config.runtimes ?? {}, tools = config.tools ?? {};
+  const executions = [], usedTools = new Set();
+  for (const step of Object.values(method.steps)) {
+    for (const [phase, exec] of [['action', step.do], ['check', step.check]]) if (exec?.kind) {
+      executions.push(exec);
+      if (exec.kind !== 'run') {
+        if (!own(profiles, exec.model)) fail(`Unknown model profile: ${exec.model}`, 'preflight');
+        if (!options.transport && !process.env[profiles[exec.model].api_key_env]) fail(`Missing environment variable: ${profiles[exec.model].api_key_env}`, 'preflight');
+      }
+      if (exec.kind === 'agent') for (const name of exec.tools) {
+        if (!own(tools, name)) fail(`Unknown tool: ${name}`, 'preflight');
+        const tool = tools[name]; usedTools.add(name);
+        for (const effect of tool.effects) {
+          if (phase === 'check') fail(`Checker cannot use effectful tool: ${name}`, 'preflight');
+          if (!(step.changes ?? []).includes(`environment.${effect}`)) fail(`Undeclared tool effect: ${name} -> ${effect}`, 'preflight');
+        }
+      }
+    }
+  }
+  for (const name of usedTools) executions.push(tools[name].run);
+  const scripts = executions.filter(x => x.kind === 'run');
+  if (scripts.length && config.allow_local_processes !== true) fail('This method requires allow_local_processes in operator configuration', 'preflight');
+  const runtimeInfo = {};
+  for (const exec of scripts) {
+    const profile = runtimeProfiles[exec.runtime];
+    if (!profile) fail(`Unknown runtime: ${exec.runtime}`, 'preflight');
+    for (const key of profile.env ?? []) if (!process.env[key]) fail(`Missing runtime environment variable: ${key}`, 'preflight');
+    if (!runtimeInfo[exec.runtime]) {
+      const command = await executable(profile.command);
+      runtimeInfo[exec.runtime] = { ...profile, command, binary_sha256: hash(await readFile(command)) };
+    }
+  }
+  for (const name of Object.keys(method.environment ?? {})) {
+    if (!own(config.environment, name)) fail(`Missing environment binding: ${name}`, 'preflight');
+  }
+  const runDir = pathResolve(options.runDir ?? pathResolve('runs', randomUUID()));
+  await mkdir(dirname(runDir), { recursive: true, mode: 0o700 });
+  await mkdir(runDir, { mode: 0o700 }); // Never reuse or overwrite a run directory.
+  const bundle = pathResolve(runDir, 'bundle');
+  await mkdir(bundle, { mode: 0o700 });
+  const artifacts = pathResolve(runDir, 'artifacts');
+  await mkdir(artifacts, { mode: 0o700 });
+  let sequence = 0, invocations = 0, requests = 0, toolCalls = 0, knownUsage = 0, inputTokens = 0, outputTokens = 0;
+  let started = performance.now(), deadline = started + config.limits.timeout_ms;
+  const startedAt = new Date().toISOString();
+  const secrets = [...new Set([
+    ...Object.values(profiles).map(p => process.env[p.api_key_env]),
+    ...Object.values(runtimeProfiles).flatMap(p => (p.env ?? []).map(key => process.env[key])),
+  ].filter(x => x && x.length >= 4))];
+  const redact = value => {
+    if (typeof value === 'string') return secrets.reduce((s, secret) => s.split(secret).join('[REDACTED]'), value);
+    if (Array.isArray(value)) return value.map(redact);
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redact(v)]));
+    return value;
+  };
+  const record = async (event, data = {}) => {
+    const entry = redact({ sequence: ++sequence, at: new Date().toISOString(), elapsed_ms: performance.now() - started, event, ...data });
+    await appendFile(pathResolve(runDir, 'events.jsonl'), JSON.stringify(entry) + '\n', { mode: 0o600 });
+  };
+  const summary = () => ({ run_dir: runDir, elapsed_ms: performance.now() - started, invocations, model_requests: requests, tool_calls: toolCalls,
+    usage: { responses_with_usage: knownUsage, responses_without_usage: requests - knownUsage, input_tokens: knownUsage ? inputTokens : null, output_tokens: knownUsage ? outputTokens : null, cost_usd: null, scope: 'executor-managed model requests only' } });
+  let manifest;
+  try {
+    await writeJSON(pathResolve(runDir, 'summary.json'), { status: 'running', started_at: startedAt });
+    await record('run.started', { method, config, inputs, initial_state: state, runtime_profiles: runtimeInfo, isolation: 'trusted-local-processes; not an OS sandbox' });
+    manifest = await snapshotBundle(sourceRoot, [...(method.files ?? []), ...scripts.map(x => x.entrypoint)], bundle);
+    await writeJSON(pathResolve(runDir, 'manifest.json'), { method_sha256: hash(method), config_sha256: hash(config), files: manifest, runtime_profiles: runtimeInfo });
+    await writeJSON(pathResolve(runDir, 'method.json'), method);
+    await writeJSON(pathResolve(runDir, 'state.json'), state);
+    const root = { inputs, state, environment: config.environment ?? {}, run: { started_at: startedAt } };
+    const verifyBundle = async () => {
+      for (const [file, expected] of Object.entries(manifest)) {
+        if (hash(await readFile(await containedFile(bundle, file))) !== expected) fail(`Bundle changed during execution: ${file}`, 'bundle_changed');
+      }
+    };
+    const checkFiles = async (defs, values) => {
+      async function visit(definition, value) {
+        const def = shape(definition);
+        if (def.type === 'file') {
+          const actual = hash(await readFile(await containedFile(artifacts, value.path)));
+          if (actual !== value.sha256) fail('File hash mismatch', 'file_mismatch');
+        } else if (def.type === 'record') for (const [name, child] of Object.entries(def.fields)) await visit(child, value[name]);
+        else if (def.type === 'list') for (const item of value) await visit(def.fields ? { type: 'record', fields: def.fields } : def.items, item);
+      }
+      for (const [name, def] of Object.entries(defs ?? {})) await visit(def, values[name]);
+    };
+    const executeScript = async (exec, input, signal, scopedRecord) => {
+      await verifyBundle();
+      const profile = runtimeInfo[exec.runtime];
+      const environment = { PATH: process.env.PATH ?? '', LANG: 'C.UTF-8', METHOD_OUTPUT_DIR: artifacts };
+      for (const key of profile.env ?? []) {
+        if (!process.env[key]) fail(`Missing runtime environment variable: ${key}`, 'preflight');
+        environment[key] = process.env[key];
+      }
+      if (Buffer.byteLength(JSON.stringify(input)) > config.limits.max_request_bytes) fail('Script input exceeds request limit', 'input_limit');
+      await scopedRecord('process.started', { entrypoint: exec.entrypoint, runtime: exec.runtime });
+      let result;
+      try {
+        result = await executeProcess({ command: profile.command, args: [...(profile.args ?? []), await containedFile(bundle, exec.entrypoint), ...(exec.args ?? [])], cwd: bundle, input, env: environment, signal, maxBytes: config.limits.max_output_bytes });
+      } catch (error) {
+        await scopedRecord('process.failed', { code: error.code ?? 'process_failed', diagnostics: error.diagnostics ?? '', output: error.output ?? '' });
+        throw error;
+      }
+      await scopedRecord('process.completed', { diagnostics: result.diagnostics, output: result.output, internal_model_usage: 'not observable by executor' });
+      let output;
+      try { output = JSON.parse(result.output); } catch { fail('Script must return one JSON object', 'invalid_output'); }
+      safeData(output);
+      return output;
+    };
+    for (const id of order) {
+      const step = method.steps[id];
+      if (step.when && resolve(root, step.when) === false) { await record('step.skipped', { step: id }); continue; }
+      const eachEntry = Object.entries(step.each ?? {})[0];
+      const collection = eachEntry ? resolve(root, eachEntry[1]) : null;
+      const count = collection ? collection.length : (step.repeat?.max_iterations ?? 1);
+      if (!step.repeat?.until && count > config.limits.max_invocations - invocations) fail('Loop exceeds remaining invocation cap', 'invocation_limit');
+      const collected = Object.fromEntries(Object.keys(step.out ?? {}).map(k => [k, []]));
+      let untilReached = false;
+      for (let iteration = 0; iteration < count; iteration++) {
+        if (invocations >= config.limits.max_invocations) fail('Invocation cap reached', 'invocation_limit');
+        invocations++;
+        const bindings = Object.fromEntries(Object.entries(step.in ?? {}).map(([k, ref]) => [k, structuredClone(resolve(root, ref))]));
+        if (eachEntry) bindings[eachEntry[0]] = collection[iteration];
+        const remaining = Math.min(step.limits.timeout_ms, deadline - performance.now());
+        if (remaining <= 0) throw timeoutError();
+        const bound = boundedSignal(remaining, options.signal);
+        let localRequests = 0, localAgentTurns = 0;
+        const scopedRecord = (event, data) => record(event, { step: id, iteration, ...data });
+        const guard = () => { if (bound.signal.aborted) throw bound.signal.reason; if (performance.now() >= deadline) throw timeoutError(); };
+        const stateNames = (step.changes ?? []).filter(x => x.startsWith('state.')).map(x => x.slice(6));
+        const outputDefs = { ...(step.out ?? {}) };
+        if (stateNames.length) outputDefs.state = { type: 'record', fields: Object.fromEntries(stateNames.map(k => [k, method.state[k]])) };
+        const schema = outputSchema(outputDefs);
+        const context = {
+          models: profiles, signal: bound.signal, maxAgentTurns: step.limits.max_agent_turns,
+          maxRequestBytes: config.limits.max_request_bytes, maxOutputBytes: config.limits.max_output_bytes,
+          transport: options.transport, record: scopedRecord, guard,
+          canRequest: () => requests < config.limits.max_model_requests && localRequests < (step.limits.max_model_requests ?? 0),
+          canAgentTurn: () => localAgentTurns < step.limits.max_agent_turns,
+          reserveRequest() { guard(); if (!this.canRequest()) fail('Model request cap reached', 'model_limit'); requests++; localRequests++; },
+          reserveAgentTurn() { if (++localAgentTurns > step.limits.max_agent_turns) fail('Agent turn cap reached', 'model_limit'); },
+          usage(value) {
+            if (Number.isSafeInteger(value?.input_tokens) && value.input_tokens >= 0 && Number.isSafeInteger(value?.output_tokens) && value.output_tokens >= 0) {
+              knownUsage++; inputTokens += value.input_tokens; outputTokens += value.output_tokens;
+            }
+          },
+          toolDefinition(name) { return { type: 'function', name, description: tools[name].description, parameters: outputSchema(tools[name].in), strict: true }; },
+          async invokeTool(name, args, callId) {
+            guard();
+            if (++toolCalls > config.limits.max_tool_calls) fail('Tool-call cap reached', 'tool_limit');
+            const tool = tools[name];
+            assertSchema(outputSchema(tool.in), args, 'Tool arguments');
+            await scopedRecord('tool.dispatched', { tool: name, call_id: callId, arguments: args, effects: tool.effects });
+            const output = await executeScript(tool.run, args, bound.signal, scopedRecord);
+            assertSchema(outputSchema(tool.out), output, 'Tool output');
+            await scopedRecord('tool.completed', { tool: name, call_id: callId, output });
+            return output;
+          },
+        };
+        const execute = async (exec, input, schema, phase) => {
+          guard();
+          const phaseContext = { ...context, record: (event, data) => scopedRecord(event, { phase, ...data }) };
+          const result = exec.kind === 'run' ? await executeScript(exec, input, bound.signal, phaseContext.record) : await executeModel(exec, input, schema, phaseContext);
+          guard(); assertSchema(schema, result, `${phase} output`);
+          return result;
+        };
+        try {
+          guard();
+          await scopedRecord('step.started', { inputs: bindings, state_before: state, external_effects_possible: (step.changes ?? []).some(x => x.startsWith('environment.')) });
+          if (step.ask) {
+            await scopedRecord('human.required', { prompt: step.ask, inputs: bindings });
+            fail('Human input required; this runner does not auto-answer ask', 'needs_input');
+          }
+          const candidate = await execute(step.do, bindings, schema, 'action');
+          await scopedRecord('step.candidate', { candidate });
+          const { state: updates, ...outputs } = candidate;
+          await checkFiles(outputDefs, candidate);
+          const nextState = { ...state, ...(updates ?? {}) };
+          let check = { status: 'unchecked', reason: 'No task check requested', evidence: [] };
+          if (step.check) {
+            const spec = step.check, scope = { ...bindings, ...outputs };
+            if (spec.kind) check = await execute(spec, { inputs: bindings, outputs, state_before: state, state_after: nextState, evidence: [] }, checkResultSchema, 'check');
+            else {
+              let pass;
+              if (spec.equals) pass = isDeepStrictEqual(resolve(scope, spec.equals.actual), resolve(scope, spec.equals.expected));
+              else if (spec.count) { const n = resolve(scope, spec.count.value).length; pass = n >= (spec.count.min ?? 0) && n <= (spec.count.max ?? Infinity); }
+              else if (spec.file) { const artifact = resolve(scope, spec.file); pass = hash(await readFile(await containedFile(artifacts, artifact.path))) === artifact.sha256; }
+              else { const value = resolve(scope, spec.present); pass = value !== null && value !== undefined; }
+              check = { status: pass ? 'pass' : 'fail', reason: `Exact ${Object.keys(spec)[0]} check`, evidence: [] };
+            }
+            await scopedRecord('check.completed', { check });
+            if (check.status !== 'pass') fail(`Step check returned ${check.status}`, 'check_failed');
+          }
+          guard();
+          await writeJSON(pathResolve(runDir, 'state.json'), nextState);
+          state = nextState; root.state = state;
+          await scopedRecord('step.accepted', { outputs, state, check });
+          if (eachEntry) for (const key of Object.keys(collected)) collected[key].push(outputs[key]);
+          else Object.assign(root, outputs);
+          if (step.repeat?.until && resolve(outputs, step.repeat.until) === true) { untilReached = true; break; }
+        } finally { bound.close(); }
+      }
+      if (eachEntry) Object.assign(root, collected);
+      if (step.repeat?.until && !untilReached) fail(`Repeat condition not reached: ${id}`, 'iteration_limit');
+    }
+    if (performance.now() >= deadline) throw timeoutError();
+    const result = typeof method.result === 'string' ? resolve(root, method.result) : Object.fromEntries(Object.entries(method.result).map(([k, ref]) => [k, resolve(root, ref)]));
+    const completed = { ...summary(), status: 'completed', result };
+    await record('run.completed', completed);
+    await writeJSON(pathResolve(runDir, 'result.json'), redact(result));
+    await writeJSON(pathResolve(runDir, 'summary.json'), redact(completed));
+    return completed;
+  } catch (error) {
+    const failed = { ...summary(), status: error.code === 'needs_input' ? 'needs_input' : 'failed', code: error.code ?? 'execution_failed', error: error.message, recovery: 'Inspect the trace and external state before a new run. No action was retried automatically.' };
+    await record('run.failed', failed);
+    await writeJSON(pathResolve(runDir, 'summary.json'), redact(failed));
+    return failed;
+  }
+}
