@@ -1,14 +1,15 @@
 {
   "name": "@withmethod/runtime",
-  "version": "0.1.0",
-  "description": "Open-source Method 3 validator and local executor",
+  "version": "0.2.0",
+  "description": "Open-source Method validator and local executor",
   "type": "module",
   "license": "MIT",
   "engines": {
     "node": ">=22"
   },
   "bin": {
-    "method3": "src/cli.js"
+    "method3": "src/cli.js",
+    "method": "src/cli.js"
   },
   "exports": "./src/index.js",
   "files": [

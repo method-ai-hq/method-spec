@@ -7,7 +7,7 @@ This public repository separates the format from the hosted Method product.
 ## Status
 
 - **Published baseline:** `method/2`, exported from the public MIT-licensed Method SDK 0.3.0. See the [format notes](spec/method-2.md) and [JSON Schema](spec/method-2.schema.json).
-- **Implemented version:** [`method/3`](spec/method-3.md), with a public validator, local executor, and CLI in this repository. Runtime package: `@withmethod/runtime` 0.1.0.
+- **Implemented version:** [`method/3`](spec/method-3.md), with a public validator, local executor, and CLI in this repository. Runtime package: `@withmethod/runtime` 0.2.0.
 - **Validation:** real script execution and fixture-based model/tool tests. Live billed model calls and a game speed improvement have not been measured.
 
 The format keeps one common step contract and adds three ways to execute work: an agent, one model call, or a script. Existing trained models can be called through those interfaces. Training infrastructure is outside the first scope.
@@ -24,7 +24,7 @@ npm run example
 
 The example increases a counter through checked script steps and saves a trace. For model calls and tool-using agents, see [the reference and setup instructions](spec/method-3.md) and [model-tools.method](examples/model-tools.method). The model backend uses the OpenAI Responses API with an API key; it does not use a Codex subscription.
 
-Scripts and tool implementations are trusted local processes, not an OS sandbox. The CLI is named `method3` and does not replace the older `method` command.
+Scripts and tool implementations are trusted local processes, not an OS sandbox. The CLI is named `method`. `method3` remains a compatibility alias. The product SDK includes this runtime with dashboard save and sync commands.
 
 ## Read next
 

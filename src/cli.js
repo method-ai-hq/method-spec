@@ -3,25 +3,26 @@ import { parseArgs } from 'node:util';
 import { readFile, writeFile } from 'node:fs/promises';
 import YAML from 'yaml';
 import { runMethod, validateMethod, validateConfig, methodSchema, configSchema, readDocument, migrateMethod2 } from './index.js';
-const help = `Method 3 — public reference executor
+const help = `Method — local executor
 
-method3 validate METHOD [--config CONFIG]
-method3 run METHOD --config CONFIG [--inputs JSON] [--state JSON] [--run-dir DIR]
-method3 schema [method|config]
-method3 migrate METHOD2 --model PROFILE --timeout-ms N --max-agent-turns N --max-model-requests N [--output FILE]
+method validate METHOD [--config CONFIG]
+method run METHOD --config CONFIG [--inputs JSON] [--state JSON] [--run-dir DIR]
+method schema [method|config]
+method migrate METHOD2 --model PROFILE --timeout-ms N --max-agent-turns N --max-model-requests N [--output FILE]
 
+Resume: --run-dir DIR --resume [--retry STEP:ITERATION] [--human JSON].
 run never retries a failed action. Local scripts require allow_local_processes in CONFIG.
 Model execution uses the configured API key environment variable and request limits.
 Use --version for the runtime version. Documentation: spec/method-3.md
 `;
 try {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
-    help: { type: 'boolean' }, version: { type: 'boolean' }, config: { type: 'string' }, inputs: { type: 'string' }, state: { type: 'string' },
+    help: { type: 'boolean' }, version: { type: 'boolean' }, config: { type: 'string' }, inputs: { type: 'string' }, state: { type: 'string' }, resume: { type: 'boolean' }, retry: { type: 'string', multiple: true }, human: { type: 'string' },
     'run-dir': { type: 'string' }, model: { type: 'string' }, 'timeout-ms': { type: 'string' }, 'max-agent-turns': { type: 'string' }, 'max-model-requests': { type: 'string' }, output: { type: 'string' },
   } });
   const [command, file, ...extra] = positionals;
   if (extra.length) throw new Error('Unexpected positional arguments');
-  if (values.version) console.log('0.1.0 (method/3)');
+  if (values.version) console.log('0.2.0 (method/3)');
   else if (values.help || !command) console.log(help);
   else if (command === 'schema') {
     if (file && !['method', 'config'].includes(file)) throw new Error('Use schema method or schema config');
@@ -38,7 +39,7 @@ try {
     process.once('SIGINT', stop); process.once('SIGTERM', stop);
     const json = async path => path ? JSON.parse(await readFile(path, 'utf8')) : undefined;
     const result = await runMethod(file, await readDocument(values.config), {
-      inputs: await json(values.inputs), state: await json(values.state), runDir: values['run-dir'], signal: controller.signal,
+      inputs: await json(values.inputs), state: await json(values.state), runDir: values['run-dir'], resume: values.resume, retry: values.retry, human: await json(values.human), signal: controller.signal,
     });
     process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
     console.log(JSON.stringify({ status: result.status, code: result.code, run_dir: result.run_dir, elapsed_ms: result.elapsed_ms, model_requests: result.model_requests }));

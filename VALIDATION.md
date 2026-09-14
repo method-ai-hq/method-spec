@@ -21,3 +21,7 @@ Model and agent tests use deterministic response fixtures. The real Responses HT
 The public `Check runtime` workflow runs the same suite, example, and package check on Node.js 22 for macOS and Linux. Its run status on the release commit is the source of truth for CI results.
 
 No live billed API call, Factorio comparison, policy-search improvement, or hosted-product deployment is claimed. The repository has no deployment target. Source and an installable package are published through GitHub.
+
+## Runtime 0.2.0
+
+47 local tests pass. Added checks cover repeat state resume, each output order, explicit retry without repeating accepted steps, changed method/config/input/bundle rejection, real human answers, cumulative model request caps, and active-run locks. All model responses remain fixtures; no live model result is claimed.

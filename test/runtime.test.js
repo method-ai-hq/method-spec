@@ -278,3 +278,69 @@ test('unchanged external source files are snapshotted for execution', async t =>
   assert.match(manifest.files['action.mjs'], /^[a-f0-9]{64}$/);
   assert.equal(await readFile(join(f.runDir, 'bundle/action.mjs'), 'utf8'), await readFile(join(f.dir, 'action.mjs'), 'utf8'));
 });
+
+test('resume reuses accepted repeat iterations and committed state', async t => {
+  const m = method({ ...step(), in: { count: 'state.count' }, changes: ['state.count'], repeat: { max_iterations: 3 } });
+  m.state = { count: { ...number, default: 0 } };
+  const f = await fixture(t, m, { 'action.mjs': 'let s="";for await(const x of process.stdin)s+=x;const n=JSON.parse(s).count+1;console.log(JSON.stringify({value:n,state:{count:n}}))' });
+  const controller = new AbortController();
+  const first = await f.run(config(), { signal: controller.signal, onEvent(e) { if (e.event === 'step.accepted') controller.abort(new Error('Stop after acceptance')); } });
+  assert.equal(first.status, 'failed'); assert.deepEqual(await f.state(), { count: 1 });
+  const resumed = await f.run(config(), { resume: true });
+  assert.equal(resumed.status, 'completed'); assert.equal(resumed.result, 3);
+  assert.deepEqual(await f.state(), { count: 3 });
+  assert.equal((await f.events()).filter(e => e.event === 'step.accepted').length, 3);
+});
+
+test('resume retains each collection output order', async t => {
+  const m = method({ ...step(), each: { item: 'inputs.items' } });
+  m.inputs = { items: { type: 'list', items: 'number', description: 'Numbers.', default: [2, 4, 8] } };
+  const f = await fixture(t, m, { 'action.mjs': 'let s="";for await(const x of process.stdin)s+=x;console.log(JSON.stringify({value:JSON.parse(s).item}))' });
+  const controller = new AbortController();
+  await f.run(config(), { signal: controller.signal, onEvent(e) { if (e.event === 'step.accepted') controller.abort(new Error('Stop')); } });
+  assert.deepEqual((await f.run(config(), { resume: true })).result, [2, 4, 8]);
+});
+
+test('unfinished actions require explicit retry and never repeat accepted steps', async t => {
+  const m = method(); m.steps.next = { ...step({ final: number }), after: 'work', do: script('next.mjs') }; m.result = 'final';
+  const f = await fixture(t, m, { 'action.mjs': 'console.log(JSON.stringify({value:4}))', 'next.mjs': `import {existsSync,writeFileSync} from 'node:fs';import {join} from 'node:path';const p=join(process.env.METHOD_OUTPUT_DIR,'attempt');if(!existsSync(p)){writeFileSync(p,'attempted');process.exit(1)}console.log(JSON.stringify({final:5}));` });
+  assert.equal((await f.run()).status, 'failed');
+  await assert.rejects(f.run(config(), { resume: true }), /--retry next:0/);
+  const result = await f.run(config(), { resume: true, retry: ['next:0'] });
+  assert.equal(result.status, 'completed'); assert.equal(result.result, 5);
+  assert.equal((await f.events()).filter(e => e.event === 'step.started' && e.step === 'work').length, 1);
+});
+
+test('resume rejects changed methods, config, inputs, and bundles', async t => {
+  const f = await fixture(t); await f.run();
+  await assert.rejects(f.run({ ...config(), allow_local_processes: false }, { resume: true }), /configuration changed/);
+  await assert.rejects(f.run(config(), { resume: true, inputs: {} }), /saved inputs/);
+  await writeFile(join(f.runDir, 'bundle/action.mjs'), 'console.log("changed")');
+  assert.equal((await f.run(config(), { resume: true })).code, 'bundle_changed');
+  await writeFile(f.file, JSON.stringify({ ...method(), goal: 'Changed goal' }));
+  await assert.rejects(f.run(config(), { resume: true }), /Method or configuration changed/);
+});
+
+test('ask resumes with an actual supplied answer and runs its check', async t => {
+  const m = method({ purpose: 'Ask a person.', ask: 'Supply a number.', out: { value: number }, check: { present: 'value' }, limits: { timeout_ms: 1500 } });
+  const f = await fixture(t, m, {});
+  assert.equal((await f.run()).status, 'needs_input');
+  const result = await f.run(config(), { resume: true, human: { steps: { 'work:0': { outputs: { value: 7 } } } } });
+  assert.equal(result.status, 'completed'); assert.equal(result.result, 7);
+  assert.equal((await f.events()).filter(e => e.event === 'check.completed').length, 1);
+});
+
+test('resume does not reset the model request budget', async t => {
+  const f = await fixture(t, method(modelStep()), {}), cfg = config(); cfg.limits.max_model_requests = 1;
+  let calls = 0;
+  const transport = async () => { calls++; throw Error('Provider failed after dispatch'); };
+  assert.equal((await f.run(cfg, { transport })).model_requests, 1);
+  const resumed = await f.run(cfg, { resume: true, retry: ['work:0'], transport });
+  assert.equal(resumed.code, 'model_limit'); assert.equal(resumed.model_requests, 1); assert.equal(calls, 1);
+});
+
+test('a second process cannot resume an active run', async t => {
+  const f = await fixture(t, method(modelStep()), {});
+  const transport = async () => { await assert.rejects(f.run(config(), { resume: true }), /Run is locked/); return response({ value: 4 }); };
+  assert.equal((await f.run(config(), { transport })).status, 'completed');
+});

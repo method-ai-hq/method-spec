@@ -1,6 +1,6 @@
-# Method 3 reference
+# Method reference
 
-Implemented by `@withmethod/runtime` 0.1.0. This is the first public reference executor. The hosted Method product and SDK 0.3.0 do not automatically gain Method 3 support.
+Implemented by `@withmethod/runtime` 0.2.0. The Method product SDK 0.4.0 includes this runtime. New methods use this format under the same Method product and command.
 
 Use `format: method/3`. The machine-readable grammar is [method-3.schema.json](method-3.schema.json). Operator configuration uses [runtime-config.schema.json](runtime-config.schema.json). The validator also checks references, dependencies, data declarations, loop conditions, and effects; JSON Schema alone is insufficient.
 
@@ -17,17 +17,17 @@ npm run example
 To install the CLI from a public Git revision:
 
 ```sh
-npm install -g github:method-ai-hq/method-spec#v0.1.0
-method3 --version
+npm install -g github:method-ai-hq/method-spec#v0.2.0
+method --version
 ```
 
-The command is `method3`, so installation does not replace the earlier `method` CLI. The source needs no build step. This package is distributed through GitHub; publication to the npm registry is not claimed.
+The command is `method`; `method3` is a compatibility alias. Use the product SDK installation when you also need account, save, and dashboard sync commands. The source needs no build step. This package is distributed through GitHub; publication to the npm registry is not claimed.
 
 ```sh
-method3 validate example.method --config runtime.json
-method3 run example.method --config runtime.json --inputs inputs.json
-method3 schema method
-method3 schema config
+method validate example.method --config runtime.json
+method run example.method --config runtime.json --inputs inputs.json
+method schema method
+method schema config
 ```
 
 `validate` checks the Method and, when supplied, the configuration grammar. `run` additionally resolves profiles, tools, capabilities, environment bindings, and bundle files. A validation pass alone does not establish executable setup or task correctness.
@@ -163,14 +163,29 @@ File outputs use `{path, sha256}`. Write them beneath `METHOD_OUTPUT_DIR`; paths
 
 Run files are private local artifacts by default (directory mode 0700, files 0600). Known configured environment-secret values are redacted from traces and result files when at least four characters long. This is a convenience, not a comprehensive secret detector. State checkpoints contain actual state values; keep state and inputs free of credentials. Do not publish raw run directories without review.
 
-Failures do not trigger retries or resume. Inspect `events.jsonl`, `summary.json`, `state.json`, and external state before deciding whether to start a new run. Supplying an old checkpoint as `--state` starts the whole Method again; it is **not** a resume operation and can repeat external actions. An abruptly killed process may leave a summary marked running; inspect the last dispatch records before recovery.
+Failures do not trigger automatic retries. Resume with the original method and configuration:
+
+```sh
+method run task.method --config runtime.json --run-dir runs/example --resume
+# After inspecting an unfinished action and its external effects:
+method run task.method --config runtime.json --run-dir runs/example --resume --retry STEP:ITERATION
+```
+
+`checkpoint.json` saves accepted iterations, typed state, inputs, runtime identity, active dispatch, and cumulative usage. Accepted work is reused, including each/repeat outputs. Method, configuration, runtime executable, and bundle hashes must match. Accepted file outputs are verified again. Run time excludes time while stopped; consumed execution time and request budgets do not reset. Completed runs return their saved result.
+
+An unfinished invocation requires explicit retry. A stopped `ask` accepts `--human JSON` with `{steps: {"STEP:ITERATION": {outputs: {...}}}}`; checks still run. The runner does not guess whether an uncertain external action completed. Inspect the target first.
+
+A process lock prevents concurrent resume. An abruptly killed process can leave `.lock`; confirm the process is dead before removing it. An active lock must stay in place. Inspect `events.jsonl`, `summary.json`, and `checkpoint.json` before recovery.
+
+For new evidence or changed inputs, use a new run. `--state prior-run/state.json` imports state but starts the method from the beginning. An application ledger of evidence hashes can select only changed work. This is separate from resuming a stopped run.
+
 
 ## Migration and validation evidence
 
 The Method 2 baseline remains unchanged. The new runner rejects old formats until migration is explicit:
 
 ```sh
-method3 migrate old.method --model planner --timeout-ms 60000 \
+method migrate old.method --model planner --timeout-ms 60000 \
   --max-agent-turns 4 --max-model-requests 8 --output new.method
 ```
 

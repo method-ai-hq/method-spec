@@ -32,3 +32,7 @@ The shorthand "Methods were simply prompts" leaves out existing capabilities. Us
 Identify the implementation commit, policy bundle hash, dependency versions, fixed task settings, trial count, evaluator, and measured results. Preserve unsuccessful trials. Mark human-authored policies, replays, partial tasks, and human assistance.
 
 This record follows the rules supplied by the project owner. It is not an organizer eligibility decision. The demo must highlight work actually built during the event and distinguish all dependencies.
+
+## 13 September 2026 update
+
+Runtime 0.2.0 adds explicit checkpoint resume, accepted iteration reuse, cumulative budgets, human answers, runtime/bundle identity checks, and a process lock. The CLI is now named Method, with method3 retained as an alias. Pure semantic validation is shared with the product without copying private product source here. The runtime suite now has 47 passing tests, including seven new resume tests. No new paid model or game result is claimed.

@@ -1,7 +1,6 @@
-import { readFileSync } from 'node:fs';
+import baseline from '../spec/method-2.schema.json' with { type: 'json' };
 import Ajv from 'ajv';
 import { validateMethod, fail } from './validate.js';
-const baseline = JSON.parse(readFileSync(new URL('../spec/method-2.schema.json', import.meta.url), 'utf8'));
 const validateBaseline = new Ajv({ strict: false, allErrors: true }).compile(baseline);
 export function migrateMethod2(source, settings) {
   if (!validateBaseline(source)) fail('Input does not match the published Method 2 grammar');

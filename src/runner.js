@@ -1,4 +1,4 @@
-import { mkdir, readFile, appendFile, realpath } from 'node:fs/promises';
+import { mkdir, readFile, appendFile, realpath, open, unlink }  from 'node:fs/promises';
 import { resolve as pathResolve, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
@@ -29,12 +29,30 @@ function boundedSignal(ms, parent) {
 }
 
 export async function runMethod(file, config, options = {}) {
+  const runDir = pathResolve(options.runDir ?? pathResolve('.method-runs', randomUUID()));
+  if (options.resume && !options.runDir) fail('Resume needs an explicit run directory', 'preflight');
+  await mkdir(dirname(runDir), { recursive: true, mode: 0o700 });
+  if (!options.resume) await mkdir(runDir, { mode: 0o700 });
+  const lockPath = pathResolve(runDir, '.lock');
+  let lock;
+  try { lock = await open(lockPath, 'wx', 0o600); }
+  catch { fail('Run is locked. Confirm its process has stopped before removing .lock.', 'run_locked'); }
+  await lock.writeFile(String(process.pid));
+  try { return await executeRun(file, config, { ...options, runDir }); }
+  finally { await lock.close(); await unlink(lockPath); }
+}
+
+async function executeRun(file, config, options) {
   const method = await readDocument(file);
   const { order } = validateMethod(method);
   validateConfig(config);
-  const sourceRoot = await realpath(dirname(pathResolve(file)));
-  const inputs = initialValues(method.inputs, options.inputs);
-  let state = initialValues(method.state, options.state);
+  const sourceRoot = await realpath(options.sourceRoot ?? dirname(pathResolve(file)));
+  const runDir = options.runDir;
+  const saved = options.resume ? JSON.parse(await readFile(pathResolve(runDir, 'checkpoint.json'), 'utf8')) : null;
+  if (saved && (saved.method_sha256 !== hash(method) || saved.config_sha256 !== hash(config))) fail('Method or configuration changed. Resume needs the original version.', 'resume_mismatch');
+  if (saved && (options.inputs || options.state)) fail('Resume uses saved inputs and state; omit --inputs and --state.', 'resume_mismatch');
+  const inputs = saved?.root.inputs ?? initialValues(method.inputs, options.inputs);
+  let state = saved?.root.state ?? initialValues(method.state, options.state);
   const profiles = config.models ?? {}, runtimeProfiles = config.runtimes ?? {}, tools = config.tools ?? {};
   const executions = [], usedTools = new Set();
   for (const step of Object.values(method.steps)) {
@@ -70,16 +88,23 @@ export async function runMethod(file, config, options = {}) {
   for (const name of Object.keys(method.environment ?? {})) {
     if (!own(config.environment, name)) fail(`Missing environment binding: ${name}`, 'preflight');
   }
-  const runDir = pathResolve(options.runDir ?? pathResolve('runs', randomUUID()));
-  await mkdir(dirname(runDir), { recursive: true, mode: 0o700 });
-  await mkdir(runDir, { mode: 0o700 }); // Never reuse or overwrite a run directory.
   const bundle = pathResolve(runDir, 'bundle');
-  await mkdir(bundle, { mode: 0o700 });
+  if (!saved) await mkdir(bundle, { mode: 0o700 });
   const artifacts = pathResolve(runDir, 'artifacts');
-  await mkdir(artifacts, { mode: 0o700 });
-  let sequence = 0, invocations = 0, requests = 0, toolCalls = 0, knownUsage = 0, inputTokens = 0, outputTokens = 0;
-  let started = performance.now(), deadline = started + config.limits.timeout_ms;
-  const startedAt = new Date().toISOString();
+  if (!saved) await mkdir(artifacts, { mode: 0o700 });
+  if (saved && hash(runtimeInfo) !== saved.runtime_sha256) fail('Runtime executable changed', 'resume_mismatch');
+  let sequence = saved?.sequence ?? 0, invocations = saved?.invocations ?? 0, requests = saved?.requests ?? 0, toolCalls = saved?.toolCalls ?? 0, knownUsage = saved?.knownUsage ?? 0, inputTokens = saved?.inputTokens ?? 0, outputTokens = saved?.outputTokens ?? 0;
+  let started = performance.now() - (saved?.elapsed_ms ?? 0), deadline = started + config.limits.timeout_ms;
+  const startedAt = saved?.started_at ?? new Date().toISOString();
+  const root = saved?.root ?? { inputs, state, environment: config.environment ?? {}, run: { started_at: startedAt } };
+  const accepted = saved?.accepted ?? {}, skipped = saved?.skipped ?? [];
+  let active = saved?.active ?? null;
+  if (active && !(options.retry ?? []).includes(active) && !(method.steps[active.split(':')[0]]?.ask && options.human?.steps?.[active])) fail(`Inspect the trace and external state, then use --retry ${active} to authorize another attempt.`, 'recovery_required');
+  const checkpoint = () => writeJSON(pathResolve(runDir, 'checkpoint.json'), {
+    method_sha256: hash(method), config_sha256: hash(config), runtime_sha256: hash(runtimeInfo),
+    started_at: startedAt, elapsed_ms: performance.now() - started, sequence, invocations, requests, toolCalls, knownUsage, inputTokens, outputTokens,
+    root, accepted, skipped, active,
+  });
   const secrets = [...new Set([
     ...Object.values(profiles).map(p => process.env[p.api_key_env]),
     ...Object.values(runtimeProfiles).flatMap(p => (p.env ?? []).map(key => process.env[key])),
@@ -92,19 +117,18 @@ export async function runMethod(file, config, options = {}) {
   };
   const record = async (event, data = {}) => {
     const entry = redact({ sequence: ++sequence, at: new Date().toISOString(), elapsed_ms: performance.now() - started, event, ...data });
+    await checkpoint();
     await appendFile(pathResolve(runDir, 'events.jsonl'), JSON.stringify(entry) + '\n', { mode: 0o600 });
+    await options.onEvent?.(entry);
   };
   const summary = () => ({ run_dir: runDir, elapsed_ms: performance.now() - started, invocations, model_requests: requests, tool_calls: toolCalls,
     usage: { responses_with_usage: knownUsage, responses_without_usage: requests - knownUsage, input_tokens: knownUsage ? inputTokens : null, output_tokens: knownUsage ? outputTokens : null, cost_usd: null, scope: 'executor-managed model requests only' } });
   let manifest;
   try {
-    await writeJSON(pathResolve(runDir, 'summary.json'), { status: 'running', started_at: startedAt });
-    await record('run.started', { method, config, inputs, initial_state: state, runtime_profiles: runtimeInfo, isolation: 'trusted-local-processes; not an OS sandbox' });
-    manifest = await snapshotBundle(sourceRoot, [...(method.files ?? []), ...scripts.map(x => x.entrypoint)], bundle);
+    manifest = saved ? JSON.parse(await readFile(pathResolve(runDir, 'manifest.json'), 'utf8')).files : await snapshotBundle(sourceRoot, [...(method.files ?? []), ...scripts.map(x => x.entrypoint)], bundle);
     await writeJSON(pathResolve(runDir, 'manifest.json'), { method_sha256: hash(method), config_sha256: hash(config), files: manifest, runtime_profiles: runtimeInfo });
     await writeJSON(pathResolve(runDir, 'method.json'), method);
     await writeJSON(pathResolve(runDir, 'state.json'), state);
-    const root = { inputs, state, environment: config.environment ?? {}, run: { started_at: startedAt } };
     const verifyBundle = async () => {
       for (const [file, expected] of Object.entries(manifest)) {
         if (hash(await readFile(await containedFile(bundle, file))) !== expected) fail(`Bundle changed during execution: ${file}`, 'bundle_changed');
@@ -121,6 +145,17 @@ export async function runMethod(file, config, options = {}) {
       }
       for (const [name, def] of Object.entries(defs ?? {})) await visit(def, values[name]);
     };
+    await verifyBundle();
+    if (saved) {
+      const prior = JSON.parse(await readFile(pathResolve(runDir, 'summary.json'), 'utf8'));
+      if (prior.status === 'completed') {
+        for (const [id, iterations] of Object.entries(accepted)) for (const outputs of iterations) await checkFiles(method.steps[id].out, outputs);
+        return prior;
+      }
+    }
+    await writeJSON(pathResolve(runDir, 'summary.json'), { status: 'running', started_at: startedAt });
+    await record(saved ? 'run.resumed' : 'run.started', { method, config, inputs, initial_state: state, runtime_profiles: runtimeInfo, isolation: 'trusted-local-processes; not an OS sandbox' });
+    await options.onStart?.({ method, inputs, state, runDir });
     const executeScript = async (exec, input, signal, scopedRecord) => {
       await verifyBundle();
       const profile = runtimeInfo[exec.runtime];
@@ -144,16 +179,26 @@ export async function runMethod(file, config, options = {}) {
       safeData(output);
       return output;
     };
+    await verifyBundle();
     for (const id of order) {
       const step = method.steps[id];
-      if (step.when && resolve(root, step.when) === false) { await record('step.skipped', { step: id }); continue; }
+      if (skipped.includes(id)) continue;
+      if (!accepted[id]?.length && step.when && resolve(root, step.when) === false) { skipped.push(id); await record('step.skipped', { step: id }); continue; }
       const eachEntry = Object.entries(step.each ?? {})[0];
       const collection = eachEntry ? resolve(root, eachEntry[1]) : null;
       const count = collection ? collection.length : (step.repeat?.max_iterations ?? 1);
-      if (!step.repeat?.until && count > config.limits.max_invocations - invocations) fail('Loop exceeds remaining invocation cap', 'invocation_limit');
+      if (!step.repeat?.until && count - (accepted[id]?.length ?? 0) > config.limits.max_invocations - invocations) fail('Loop exceeds remaining invocation cap', 'invocation_limit');
       const collected = Object.fromEntries(Object.keys(step.out ?? {}).map(k => [k, []]));
       let untilReached = false;
       for (let iteration = 0; iteration < count; iteration++) {
+        const previous = accepted[id]?.[iteration];
+        if (previous) {
+          await checkFiles(step.out, previous);
+          if (eachEntry) for (const key of Object.keys(collected)) collected[key].push(previous[key]);
+          else Object.assign(root, previous);
+          if (step.repeat?.until && resolve(previous, step.repeat.until) === true) { untilReached = true; break; }
+          continue;
+        }
         if (invocations >= config.limits.max_invocations) fail('Invocation cap reached', 'invocation_limit');
         invocations++;
         const bindings = Object.fromEntries(Object.entries(step.in ?? {}).map(([k, ref]) => [k, structuredClone(resolve(root, ref))]));
@@ -203,12 +248,15 @@ export async function runMethod(file, config, options = {}) {
         };
         try {
           guard();
+          active = `${id}:${iteration}`;
           await scopedRecord('step.started', { inputs: bindings, state_before: state, external_effects_possible: (step.changes ?? []).some(x => x.startsWith('environment.')) });
-          if (step.ask) {
+          const answer = options.human?.steps?.[active];
+          if (step.ask && !answer) {
             await scopedRecord('human.required', { prompt: step.ask, inputs: bindings });
             fail('Human input required; this runner does not auto-answer ask', 'needs_input');
           }
-          const candidate = await execute(step.do, bindings, schema, 'action');
+          const candidate = step.ask ? answer.outputs : await execute(step.do, bindings, schema, 'action');
+          assertSchema(schema, candidate, 'Action output');
           await scopedRecord('step.candidate', { candidate });
           const { state: updates, ...outputs } = candidate;
           await checkFiles(outputDefs, candidate);
@@ -231,6 +279,8 @@ export async function runMethod(file, config, options = {}) {
           guard();
           await writeJSON(pathResolve(runDir, 'state.json'), nextState);
           state = nextState; root.state = state;
+          (accepted[id] ??= []).push(outputs);
+          active = null;
           await scopedRecord('step.accepted', { outputs, state, check });
           if (eachEntry) for (const key of Object.keys(collected)) collected[key].push(outputs[key]);
           else Object.assign(root, outputs);
@@ -248,7 +298,7 @@ export async function runMethod(file, config, options = {}) {
     await writeJSON(pathResolve(runDir, 'summary.json'), redact(completed));
     return completed;
   } catch (error) {
-    const failed = { ...summary(), status: error.code === 'needs_input' ? 'needs_input' : 'failed', code: error.code ?? 'execution_failed', error: error.message, recovery: 'Inspect the trace and external state before a new run. No action was retried automatically.' };
+    const failed = { ...summary(), status: error.code === 'needs_input' ? 'needs_input' : 'failed', code: error.code ?? 'execution_failed', error: error.message, recovery: 'Resume with --run-dir and --resume. Inspect unfinished actions before authorizing --retry STEP:ITERATION. Accepted iterations are not repeated.' };
     await record('run.failed', failed);
     await writeJSON(pathResolve(runDir, 'summary.json'), redact(failed));
     return failed;
