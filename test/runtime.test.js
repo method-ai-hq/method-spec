@@ -344,3 +344,14 @@ test('a second process cannot resume an active run', async t => {
   const transport = async () => { await assert.rejects(f.run(config(), { resume: true }), /Run is locked/); return response({ value: 4 }); };
   assert.equal((await f.run(config(), { transport })).status, 'completed');
 });
+
+test('resume freezes each items when the operation changes its source state list', async t => {
+  const m = method({ ...step(), each: { item: 'state.items' }, in: { remaining: 'state.items' }, changes: ['state.items'] });
+  m.state = { items: { type: 'list', items: 'number', description: 'Remaining numbers.', default: [2, 4, 8] } };
+  const f = await fixture(t, m, { 'action.mjs': 'let s="";for await(const x of process.stdin)s+=x;const {item,remaining}=JSON.parse(s);console.log(JSON.stringify({value:item,state:{items:remaining.slice(1)}}))' });
+  const controller = new AbortController();
+  await f.run(config(), { signal: controller.signal, onEvent(e) { if (e.event === 'step.accepted') controller.abort(new Error('Stop')); } });
+  assert.deepEqual(await f.state(), { items: [4, 8] });
+  assert.deepEqual((await f.run(config(), { resume: true })).result, [2, 4, 8]);
+  assert.deepEqual(await f.state(), { items: [] });
+});

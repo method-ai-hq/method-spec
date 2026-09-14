@@ -7,7 +7,7 @@ This public repository separates the format from the hosted Method product.
 ## Status
 
 - **Published baseline:** `method/2`, exported from the public MIT-licensed Method SDK 0.3.0. See the [format notes](spec/method-2.md) and [JSON Schema](spec/method-2.schema.json).
-- **Implemented version:** [`method/3`](spec/method-3.md), with a public validator, local executor, and CLI in this repository. Runtime package: `@withmethod/runtime` 0.2.0.
+- **Implemented version:** [`method/3`](spec/method-3.md), with a public validator, local executor, and CLI in this repository. Runtime package: `@withmethod/runtime` 0.2.1.
 - **Validation:** real script execution and fixture-based model/tool tests. Live billed model calls and a game speed improvement have not been measured.
 
 The format keeps one common step contract and adds three ways to execute work: an agent, one model call, or a script. Existing trained models can be called through those interfaces. Training infrastructure is outside the first scope.

@@ -36,3 +36,5 @@ This record follows the rules supplied by the project owner. It is not an organi
 ## 13 September 2026 update
 
 Runtime 0.2.0 adds explicit checkpoint resume, accepted iteration reuse, cumulative budgets, human answers, runtime/bundle identity checks, and a process lock. The CLI is now named Method, with method3 retained as an alias. Pure semantic validation is shared with the product without copying private product source here. The runtime suite now has 47 passing tests, including seven new resume tests. No new paid model or game result is claimed.
+
+Runtime 0.2.1 also freezes each-loop collections in the checkpoint when an operation changes its source state list. A real script regression test passes; the suite now has 48 tests.

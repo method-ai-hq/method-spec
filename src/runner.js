@@ -98,12 +98,13 @@ async function executeRun(file, config, options) {
   const startedAt = saved?.started_at ?? new Date().toISOString();
   const root = saved?.root ?? { inputs, state, environment: config.environment ?? {}, run: { started_at: startedAt } };
   const accepted = saved?.accepted ?? {}, skipped = saved?.skipped ?? [];
+  const collections = saved?.collections ?? {};
   let active = saved?.active ?? null;
   if (active && !(options.retry ?? []).includes(active) && !(method.steps[active.split(':')[0]]?.ask && options.human?.steps?.[active])) fail(`Inspect the trace and external state, then use --retry ${active} to authorize another attempt.`, 'recovery_required');
   const checkpoint = () => writeJSON(pathResolve(runDir, 'checkpoint.json'), {
     method_sha256: hash(method), config_sha256: hash(config), runtime_sha256: hash(runtimeInfo),
     started_at: startedAt, elapsed_ms: performance.now() - started, sequence, invocations, requests, toolCalls, knownUsage, inputTokens, outputTokens,
-    root, accepted, skipped, active,
+    root, accepted, skipped, active, collections,
   });
   const secrets = [...new Set([
     ...Object.values(profiles).map(p => process.env[p.api_key_env]),
@@ -185,7 +186,8 @@ async function executeRun(file, config, options) {
       if (skipped.includes(id)) continue;
       if (!accepted[id]?.length && step.when && resolve(root, step.when) === false) { skipped.push(id); await record('step.skipped', { step: id }); continue; }
       const eachEntry = Object.entries(step.each ?? {})[0];
-      const collection = eachEntry ? resolve(root, eachEntry[1]) : null;
+      if (eachEntry && !own(collections, id)) collections[id] = structuredClone(resolve(root, eachEntry[1]));
+      const collection = eachEntry ? collections[id] : null;
       const count = collection ? collection.length : (step.repeat?.max_iterations ?? 1);
       if (!step.repeat?.until && count - (accepted[id]?.length ?? 0) > config.limits.max_invocations - invocations) fail('Loop exceeds remaining invocation cap', 'invocation_limit');
       const collected = Object.fromEntries(Object.keys(step.out ?? {}).map(k => [k, []]));

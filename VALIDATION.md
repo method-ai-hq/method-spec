@@ -25,3 +25,5 @@ No live billed API call, Factorio comparison, policy-search improvement, or host
 ## Runtime 0.2.0
 
 47 local tests pass. Added checks cover repeat state resume, each output order, explicit retry without repeating accepted steps, changed method/config/input/bundle rejection, real human answers, cumulative model request caps, and active-run locks. All model responses remain fixtures; no live model result is claimed.
+
+Runtime 0.2.1: 48 tests pass. The added test stops a loop after it changes its source state list, then verifies that resume keeps the original item order and commits the final state.

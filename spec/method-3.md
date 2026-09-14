@@ -1,6 +1,6 @@
 # Method reference
 
-Implemented by `@withmethod/runtime` 0.2.0. The Method product SDK 0.4.0 includes this runtime. New methods use this format under the same Method product and command.
+Implemented by `@withmethod/runtime` 0.2.1. The Method product SDK 0.4.0 includes this runtime. New methods use this format under the same Method product and command.
 
 Use `format: method/3`. The machine-readable grammar is [method-3.schema.json](method-3.schema.json). Operator configuration uses [runtime-config.schema.json](runtime-config.schema.json). The validator also checks references, dependencies, data declarations, loop conditions, and effects; JSON Schema alone is insufficient.
 
@@ -17,7 +17,7 @@ npm run example
 To install the CLI from a public Git revision:
 
 ```sh
-npm install -g github:method-ai-hq/method-spec#v0.2.0
+npm install -g github:method-ai-hq/method-spec#v0.2.1
 method --version
 ```
 
