@@ -2,17 +2,18 @@
 import { parseArgs } from 'node:util';
 import { readFile, writeFile } from 'node:fs/promises';
 import YAML from 'yaml';
+import {dirname,resolve} from 'node:path';
 import { runMethod, validateMethod, validateConfig, methodSchema, configSchema, readDocument, migrateMethod2 } from './index.js';
 const help = `Method — local executor
 
 method validate METHOD [--config CONFIG]
-method run METHOD --config CONFIG [--inputs JSON] [--state JSON] [--run-dir DIR]
+method run METHOD [--config CONFIG] [--inputs JSON] [--state JSON] [--run-dir DIR]
 method schema [method|config]
 method migrate METHOD2 --model PROFILE --timeout-ms N --max-agent-turns N --max-model-requests N [--output FILE]
 
 Resume: --run-dir DIR --resume [--retry STEP:ITERATION] [--human JSON].
 run never retries a failed action. Local scripts require allow_local_processes in CONFIG.
-Model execution uses the configured API key environment variable and request limits.
+A local Codex agent needs no config file. Custom scripts, tools, and API models need configuration.
 Use --version for the runtime version. Documentation: spec/method-3.md
 `;
 try {
@@ -33,12 +34,15 @@ try {
     if (values.config) validateConfig(await readDocument(values.config));
     console.log(JSON.stringify({ valid: true, order, note: 'Runtime profiles and files are checked again before execution.' }));
   } else if (command === 'run') {
-    if (!file || !values.config) throw new Error('Supply a Method file and --config');
+    if (!file) throw new Error('Supply a Method file');
+    let config;
+    try { config = await readDocument(values.config ?? resolve(dirname(file),'runtime.json')); }
+    catch(error) { if(values.config || error.code !== 'ENOENT') throw error; config = {allow_local_processes:true}; }
     const controller = new AbortController();
     const stop = () => controller.abort(Object.assign(new Error('Interrupted by operator'), { code: 'interrupted' }));
     process.once('SIGINT', stop); process.once('SIGTERM', stop);
     const json = async path => path ? JSON.parse(await readFile(path, 'utf8')) : undefined;
-    const result = await runMethod(file, await readDocument(values.config), {
+    const result = await runMethod(file, config, {
       inputs: await json(values.inputs), state: await json(values.state), runDir: values['run-dir'], resume: values.resume, retry: values.retry, human: await json(values.human), signal: controller.signal,
     });
     process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
