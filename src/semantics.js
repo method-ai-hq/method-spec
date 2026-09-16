@@ -1,4 +1,5 @@
 import { object } from './schema.js';
+import { validatePrompt } from './prompt.js';
 const reserved = new Set(['inputs', 'state', 'environment', 'run', 'constructor', 'prototype', '__proto__']);
 export const own = (obj, key) => obj !== null && typeof obj === 'object' && Object.hasOwn(obj, key);
 export function fail(message, code = 'validation') { throw Object.assign(new Error(message), { code }); }
@@ -110,8 +111,19 @@ export function validateSemantics(method, assertData) {
     }
     if (changes.some(x => x.startsWith('environment.')) && !step.check) fail('External changes require a check');
     for (const execution of [step.do, step.check].filter(x => x?.kind)) {
-      if (execution.kind !== 'run' && !step.limits.max_model_requests) fail(`Model work needs max_model_requests: ${id}`);
-      if (execution.kind === 'agent' && !step.limits.max_agent_turns) fail(`Agent work needs max_agent_turns: ${id}`);
+    }
+    if (method.format === 'method/3.1') {
+      const validate = (prompt, definitions, location) => {
+        try { validatePrompt(prompt, definitions, typeAt); }
+        catch (error) { fail(`${id}.${location}: ${error.message}`, 'invalid_prompt'); }
+      };
+      if (step.do?.kind !== 'run' && step.do) validate(step.do.prompt, local, 'do.prompt');
+      if (step.ask) validate(step.ask, local, 'ask');
+      if (step.check?.kind === 'agent') validate(step.check.prompt, {
+        inputs: { type: 'record', fields: local }, outputs: { type: 'record', fields: step.out ?? {} },
+        state_before: definitions.state, state_after: definitions.state,
+        evidence: { type: 'list', items: 'text' },
+      }, 'check.prompt');
     }
     const check = step.check;
     if (check && !check.kind) {

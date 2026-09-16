@@ -34,14 +34,29 @@
           "maximum": 2147483647
         }
       },
-      "required": [
-        "timeout_ms",
-        "max_model_requests",
-        "max_invocations",
-        "max_tool_calls",
-        "max_output_bytes",
-        "max_request_bytes"
-      ],
+      "required": [],
+      "additionalProperties": false
+    },
+    "step_defaults": {
+      "type": "object",
+      "properties": {
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "max_agent_turns": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "max_model_requests": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        }
+      },
+      "required": [],
       "additionalProperties": false
     },
     "allow_local_processes": {
@@ -111,43 +126,74 @@
         }
       },
       "additionalProperties": {
-        "type": "object",
-        "properties": {
-          "backend": {
-            "const": "openai-responses"
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "backend": {
+                "const": "openai-responses"
+              },
+              "model": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 16000
+              },
+              "api_key_env": {
+                "type": "string",
+                "pattern": "^[A-Z_][A-Z0-9_]*$"
+              },
+              "max_output_tokens": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "reasoning_effort": {
+                "enum": [
+                  "none",
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh"
+                ]
+              }
+            },
+            "required": [
+              "backend",
+              "model",
+              "api_key_env",
+              "max_output_tokens"
+            ],
+            "additionalProperties": false
           },
-          "model": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 16000
-          },
-          "api_key_env": {
-            "type": "string",
-            "pattern": "^[A-Z_][A-Z0-9_]*$"
-          },
-          "max_output_tokens": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 2147483647
-          },
-          "reasoning_effort": {
-            "enum": [
-              "none",
-              "minimal",
-              "low",
-              "medium",
-              "high",
-              "xhigh"
-            ]
+          {
+            "type": "object",
+            "properties": {
+              "backend": {
+                "const": "codex"
+              },
+              "command": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 16000
+              },
+              "model": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 16000
+              },
+              "reasoning_effort": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 16000
+              }
+            },
+            "required": [
+              "backend"
+            ],
+            "additionalProperties": false
           }
-        },
-        "required": [
-          "backend",
-          "model",
-          "api_key_env",
-          "max_output_tokens"
-        ],
-        "additionalProperties": false
+        ]
       }
     },
     "tools": {
@@ -291,8 +337,6 @@
       }
     }
   },
-  "required": [
-    "limits"
-  ],
+  "required": [],
   "additionalProperties": false
 }

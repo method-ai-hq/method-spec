@@ -1,6 +1,6 @@
 {
   "name": "@withmethod/runtime",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Open-source Method validator and local executor",
   "type": "module",
   "license": "MIT",
@@ -11,7 +11,17 @@
     "method3": "src/cli.js",
     "method": "src/cli.js"
   },
-  "exports": "./src/index.js",
+  "exports": {
+    ".": {
+      "types": "./types/src/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./*.js": {
+      "types": "./types/src/*.d.ts",
+      "default": "./src/*.js"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
     "src",
     "spec",
@@ -19,13 +29,17 @@
     "proposals",
     "vendor",
     "*.md",
-    "LICENSE"
+    "LICENSE",
+    "types",
+    "test",
+    "scripts"
   ],
   "scripts": {
     "test": "node --test test/*.test.js",
     "schema": "node scripts/emit-schema.js",
     "check": "npm run schema -- --check && npm test",
-    "example": "node src/cli.js run examples/counter.method --config examples/local.config.json"
+    "example": "node src/cli.js run examples/counter.method --config examples/local.config.json",
+    "types": "tsc --allowJs --declaration --emitDeclarationOnly --outDir types --module NodeNext --moduleResolution NodeNext --target ES2022 --skipLibCheck src/*.js"
   },
   "repository": {
     "type": "git",
@@ -34,5 +48,9 @@
   "dependencies": {
     "ajv": "8.20.0",
     "yaml": "2.9.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "@types/node": "^22.10.10"
   }
 }

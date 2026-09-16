@@ -1,11 +1,16 @@
+import { configuration } from './defaults.js';
 import { mkdir, readFile, appendFile, realpath, open, unlink }  from 'node:fs/promises';
 import { resolve as pathResolve, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { validateMethod, validateConfig, assertSchema, outputSchema, dataSchema, resolve, own, fail, safeData, shape } from './validate.js';
 import { checkResultSchema, object } from './schema.js';
-import { readDocument, hash, snapshotBundle, writeJSON, executeProcess, containedFile, executable } from './io.js';
+import { readDocument, hash, snapshotBundle, writeJSON, executeProcess, containedFile } from './io.js';
 import { executeModel } from './model.js';
+import { executeCodex } from './codex.js';
+import { renderPrompt } from './prompt.js';
+import { preflight } from './preflight.js';
+import { progressMessage } from './progress.js';
 
 function initialValues(defs = {}, supplied = {}) {
   const result = {};
@@ -46,48 +51,17 @@ async function executeRun(file, config, options) {
   const method = await readDocument(file);
   const { order } = validateMethod(method);
   validateConfig(config);
+  const suppliedConfig = config;
+  config = configuration(config);
   const sourceRoot = await realpath(options.sourceRoot ?? dirname(pathResolve(file)));
   const runDir = options.runDir;
   const saved = options.resume ? JSON.parse(await readFile(pathResolve(runDir, 'checkpoint.json'), 'utf8')) : null;
-  if (saved && (saved.method_sha256 !== hash(method) || saved.config_sha256 !== hash(config))) fail('Method or configuration changed. Resume needs the original version.', 'resume_mismatch');
+  if (saved && (saved.method_sha256 !== hash(method) || saved.config_sha256 !== hash(suppliedConfig))) fail('Method or configuration changed. Resume needs the original version.', 'resume_mismatch');
   if (saved && (options.inputs || options.state)) fail('Resume uses saved inputs and state; omit --inputs and --state.', 'resume_mismatch');
   const inputs = saved?.root.inputs ?? initialValues(method.inputs, options.inputs);
   let state = saved?.root.state ?? initialValues(method.state, options.state);
   const profiles = config.models ?? {}, runtimeProfiles = config.runtimes ?? {}, tools = config.tools ?? {};
-  const executions = [], usedTools = new Set();
-  for (const step of Object.values(method.steps)) {
-    for (const [phase, exec] of [['action', step.do], ['check', step.check]]) if (exec?.kind) {
-      executions.push(exec);
-      if (exec.kind !== 'run') {
-        if (!own(profiles, exec.model)) fail(`Unknown model profile: ${exec.model}`, 'preflight');
-        if (!options.transport && !process.env[profiles[exec.model].api_key_env]) fail(`Missing environment variable: ${profiles[exec.model].api_key_env}`, 'preflight');
-      }
-      if (exec.kind === 'agent') for (const name of exec.tools) {
-        if (!own(tools, name)) fail(`Unknown tool: ${name}`, 'preflight');
-        const tool = tools[name]; usedTools.add(name);
-        for (const effect of tool.effects) {
-          if (phase === 'check') fail(`Checker cannot use effectful tool: ${name}`, 'preflight');
-          if (!(step.changes ?? []).includes(`environment.${effect}`)) fail(`Undeclared tool effect: ${name} -> ${effect}`, 'preflight');
-        }
-      }
-    }
-  }
-  for (const name of usedTools) executions.push(tools[name].run);
-  const scripts = executions.filter(x => x.kind === 'run');
-  if (scripts.length && config.allow_local_processes !== true) fail('This method requires allow_local_processes in operator configuration', 'preflight');
-  const runtimeInfo = {};
-  for (const exec of scripts) {
-    const profile = runtimeProfiles[exec.runtime];
-    if (!profile) fail(`Unknown runtime: ${exec.runtime}`, 'preflight');
-    for (const key of profile.env ?? []) if (!process.env[key]) fail(`Missing runtime environment variable: ${key}`, 'preflight');
-    if (!runtimeInfo[exec.runtime]) {
-      const command = await executable(profile.command);
-      runtimeInfo[exec.runtime] = { ...profile, command, binary_sha256: hash(await readFile(command)) };
-    }
-  }
-  for (const name of Object.keys(method.environment ?? {})) {
-    if (!own(config.environment, name)) fail(`Missing environment binding: ${name}`, 'preflight');
-  }
+  const { scripts, runtimeInfo } = await preflight(method, config, sourceRoot, { ...options, checkFiles: !saved });
   const bundle = pathResolve(runDir, 'bundle');
   if (!saved) await mkdir(bundle, { mode: 0o700 });
   const artifacts = pathResolve(runDir, 'artifacts');
@@ -95,6 +69,7 @@ async function executeRun(file, config, options) {
   if (saved && hash(runtimeInfo) !== saved.runtime_sha256) fail('Runtime executable changed', 'resume_mismatch');
   let sequence = saved?.sequence ?? 0, invocations = saved?.invocations ?? 0, requests = saved?.requests ?? 0, toolCalls = saved?.toolCalls ?? 0, knownUsage = saved?.knownUsage ?? 0, inputTokens = saved?.inputTokens ?? 0, outputTokens = saved?.outputTokens ?? 0;
   let started = performance.now() - (saved?.elapsed_ms ?? 0), deadline = started + config.limits.timeout_ms;
+  let codexProcesses = saved?.codexProcesses ?? 0, codexInputTokens = saved?.codexInputTokens ?? 0, codexOutputTokens = saved?.codexOutputTokens ?? 0, codexUsageReports = saved?.codexUsageReports ?? 0;
   const startedAt = saved?.started_at ?? new Date().toISOString();
   const root = saved?.root ?? { inputs, state, environment: config.environment ?? {}, run: { started_at: startedAt } };
   const accepted = saved?.accepted ?? {}, skipped = saved?.skipped ?? [];
@@ -102,9 +77,9 @@ async function executeRun(file, config, options) {
   let active = saved?.active ?? null;
   if (active && !(options.retry ?? []).includes(active) && !(method.steps[active.split(':')[0]]?.ask && options.human?.steps?.[active])) fail(`Inspect the trace and external state, then use --retry ${active} to authorize another attempt.`, 'recovery_required');
   const checkpoint = () => writeJSON(pathResolve(runDir, 'checkpoint.json'), {
-    method_sha256: hash(method), config_sha256: hash(config), runtime_sha256: hash(runtimeInfo),
+    method_sha256: hash(method), config_sha256: hash(suppliedConfig), runtime_sha256: hash(runtimeInfo),
     started_at: startedAt, elapsed_ms: performance.now() - started, sequence, invocations, requests, toolCalls, knownUsage, inputTokens, outputTokens,
-    root, accepted, skipped, active, collections,
+    root, accepted, skipped, active, collections, codexProcesses, codexInputTokens, codexOutputTokens, codexUsageReports,
   });
   const secrets = [...new Set([
     ...Object.values(profiles).map(p => process.env[p.api_key_env]),
@@ -116,18 +91,30 @@ async function executeRun(file, config, options) {
     if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redact(v)]));
     return value;
   };
-  const record = async (event, data = {}) => {
+  let journal = Promise.resolve();
+  const record = (event, data = {}) => {
+    const write = journal.then(async () => {
+    if (event === 'codex.started') codexProcesses++;
+    if (event === 'codex.completed') for (const usage of data.usage ?? []) {
+      if (Number.isSafeInteger(usage?.input_tokens) && Number.isSafeInteger(usage?.output_tokens)) {
+        codexInputTokens += usage.input_tokens; codexOutputTokens += usage.output_tokens; codexUsageReports++;
+      }
+    }
     const entry = redact({ sequence: ++sequence, at: new Date().toISOString(), elapsed_ms: performance.now() - started, event, ...data });
     await checkpoint();
     await appendFile(pathResolve(runDir, 'events.jsonl'), JSON.stringify(entry) + '\n', { mode: 0o600 });
     await options.onEvent?.(entry);
+    });
+    journal = write.catch(() => {});
+    return write;
   };
   const summary = () => ({ run_dir: runDir, elapsed_ms: performance.now() - started, invocations, model_requests: requests, tool_calls: toolCalls,
+    ...(codexProcesses ? { codex: { processes: codexProcesses, input_tokens: codexUsageReports ? codexInputTokens : null, output_tokens: codexUsageReports ? codexOutputTokens : null, scope: 'Codex-reported usage; internal requests and built-in tools are managed by Codex' } } : {}),
     usage: { responses_with_usage: knownUsage, responses_without_usage: requests - knownUsage, input_tokens: knownUsage ? inputTokens : null, output_tokens: knownUsage ? outputTokens : null, cost_usd: null, scope: 'executor-managed model requests only' } });
   let manifest;
   try {
     manifest = saved ? JSON.parse(await readFile(pathResolve(runDir, 'manifest.json'), 'utf8')).files : await snapshotBundle(sourceRoot, [...(method.files ?? []), ...scripts.map(x => x.entrypoint)], bundle);
-    await writeJSON(pathResolve(runDir, 'manifest.json'), { method_sha256: hash(method), config_sha256: hash(config), files: manifest, runtime_profiles: runtimeInfo });
+    await writeJSON(pathResolve(runDir, 'manifest.json'), { method_sha256: hash(method), config_sha256: hash(suppliedConfig), files: manifest, runtime_profiles: runtimeInfo });
     await writeJSON(pathResolve(runDir, 'method.json'), method);
     await writeJSON(pathResolve(runDir, 'state.json'), state);
     const verifyBundle = async () => {
@@ -166,15 +153,17 @@ async function executeRun(file, config, options) {
         environment[key] = process.env[key];
       }
       if (Buffer.byteLength(JSON.stringify(input)) > config.limits.max_request_bytes) fail('Script input exceeds request limit', 'input_limit');
-      await scopedRecord('process.started', { entrypoint: exec.entrypoint, runtime: exec.runtime });
+      await scopedRecord('process.started', { entrypoint: exec.entrypoint, runtime: exec.runtime, args: exec.args ?? [] });
       let result;
       try {
-        result = await executeProcess({ command: profile.command, args: [...(profile.args ?? []), await containedFile(bundle, exec.entrypoint), ...(exec.args ?? [])], cwd: bundle, input, env: environment, signal, maxBytes: config.limits.max_output_bytes });
+        result = await executeProcess({ command: profile.command, args: [...(profile.args ?? []), await containedFile(bundle, exec.entrypoint), ...(exec.args ?? [])], cwd: bundle, input, env: environment, signal, maxBytes: config.limits.max_output_bytes,
+          onProgress: async value => { const progress = progressMessage(value); if (progress && !signal.aborted) await scopedRecord('progress', progress); },
+        });
       } catch (error) {
-        await scopedRecord('process.failed', { code: error.code ?? 'process_failed', diagnostics: error.diagnostics ?? '', output: error.output ?? '' });
+        await scopedRecord('process.failed', { code: error.code ?? 'process_failed', exit_code: error.exit_code ?? null, diagnostics: error.diagnostics ?? '', output: error.output ?? '' });
         throw error;
       }
-      await scopedRecord('process.completed', { diagnostics: result.diagnostics, output: result.output, internal_model_usage: 'not observable by executor' });
+      await scopedRecord('process.completed', { exit_code: 0, diagnostics: result.diagnostics, output: result.output, internal_model_usage: 'not observable by executor' });
       let output;
       try { output = JSON.parse(result.output); } catch { fail('Script must return one JSON object', 'invalid_output'); }
       safeData(output);
@@ -183,6 +172,7 @@ async function executeRun(file, config, options) {
     await verifyBundle();
     for (const id of order) {
       const step = method.steps[id];
+    const limits = { ...config.step_defaults, ...step.limits };
       if (skipped.includes(id)) continue;
       if (!accepted[id]?.length && step.when && resolve(root, step.when) === false) { skipped.push(id); await record('step.skipped', { step: id }); continue; }
       const eachEntry = Object.entries(step.each ?? {})[0];
@@ -205,7 +195,7 @@ async function executeRun(file, config, options) {
         invocations++;
         const bindings = Object.fromEntries(Object.entries(step.in ?? {}).map(([k, ref]) => [k, structuredClone(resolve(root, ref))]));
         if (eachEntry) bindings[eachEntry[0]] = collection[iteration];
-        const remaining = Math.min(step.limits.timeout_ms, deadline - performance.now());
+        const remaining = Math.min(limits.timeout_ms, deadline - performance.now());
         if (remaining <= 0) throw timeoutError();
         const bound = boundedSignal(remaining, options.signal);
         let localRequests = 0, localAgentTurns = 0;
@@ -216,13 +206,13 @@ async function executeRun(file, config, options) {
         if (stateNames.length) outputDefs.state = { type: 'record', fields: Object.fromEntries(stateNames.map(k => [k, method.state[k]])) };
         const schema = outputSchema(outputDefs);
         const context = {
-          models: profiles, signal: bound.signal, maxAgentTurns: step.limits.max_agent_turns,
+          models: profiles, artifacts, signal: bound.signal, maxAgentTurns: limits.max_agent_turns,
           maxRequestBytes: config.limits.max_request_bytes, maxOutputBytes: config.limits.max_output_bytes,
           transport: options.transport, record: scopedRecord, guard,
-          canRequest: () => requests < config.limits.max_model_requests && localRequests < (step.limits.max_model_requests ?? 0),
-          canAgentTurn: () => localAgentTurns < step.limits.max_agent_turns,
+          canRequest: () => requests < config.limits.max_model_requests && localRequests < (limits.max_model_requests ?? 0),
+          canAgentTurn: () => localAgentTurns < limits.max_agent_turns,
           reserveRequest() { guard(); if (!this.canRequest()) fail('Model request cap reached', 'model_limit'); requests++; localRequests++; },
-          reserveAgentTurn() { if (++localAgentTurns > step.limits.max_agent_turns) fail('Agent turn cap reached', 'model_limit'); },
+          reserveAgentTurn() { if (++localAgentTurns > limits.max_agent_turns) fail('Agent turn cap reached', 'model_limit'); },
           usage(value) {
             if (Number.isSafeInteger(value?.input_tokens) && value.input_tokens >= 0 && Number.isSafeInteger(value?.output_tokens) && value.output_tokens >= 0) {
               knownUsage++; inputTokens += value.input_tokens; outputTokens += value.output_tokens;
@@ -234,17 +224,28 @@ async function executeRun(file, config, options) {
             if (++toolCalls > config.limits.max_tool_calls) fail('Tool-call cap reached', 'tool_limit');
             const tool = tools[name];
             assertSchema(outputSchema(tool.in), args, 'Tool arguments');
-            await scopedRecord('tool.dispatched', { tool: name, call_id: callId, arguments: args, effects: tool.effects });
-            const output = await executeScript(tool.run, args, bound.signal, scopedRecord);
+            await this.record('tool.dispatched', { tool: name, call_id: callId, arguments: args, effects: tool.effects });
+            const output = await executeScript(tool.run, args, bound.signal, (event, data) => this.record(event, { ...data, tool: name, call_id: callId }));
             assertSchema(outputSchema(tool.out), output, 'Tool output');
-            await scopedRecord('tool.completed', { tool: name, call_id: callId, output });
+            await this.record('tool.completed', { tool: name, call_id: callId, output });
             return output;
           },
         };
         const execute = async (exec, input, schema, phase) => {
           guard();
+          if (method.format === 'method/3.1' && exec.kind !== 'run') {
+            const template = exec.prompt;
+            let rendered;
+            try { rendered = renderPrompt(template, input); }
+            catch (error) { fail(`${id}.${phase}.prompt: ${error.message}`, 'invalid_prompt'); }
+            if (Buffer.byteLength(rendered) + Buffer.byteLength(JSON.stringify(input)) > config.limits.max_request_bytes) fail('Expanded prompt exceeds request limit', 'input_limit');
+            await scopedRecord('prompt.rendered', { phase, template, rendered });
+            exec = { ...exec, prompt: rendered };
+          }
           const phaseContext = { ...context, record: (event, data) => scopedRecord(event, { phase, ...data }) };
-          const result = exec.kind === 'run' ? await executeScript(exec, input, bound.signal, phaseContext.record) : await executeModel(exec, input, schema, phaseContext);
+          const result = exec.kind === 'run' ? await executeScript(exec, input, bound.signal, phaseContext.record)
+            : (profiles[exec.model]?.backend ?? 'codex') === 'codex' ? await executeCodex(exec, input, schema, phaseContext)
+            : await executeModel(exec, input, schema, phaseContext);
           guard(); assertSchema(schema, result, `${phase} output`);
           return result;
         };
@@ -253,9 +254,14 @@ async function executeRun(file, config, options) {
           active = `${id}:${iteration}`;
           await scopedRecord('step.started', { inputs: bindings, state_before: state, external_effects_possible: (step.changes ?? []).some(x => x.startsWith('environment.')) });
           const answer = options.human?.steps?.[active];
-          if (step.ask && !answer) {
-            await scopedRecord('human.required', { prompt: step.ask, inputs: bindings });
-            fail('Human input required; this runner does not auto-answer ask', 'needs_input');
+          if (step.ask) {
+            const prompt = method.format === 'method/3.1' ? renderPrompt(step.ask, bindings) : step.ask;
+            if (Buffer.byteLength(prompt) + Buffer.byteLength(JSON.stringify(bindings)) > config.limits.max_request_bytes) fail('Expanded prompt exceeds request limit', 'input_limit');
+            if (method.format === 'method/3.1') await scopedRecord('prompt.rendered', { phase: 'action', template: step.ask, rendered: prompt });
+            if (!answer) {
+              await scopedRecord('human.required', { prompt, inputs: bindings });
+              fail('Human input required; this runner does not auto-answer ask', 'needs_input');
+            }
           }
           const candidate = step.ask ? answer.outputs : await execute(step.do, bindings, schema, 'action');
           assertSchema(schema, candidate, 'Action output');

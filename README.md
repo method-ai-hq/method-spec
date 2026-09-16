@@ -43,3 +43,11 @@ Scripts and tool implementations are trusted local processes, not an OS sandbox.
 Game controls, playing policies, and game evidence belong in [method-factorio](https://github.com/method-ai-hq/method-factorio). This repository owns the general format and reference validator and runner. The hosted application and SDK 0.3.0 remain separate; this release does not update them.
 
 Original material and the included SDK baseline use the [MIT license](LICENSE). No private application source or history is included.
+
+## Shared product runtime
+
+This package also supplies the Method CLI and dashboard validation. It includes the local Codex backend, prompt variables, progress events, and dependency checks. The product imports this package at a pinned release; it does not maintain a separate runtime.
+
+Step purpose, data descriptions, and step limit overrides are optional. Operator configuration can omit limits; `src/defaults.js` defines finite defaults. The `default` model profile uses the local Codex configuration. Custom scripts, tools, and connections still need explicit bindings. Existing documents with explicit limits keep those values.
+
+`npm run schema` generates the JSON schemas and static shape validators from `src/schema.js`. Static validators let the API validate the same format without dynamic code evaluation. The generated file contains no writing rules. Run `npm run check` before release.

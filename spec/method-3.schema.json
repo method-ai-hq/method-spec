@@ -4,7 +4,10 @@
   "type": "object",
   "properties": {
     "format": {
-      "const": "method/3"
+      "enum": [
+        "method/3",
+        "method/3.1"
+      ]
     },
     "name": {
       "type": "string",
@@ -12,6 +15,11 @@
       "maxLength": 16000
     },
     "goal": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16000
+    },
+    "run_prompt": {
       "type": "string",
       "minLength": 1,
       "maxLength": 16000
@@ -266,8 +274,7 @@
         }
       },
       "required": [
-        "type",
-        "description"
+        "type"
       ],
       "additionalProperties": false
     },
@@ -318,8 +325,7 @@
         "default": {}
       },
       "required": [
-        "type",
-        "description"
+        "type"
       ],
       "additionalProperties": false
     },
@@ -628,6 +634,43 @@
           "minLength": 1,
           "maxLength": 16000
         },
+        "reading": {
+          "type": "object",
+          "properties": {
+            "inputs": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16000
+            },
+            "outputs": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16000
+            },
+            "output_name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16000
+            },
+            "condition": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16000
+            },
+            "check": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16000
+            },
+            "check_name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16000
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
         "in": {
           "type": "object",
           "propertyNames": {
@@ -778,16 +821,11 @@
               "maximum": 2147483647
             }
           },
-          "required": [
-            "timeout_ms"
-          ],
+          "required": [],
           "additionalProperties": false
         }
       },
-      "required": [
-        "purpose",
-        "limits"
-      ],
+      "required": [],
       "additionalProperties": false,
       "oneOf": [
         {

@@ -38,7 +38,7 @@ method schema config
 
 Root fields are `format`, `name`, `goal`, `inputs`, `state`, `environment`, `files`, `steps`, and `result`. Only format, name, goal, steps, and result are required.
 
-Inputs and state declarations have a type, description, and optional default. Supply missing initial values through `--inputs` and `--state`, each pointing to a JSON object. Unknown or wrongly typed values fail before any operation. State is saved as one atomic `state.json` checkpoint in the run directory. Method 3 does not use Method 2's per-state `file` field.
+Inputs and state declarations have a type and optional description and default. Supply missing initial values through `--inputs` and `--state`, each pointing to a JSON object. Unknown or wrongly typed values fail before any operation. State is saved as one atomic `state.json` checkpoint in the run directory. Method 3 does not use Method 2's per-state `file` field.
 
 Types are `text`, `number`, `boolean`, `record`, `list`, and `file`. Records require `fields`. Lists require exactly one of `items` or `fields`; the latter describes each record in the list. Nested fields may use a short type name or a full shape. All declared fields are required and extra fields fail. Defaults must meet the declared type.
 
@@ -48,7 +48,7 @@ The `environment` declarations describe connections. Operator configuration supp
 
 ## Executable steps
 
-Every step requires `purpose` and finite `limits.timeout_ms`. Use exactly one of `do` or `ask`. The three `do` forms are:
+Step `purpose` and `limits` are optional. Default step limits are ten minutes and 32 model requests or agent turns; explicit limits override these values. Use exactly one of `do` or `ask`. The three `do` forms are:
 
 ```yaml
 do:
@@ -145,9 +145,9 @@ Repeated inputs bound to state are refreshed each iteration. Other upstream valu
 
 ## Limits and accounting
 
-Operator configuration requires run limits for elapsed milliseconds, model requests, step invocations, tool calls, and input/output bytes. Model requests and tool calls may be zero. A Method cannot increase those caps.
+Operator configuration can override the finite default run limits: one hour, 100 model requests, 100 step invocations, 200 tool calls, and 16 MiB each for input and output. A missing configuration uses the local Codex agent as model `default`. Custom scripts, tools, and models still require their configuration. Model requests and tool calls may be zero. A Method cannot increase those caps.
 
-A model-using step requires `max_model_requests`; an agent-using step also requires `max_agent_turns`. Action and check share these limits and `timeout_ms` for each invocation. One agent turn is one model response. Repeated invocations share the run caps. The runner does not dispatch a tool when no follow-up model request or agent turn remains.
+A model-using step can override `max_model_requests`; an agent-using step can also override `max_agent_turns`. Configuration `step_defaults` can change the defaults. Action and check share these limits and `timeout_ms` for each invocation. One agent turn is one model response. Repeated invocations share the run caps. The runner does not dispatch a tool when no follow-up model request or agent turn remains.
 
 Provider calls have no automatic retries. Usage from completed provider responses is recorded; unavailable usage remains unknown. `cost_usd` is null because this release does not calculate prices or enforce a monetary budget. Request counts and output-token limits are resource caps, not a dollar guarantee. The operator must decide the spending allowance before live runs.
 

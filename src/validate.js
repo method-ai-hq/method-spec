@@ -1,10 +1,11 @@
+import { methodShape, configShape } from './document-validators.js';
 import Ajv from 'ajv';
 import { methodSchema, configSchema, object } from './schema.js';
 
 const ajv = new Ajv({ allErrors: true, strict: false, ownProperties: true });
 ajv.addSchema(methodSchema, 'method');
-const validateDocument = ajv.getSchema('method');
-const validateConfiguration = ajv.compile(configSchema);
+const validateDocument = methodShape;
+const validateConfiguration = configShape;
 export { own, fail, safeData, shape, dataSchema, outputSchema, resolve, typeAt } from './semantics.js';
 import { own, fail, safeData, dataSchema, validateSemantics } from './semantics.js';
 export function assertSchema(schema, value, label) {

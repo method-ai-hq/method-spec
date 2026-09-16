@@ -117,10 +117,10 @@ test('a consumer of skipped output fails explicitly', async t => {
 });
 test('bundle paths and symlinks cannot escape the source directory', async t => {
   const m = method(); m.steps.work.do.entrypoint = '../outside.mjs';
-  const f = await fixture(t, m); assert.equal((await f.run()).status, 'failed');
+  const f = await fixture(t, m); await assert.rejects(f.run(), /Invalid bundle path/);
   const g = await fixture(t); await symlink(process.execPath, join(g.dir, 'link.mjs'));
   const doc = method(); doc.steps.work.do.entrypoint = 'link.mjs'; await writeFile(g.file, JSON.stringify(doc));
-  assert.equal((await g.run()).status, 'failed');
+  await assert.rejects(g.run(), /escapes|Cannot read Method file/);
 });
 test('local process capability must be declared by the operator', async t => {
   const f = await fixture(t); const cfg = config(); delete cfg.allow_local_processes;
@@ -354,4 +354,10 @@ test('resume freezes each items when the operation changes its source state list
   assert.deepEqual(await f.state(), { items: [4, 8] });
   assert.deepEqual((await f.run(config(), { resume: true })).result, [2, 4, 8]);
   assert.deepEqual(await f.state(), { items: [] });
+});
+
+test('minimal steps use finite operator defaults without descriptive boilerplate', async t => {
+  const m = method(); delete m.steps.work.purpose; delete m.steps.work.limits; delete m.steps.work.out.value.description;
+  const f = await fixture(t, m); const cfg = { allow_local_processes: true, runtimes: config().runtimes };
+  assert.equal((await f.run(cfg)).result, 4);
 });
