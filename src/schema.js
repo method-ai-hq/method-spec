@@ -18,6 +18,7 @@ const exact = [
   object({ count: object({ value: ref, min: { type: 'integer', minimum: 0 }, max: { type: 'integer', minimum: 0 } }, ['value']) }),
   object({ present: ref }), object({ file: ref }),
 ];
+/** @type {Record<string, any>} */
 export const methodSchema = {
   $schema: 'http://json-schema.org/draft-07/schema#',
   $id: 'https://github.com/method-ai-hq/method-spec/raw/main/spec/method-3.schema.json',
@@ -49,6 +50,7 @@ export const methodSchema = {
   },
 };
 
+/** @type {Record<string, any>} */
 export const configSchema = {
   $schema: 'http://json-schema.org/draft-07/schema#',
   ...object({
