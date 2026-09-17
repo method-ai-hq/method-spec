@@ -60,3 +60,5 @@ Runtime 0.5.0 removes the `method3` package binary. The public SDK owns the sole
 2026-09-17: Removed the obsolete operator spending-cap instruction at the owner's request. Provider trials use the installed agent's existing sign-in. This instruction change makes no new test-result claim.
 
 2026-09-17: Deleted the obsolete AGENTS.md at the owner's request. Its Method 2 baseline and proposal-only instructions no longer describe the current runtime.
+
+2026-09-17: A live Claude trial reported an expired account token in its result stream and exited nonzero. Runtime 0.5.1 now preserves that error instead of replacing it with the exit code. A subprocess regression reproduces this failure. No successful live Claude run is claimed.
