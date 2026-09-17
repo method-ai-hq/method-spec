@@ -54,12 +54,13 @@ export async function executeCodex(execution, input, schema, context) {
       internal_model_requests: 'managed by Codex; not counted by Method' });
     return value;
   } catch (error) {
+    if (context.signal.aborted) error = context.signal.reason;
     if (error.output) {
       await writeFile(join(directory, 'events.jsonl'), error.output.replaceAll(bridge.token, '[REDACTED]'), { mode: 0o600 });
       const failure = error.output.split('\n').reverse().flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } })
         .find(event => event.type === 'turn.failed' || event.type === 'error');
       const message = failure?.error?.message ?? failure?.message;
-      if (message) error.message = `Codex failed: ${message}`;
+      if (message && !context.signal.aborted) error.message = `Codex failed: ${message}`;
     }
     if (error.diagnostics) await writeFile(join(directory, 'stderr.log'), error.diagnostics.replaceAll(bridge.token, '[REDACTED]'), { mode: 0o600 });
     await context.record('codex.failed', { directory, message: error.message });

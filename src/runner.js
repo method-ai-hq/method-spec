@@ -34,7 +34,7 @@ function boundedSignal(ms, parent) {
   parent?.addEventListener('abort', abort, { once: true });
   if (parent?.aborted) abort();
   const timer = setTimeout(() => controller.abort(timeoutError()), Math.max(1, ms));
-  return { signal: controller.signal, close: () => { clearTimeout(timer); parent?.removeEventListener('abort', abort); } };
+  return { signal: controller.signal, abort: reason => controller.abort(reason), close: () => { clearTimeout(timer); parent?.removeEventListener('abort', abort); } };
 }
 
 /**
@@ -254,17 +254,23 @@ async function executeRun(file, config, options) {
             if (tool.connection) {
               // Page content is returned to the agent, never session secrets or raw provider logs.
               await this.record('tool.dispatched', {tool:name,call_id:callId,effects:tool.effects});
-              const call = options.connections[tool.connection].call(tool.tool, args, bound.signal);
-              const output = await new Promise((resolve,reject) => {
-                const abort=()=>reject(bound.signal.reason);
-                bound.signal.addEventListener('abort',abort,{once:true});
-                Promise.resolve(call).then(resolve,reject).finally(()=>bound.signal.removeEventListener('abort',abort));
-                if(bound.signal.aborted)abort();
-              });
-              guard(); validateToolResult(output);
-              if(Buffer.byteLength(JSON.stringify(output))>config.limits.max_output_bytes)fail('Tool output exceeds limit','output_limit');
-              await this.record('tool.completed',{tool:name,call_id:callId,isError:!!output.isError});
-              return output;
+              try {
+                const call = options.connections[tool.connection].call(tool.tool, args, bound.signal);
+                const output = await new Promise((resolve,reject) => {
+                  const abort=()=>reject(bound.signal.reason);
+                  bound.signal.addEventListener('abort',abort,{once:true});
+                  Promise.resolve(call).then(resolve,reject).finally(()=>bound.signal.removeEventListener('abort',abort));
+                  if(bound.signal.aborted)abort();
+                });
+                guard(); validateToolResult(output);
+                if(Buffer.byteLength(JSON.stringify(output))>config.limits.max_output_bytes)fail('Tool output exceeds limit','output_limit');
+                await this.record('tool.completed',{tool:name,call_id:callId,isError:!!output.isError});
+                return output;
+              } catch (error) {
+                bound.abort(error);
+                await this.record('tool.failed', {tool:name,call_id:callId,connection:tool.connection,code:error.code ?? 'connection_failed',message:error.message});
+                throw error;
+              }
             }
             await this.record('tool.dispatched', { tool: name, call_id: callId, arguments: args, effects: tool.effects });
             const output = await executeScript(tool.run, args, bound.signal, (event, data) => this.record(event, { ...data, tool: name, call_id: callId }));

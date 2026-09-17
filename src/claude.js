@@ -45,10 +45,11 @@ export async function executeClaude(execution, input, schema, context) {
     await context.record('agent.completed', { provider: 'claude', directory, usage: last.usage ?? null });
     return value;
   } catch (error) {
+    if (context.signal.aborted) error = context.signal.reason;
     if (error.output) await writeFile(join(directory, 'events.jsonl'), clean(error.output), { mode: 0o600 });
     if (error.diagnostics) await writeFile(join(directory, 'stderr.log'), clean(error.diagnostics), { mode: 0o600 });
     const failure = events.findLast(event => event.type === 'result' && (event.is_error || event.subtype !== 'success'));
-    error.message = clean(failure?.errors?.join('\n') || failure?.result || error.diagnostics || error.message);
+    if (!context.signal.aborted) error.message = clean(failure?.errors?.join('\n') || failure?.result || error.diagnostics || error.message);
     await context.record('agent.failed', { provider: 'claude', directory, message: error.message });
     throw error;
   } finally { await bridge.close(); await rm(join(directory,'mcp.json'),{force:true}); }
