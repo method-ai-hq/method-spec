@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { executable, executeProcess, writeJSON } from './io.js';
 import { fail, safeData, assertSchema } from './validate.js';
@@ -29,6 +29,9 @@ export async function executeClaude(execution, input, schema, context) {
       onStdoutLine: async line => {
         let event; try { event = JSON.parse(line); } catch { return; }
         events.push(event);
+        for (const item of event.type === 'assistant' ? event.message?.content ?? [] : []) {
+          if (item.type === 'tool_use' && typeof item.name === 'string') await context.record('progress', {provider:'claude',message:`Using ${item.name}.`});
+        }
         if (event.type === 'system' && event.subtype === 'init') {
           if (event.mcp_server_errors?.length || event.mcp_servers?.some(s => s.name === 'method_step' && !['connected', 'pending'].includes(s.status))) fail('Claude could not connect to Method tools.', 'tool_unavailable');
           await context.record('agent.ready', { provider: 'claude', model: event.model });
@@ -48,5 +51,5 @@ export async function executeClaude(execution, input, schema, context) {
     error.message = clean(error.diagnostics || error.message);
     await context.record('agent.failed', { provider: 'claude', directory, message: error.message });
     throw error;
-  } finally { await bridge.close(); }
+  } finally { await bridge.close(); await rm(join(directory,'mcp.json'),{force:true}); }
 }
