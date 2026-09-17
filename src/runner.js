@@ -154,7 +154,7 @@ async function executeRun(file, config, options) {
     const executeScript = async (exec, input, signal, scopedRecord) => {
       await verifyBundle();
       const profile = runtimeInfo[exec.runtime];
-      const environment = { PATH: options.processPath ?? process.env.PATH ?? '', LANG: 'C.UTF-8', METHOD_OUTPUT_DIR: artifacts };
+      const environment = { PATH: options.processPath ?? process.env.PATH ?? '', LANG: 'C.UTF-8', METHOD_OUTPUT_DIR: artifacts, METHOD_ENVIRONMENT: JSON.stringify(config.environment ?? {}) };
       for (const key of profile.env ?? []) {
         if (!process.env[key]) fail(`Missing runtime environment variable: ${key}`, 'preflight');
         environment[key] = process.env[key];
