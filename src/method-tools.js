@@ -43,7 +43,7 @@ export async function startMethodTools(execution, context) {
         queue = call.catch(() => {});
         try {
           const value = await call;
-          result = toolContent(value);
+          result = toolContent(value, context.isConnectionTool?.(name));
         } catch (error) {
           result = { isError: true, content: [{ type: 'text', text: error.message }] };
         }

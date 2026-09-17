@@ -13,8 +13,8 @@ export function executionTools(execution, tools = {}) {
   }
   return names;
 }
-export function toolContent(value) {
-  return value && Array.isArray(value.content) ? value : {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value};
+export function toolContent(value, connection = false) {
+  return connection ? value : {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value};
 }
 export function validateToolResult(result) {
   if (!result || !Array.isArray(result.content)) fail('Connection returned invalid tool content', 'invalid_output');

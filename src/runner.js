@@ -244,6 +244,7 @@ async function executeRun(file, config, options) {
               knownUsage++; inputTokens += value.input_tokens; outputTokens += value.output_tokens;
             }
           },
+          isConnectionTool(name) { return !!tools[name].connection; },
           toolDefinition(name) { return { type: 'function', name, description: tools[name].description, parameters: tools[name].parameters ?? outputSchema(tools[name].in), strict: !tools[name].connection }; },
           async invokeTool(name, args, callId) {
             guard();
