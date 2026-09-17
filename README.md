@@ -5,11 +5,11 @@ A Method is a YAML file that describes a reusable procedure: inputs, steps, outp
 This public MIT repository contains two parts:
 
 - **Format and validator:** JSON Schema plus semantic checks for references, types, effects, and dependency cycles.
-- **Executor (`@withmethod/runtime` 0.5.0):** local script, model, and agent execution; checks; state; run records; and checkpoint resume.
+- **Executor (`@withmethod/runtime` 0.6.0):** local script, model, and agent execution; checks; state; run records; and checkpoint resume.
 
 New Methods use `format: method/3.1`. `method/3` remains accepted with literal prompts. The original `method/2` schema is retained as a historical baseline; this executor does not run it directly.
 
-The full [Method SDK and CLI](https://docs.withmethod.ai/sdk/overview) uses a pinned revision of this runtime and adds authoring, account access, saved versions, and dashboard uploads. Its MIT source is included in the SDK download. The hosted application repository is private. The YAML format itself does not require an account or a hosted service.
+The full [Method SDK and CLI](https://docs.withmethod.ai/sdk/overview) uses a pinned revision of this runtime and adds authoring, account access, saved versions, and dashboard uploads. The SDK source and releases are public at [method-sdk](https://github.com/method-ai-hq/method-sdk). The hosted application repository is private. The YAML format itself does not require an account or a hosted service.
 
 ## Try the public runtime
 
@@ -43,15 +43,17 @@ Scripts and local coding agents are trusted local processes, not an OS sandbox. 
 | [Configuration schema](spec/runtime-config.schema.json) | Operator runtime, model, tool, and limit settings. |
 | [Product documentation](https://docs.withmethod.ai) | Full CLI, JavaScript/Python SDKs, API, and MCP. |
 | [Validation record](VALIDATION.md) | Checked behavior and limits of the evidence. |
-| [Original proposal](proposals/method-3.md) | Historical rationale; the current reference takes precedence. |
-| [Baseline provenance](PROVENANCE.md) | Original Method 2 source and hashes. |
-| [Contribution record](HACKATHON.md) | Prior work and dated changes. |
-| [Implementation plan](PLAN.md) | Original work stages. |
+| [Original proposal](docs/archive/proposals/method-3.md) | Historical rationale; the current reference takes precedence. |
+| [Baseline provenance](docs/archive/PROVENANCE.md) | Original Method 2 source and hashes. |
+| [Contribution record](docs/archive/HACKATHON.md) | Prior work and dated changes. |
+| [Implementation plan](docs/archive/PLAN.md) | Original work stages. |
 
 Game controls, policies, and measured game results belong in [method-factorio](https://github.com/method-ai-hq/method-factorio). Passing runtime tests does not establish model quality or game performance.
 
 ## Maintain the contract
 
-`src/schema.js` defines the grammar. `npm run schema` generates JSON schemas and static shape validators. `src/semantics.js` checks meaning beyond the grammar. The product imports these public definitions at a pinned commit; it does not maintain a second current runtime.
+`src/schema.js` defines the grammar. `npm run schema` generates JSON schemas and static shape validators. `src/document.js` owns browser-safe YAML parsing, typed document errors, default values, and document validation. It preserves text and permits bounded YAML aliases. `src/semantics.js` owns shapes, references, and dependency rules. The product imports these public definitions at a pinned commit; it does not maintain a second current runtime.
 
 Step purpose, data descriptions, and limit overrides are optional. `src/defaults.js` supplies finite defaults. Run `npm run check` before release and `npm run types` after a change that affects exported types. No private application source or history is included.
+
+The package ships the current reference and validation instructions. Dated plans and old format descriptions live in `docs/archive/` in this repository; they are not installed with the runtime. The Method 2 JSON schema remains a converter input, not an execution format.

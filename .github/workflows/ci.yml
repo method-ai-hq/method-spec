@@ -18,5 +18,6 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm run check
+      - run: git diff --exit-code -- types
       - run: npm run example
       - run: npm pack --dry-run

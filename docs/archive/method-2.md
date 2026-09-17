@@ -1,6 +1,6 @@
 # Published Method 2 baseline
 
-Status: existing format distributed in Method SDK 0.3.0. See [provenance](../PROVENANCE.md).
+Status: existing format distributed in Method SDK 0.3.0. See [provenance](PROVENANCE.md).
 
 A document uses `format: method/2`, a name, a goal, a map of steps, and a result reference. The SDK also accepts the legacy identifier `workflow/2`. Optional root fields declare inputs, environment connections, and saved state.
 
@@ -19,6 +19,6 @@ The existing runtime launches fresh Codex processes for agent actions and agent 
 
 The published baseline therefore contains more than two prompts. Its central agent execution pattern is a worker prompt followed, when requested, by a separate checker prompt. Typed data, state, iteration, dependencies, and exact checks are prior work.
 
-The [JSON Schema](method-2.schema.json) gives the exported grammar. The [source schema](../vendor/method-sdk-0.3.0/schema.ts) preserves the published source. Runtime semantics and additional semantic validation are not fully encoded in JSON Schema.
+The [JSON Schema](../../spec/method-2.schema.json) gives the exported grammar. The [source schema](../../vendor/method-sdk-0.3.0/schema.ts) preserves the published source. Runtime semantics and additional semantic validation are not fully encoded in JSON Schema.
 
 The public SDK provides the full guide through `method authoring all` and the grammar through `method schema`. The next-version proposal does not alter this baseline or imply support in SDK 0.3.0.

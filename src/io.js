@@ -4,18 +4,12 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
-import YAML from 'yaml';
+import { parseDocumentValue } from './document.js';
 import { fail, safeData } from './validate.js';
 
 export const hash = value => createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value)).digest('hex');
 export async function readDocument(file) {
-  const text = await readFile(file, 'utf8');
-  if (Buffer.byteLength(text) > 2_000_000) fail('Document exceeds 2 MB');
-  const doc = YAML.parseDocument(text, { uniqueKeys: true });
-  if (doc.errors.length) fail(doc.errors.map(x => x.message).join('; '));
-  const value = doc.toJS({ maxAliasCount: 20 });
-  safeData(value);
-  return value;
+  return parseDocumentValue(await readFile(file, 'utf8'));
 }
 export function relativeFile(path) {
   if (isAbsolute(path) || path.includes('\\') || path.split('/').some(x => !x || x === '..' || x === '.' || x === 'sensitive' || x === '.git' || x === 'node_modules' || x.startsWith('.env') || x === 'secrets.env')) fail(`Invalid bundle path: ${path}`);

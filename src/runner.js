@@ -35,6 +35,12 @@ function boundedSignal(ms, parent) {
   return { signal: controller.signal, close: () => { clearTimeout(timer); parent?.removeEventListener('abort', abort); } };
 }
 
+/**
+ * @param {string} file
+ * @param {import('./api-types.js').RuntimeConfig} config
+ * @param {import('./api-types.js').RunOptions} [options]
+ * @returns {Promise<import('./api-types.js').RunResult>}
+ */
 export async function runMethod(file, config, options = {}) {
   const runDir = pathResolve(options.runDir ?? pathResolve('.method-runs', randomUUID()));
   if (options.resume && !options.runDir) fail('Resume needs an explicit run directory', 'preflight');

@@ -110,8 +110,6 @@ export function validateSemantics(method, assertData) {
       globalRef(target);
     }
     if (changes.some(x => x.startsWith('environment.')) && !step.check) fail('External changes require a check');
-    for (const execution of [step.do, step.check].filter(x => x?.kind)) {
-    }
     if (method.format === 'method/3.1') {
       const validate = (prompt, definitions, location) => {
         try { validatePrompt(prompt, definitions, typeAt); }

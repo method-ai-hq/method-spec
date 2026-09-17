@@ -1,6 +1,6 @@
 # Proposal: Method 3
 
-Status: original design proposal, 10 September 2026. The first implementation now uses `method/3`; see the [implemented reference](../spec/method-3.md). This document preserves design rationale and does not override the reference. The original `method/3-draft` identifier is not accepted.
+Status: original design proposal, 10 September 2026. The first implementation now uses `method/3`; see the [implemented reference](../../../spec/method-3.md). This document preserves design rationale and does not override the reference. The original `method/3-draft` identifier is not accepted.
 
 Implementation decisions: use one atomic state checkpoint rather than legacy per-state file paths; support Responses agents with explicit function tools; keep scripts as trusted local processes; provide request/token limits without monetary accounting; stop on `ask` without automatic continuation. OS isolation, native computer-use drivers, Codex subscription execution, and persistent agents remain outside 0.1.0.
 

@@ -21,7 +21,7 @@ Repository created on 10 September 2026. Record actual implementation and measur
 
 At the original 0.1.0 release, the shipped agent backend used the OpenAI Responses API, not a Codex subscription. Runtime 0.1.0 does not implement OS isolation, a computer-use driver, training infrastructure, or automatic recovery. No game speed or policy-search gain is established by this implementation.
 
-See [runtime validation](VALIDATION.md) for the 40-test suite and clean package-install result. The `v0.1.0` release identifies the implementation commit and installable artifact.
+See [runtime validation](../../VALIDATION.md) for the 40-test suite and clean package-install result. The `v0.1.0` release identifies the implementation commit and installable artifact.
 
 Use "we added" or "we built" only for implemented changes. The design is motivated by execution overhead; the amount of overhead and any improvement require measurements.
 

@@ -1,6 +1,6 @@
 {
   "name": "@withmethod/runtime",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Open-source Method validator and local executor",
   "type": "module",
   "license": "MIT",
@@ -20,11 +20,13 @@
   },
   "files": [
     "src",
-    "spec",
+    "spec/method-3.md",
+    "spec/method-3.schema.json",
+    "spec/runtime-config.schema.json",
+    "spec/method-2.schema.json",
     "examples",
-    "proposals",
-    "vendor",
-    "*.md",
+    "README.md",
+    "VALIDATION.md",
     "LICENSE",
     "types",
     "test",
@@ -33,9 +35,10 @@
   "scripts": {
     "test": "node --test test/*.test.js",
     "schema": "node scripts/emit-schema.js",
-    "check": "npm run schema -- --check && npm test",
+    "check": "npm run schema -- --check && npm test && npm run check:types",
     "example": "node src/cli.js run examples/counter.method --config examples/local.config.json",
-    "types": "tsc --allowJs --declaration --emitDeclarationOnly --outDir types --module NodeNext --moduleResolution NodeNext --target ES2022 --skipLibCheck src/*.js"
+    "types": "tsc --allowJs --declaration --emitDeclarationOnly --outDir types --module NodeNext --moduleResolution NodeNext --target ES2022 --skipLibCheck src/*.js",
+    "check:types": "npm run types && tsc --noEmit --strict --skipLibCheck --module NodeNext --moduleResolution NodeNext --target ES2022 test/types.mts"
   },
   "repository": {
     "type": "git",

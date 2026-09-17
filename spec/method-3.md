@@ -1,6 +1,6 @@
 # Method reference
 
-Implemented by `@withmethod/runtime` 0.3.1. The full Method SDK uses this runtime at a pinned Git revision. New methods use this format under the same Method product and command.
+Implemented by `@withmethod/runtime` 0.6.0. The full Method SDK uses this runtime at a pinned Git revision. New methods use this format under the same Method product and command.
 
 Use `format: method/3.1`. `method/3` remains accepted and keeps prompts literal. The machine-readable grammar is [method-3.schema.json](method-3.schema.json). Operator configuration uses [runtime-config.schema.json](runtime-config.schema.json). The validator also checks references, dependencies, data declarations, loop conditions, and effects; JSON Schema alone is insufficient.
 
@@ -14,21 +14,18 @@ npm run check
 npm run example
 ```
 
-To install the standalone CLI from the fixed runtime 0.3.1 source revision:
+Install the public SDK for the user command:
 
 ```sh
-npm install -g https://codeload.github.com/method-ai-hq/method-spec/tar.gz/refs/tags/v0.3.1
-method3 --version
+npm install -g https://app.withmethod.ai/downloads/withmethod-sdk-latest.tgz
+method --version
+method validate example.method --config runtime.json
+method run example.method --config runtime.json --inputs inputs.json
+method schema method
+method schema config
 ```
 
-The standalone command is `method3`. The full SDK owns the `method` command. Runtime 0.3.1 removes the duplicate binary name so a dependency install cannot replace the full CLI. Use the product SDK installation when you also need account, save, and dashboard sync commands. The source needs no build step. This package is distributed through GitHub; publication to the npm registry is not claimed.
-
-```sh
-method3 validate example.method --config runtime.json
-method3 run example.method --config runtime.json --inputs inputs.json
-method3 schema method
-method3 schema config
-```
+The runtime package installs no command. Contributors can run `node src/cli.js` in this checkout. The contributor harness accepts `--agent codex|claude`; the SDK also supplies account commands, automatic setup, and background workers.
 
 `validate` checks the Method and, when supplied, the configuration grammar. `run` additionally resolves profiles, tools, capabilities, environment bindings, and bundle files. A validation pass alone does not establish executable setup or task correctness.
 
@@ -79,7 +76,7 @@ do:
 
 Runtime profiles name an executable, optional fixed arguments, a declared version, and optional environment-variable names. Commands use argument arrays without shell expansion. Node, Python, or another JSON-speaking executable can be registered.
 
-A script reads one JSON object on standard input, writes one JSON output object on standard output, and sends diagnostics to standard error. It runs from a saved copy of the bundle. Only PATH, LANG, METHOD_OUTPUT_DIR, and explicitly named environment variables are passed. Missing explicit variables fail. The executor hashes the resolved runtime binary and records the operator's declared version.
+A script reads one JSON object on standard input, writes one JSON output object on standard output, and sends diagnostics to standard error. It runs from a saved copy of the bundle. Scripts receive PATH, LANG, METHOD_OUTPUT_DIR, METHOD_ENVIRONMENT (the configured connection map as JSON), explicitly named environment variables, and METHOD_PROGRESS_FD when a progress pipe is attached. Missing explicit variables fail. The executor hashes the resolved runtime binary and records the operator's declared version.
 
 The operator must set `allow_local_processes: true`. These are trusted local processes, **not an OS sandbox**. They can access resources allowed to the operating-system user. A script can call a trained model or an external API, but those internal calls are not metered or restricted by the executor's model-request counter. Use managed `call`/`agent` steps for measured model use.
 
@@ -87,7 +84,7 @@ On timeout or process exit, the runner kills the process group on POSIX systems.
 
 ### Models and agents
 
-The default backend is local Codex. Model `default` uses the user's existing sign-in, installed tools, and default model. An unconfigured model alias also falls back to Codex. Use an explicit profile to select a different model/backend. Codex starts a fresh process with approval and sandbox prompts disabled; it is trusted local execution. A supplied configuration must allow local processes. Without a config file, the CLI enables that default local path.
+Explicit model profiles take priority. Missing profiles use the configured default, an explicit `--agent`, the identified calling coding agent, or the sole installed supported agent. The SDK can also remember a provider choice. If both Codex and Claude are available without a choice, execution requests input. Both use their normal sign-in. The selected profiles remain fixed on resume. Codex starts a fresh process with approval and sandbox prompts disabled; it is trusted local execution. A supplied configuration must allow local processes. Without a config file, the CLI enables that default local path.
 
 The temporary Method MCP bridge exposes only the step's declared Method tools. Codex also retains its built-in and installed tools. Empty `tools` does not mean that Codex has no tools. Both `call` and `agent` use a Codex process with a structured final output on this backend. Internal Codex model requests and tools are not governed by Method's direct API request/turn counters.
 
@@ -174,9 +171,9 @@ Generic run records are private local artifacts by default (directory mode 0700,
 Failures do not trigger automatic retries. Resume with the original method and configuration:
 
 ```sh
-method3 run task.method --config runtime.json --run-dir runs/example --resume
+method run task.method --config runtime.json --run-dir runs/example --resume
 # After inspecting an unfinished action and its external effects:
-method3 run task.method --config runtime.json --run-dir runs/example --resume --retry STEP:ITERATION
+method run task.method --config runtime.json --run-dir runs/example --resume --retry STEP:ITERATION
 ```
 
 `checkpoint.json` saves accepted iterations, typed state, inputs, runtime identity, active dispatch, and cumulative usage. Accepted work is reused, including each/repeat outputs. Method, configuration, runtime executable, and bundle hashes must match. Accepted file outputs are verified again. Run time excludes time while stopped; consumed execution time and request budgets do not reset. Completed runs return their saved result.
@@ -190,13 +187,19 @@ For new evidence or changed inputs, use a new run. `--state prior-run/state.json
 
 ## Migration and validation evidence
 
-The Method 2 baseline remains unchanged. The standalone current runner rejects Method 2 files until migration is explicit. The full product SDK separately retains its legacy executor. To create a new current-format version:
+The Method 2 baseline remains unchanged. The standalone current runner rejects Method 2 files until migration is explicit. The SDK also rejects legacy execution. Only explicit document conversion remains. To create a new current-format version:
 
 ```sh
-method3 migrate old.method --model planner --timeout-ms 60000 \
+method migrate old.method --model planner --timeout-ms 60000 \
   --max-agent-turns 4 --max-model-requests 8 --output new.method
 ```
 
 Migration preserves text instructions, exact checks, data bindings, and applicable control flow. It adds explicit profiles and limits, changes text instructions to agent objects, removes legacy state-file locations, and prints review notes. Tool lists start empty. It does not promise identical behavior to Codex execution or load old state files. Review unsupported old constructs and tool access before running.
 
-The test suite executes real local scripts and the complete model/tool orchestration against deterministic response fixtures. The HTTP request format, error handling, output validation, and accounting are tested with a mocked HTTP transport. No live billed model call or game performance result is claimed by those tests. See [the contribution record](../HACKATHON.md).
+The test suite executes real local scripts and the complete model/tool orchestration against deterministic response fixtures. The HTTP request format, error handling, output validation, and accounting are tested with a mocked HTTP transport. No live billed model call or game performance result is claimed by those tests. See [the contribution record](../docs/archive/HACKATHON.md).
+
+## Parsing and API contract
+
+The SDK and runtime use the same parser and document validator. Parsing permits bounded YAML aliases (maximum expansion count 20), rejects duplicate keys and documents over 2 MB, and preserves text whitespace. File values require exactly `path` and a lowercase 64-character `sha256`. Invalid documents throw `MethodValidationError` with `invalid_method` or `unsupported_format`.
+
+The JavaScript API exports `RuntimeConfig`, `RunOptions`, and the status-based `RunResult` union. `runMethod(file, config, options)` returns completed, failed, or needs_input records. It does not perform the product CLI's account sync or automatic environment preparation.
