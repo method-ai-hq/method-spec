@@ -50,7 +50,7 @@ export async function writeJSON(file, data) {
 export async function executable(command) {
   const choices = command.includes('/') ? [resolve(command)] : (process.env.PATH ?? '').split(delimiter).map(p => resolve(p, command));
   for (const candidate of choices) {
-    try { await access(candidate, constants.X_OK); return await realpath(candidate); } catch { /* Try the next PATH entry. */ }
+    try { await access(candidate, constants.X_OK); return candidate; } catch { /* Try the next PATH entry. */ }
   }
   fail(`Runtime executable not found: ${command}`, 'preflight');
 }

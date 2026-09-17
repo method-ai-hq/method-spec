@@ -50,3 +50,5 @@ Runtime 0.3.1 fixes an installation defect: the runtime no longer registers `met
 ## Portable execution — 17 September 2026
 
 Runtime 0.4.0 adds one agent resolver, a Claude CLI executor with the declared MCP tool bridge, saved agent selection on resume, and a bundle-preparation hook for the SDK. Existing tests and provider-selection fixtures run without paid model calls. Live Claude subscription execution has not yet been measured.
+
+2026-09-17: Added managed-setup validation, stopped-process lock recovery, and Claude tool progress. A clean Linux SDK photo trial found that realpath on the Python executable bypassed its virtual environment. Executable lookup now preserves the invoked path; file hashing still follows the executable. Runtime fixtures pass; no paid provider trial was run.
