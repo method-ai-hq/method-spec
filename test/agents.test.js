@@ -17,3 +17,42 @@ test('keeps the executable invocation path for virtual environments',async t=>{
  const alias=join(root,'python');await symlink(process.execPath,alias);
  assert.equal(await executable(alias),alias);
 });
+
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+async function installed(t, names) {
+ const dir=await mkdtemp(join(tmpdir(),'method-agents-'));
+ const prior=process.env.PATH;process.env.PATH=dir;
+ t.after(async()=>{process.env.PATH=prior;await rm(dir,{recursive:true,force:true});});
+ for(const name of names)await writeFile(join(dir,name),'#!/bin/sh\nexit 99\n',{mode:0o700});
+}
+
+test('ambiguous callers with both agents require a choice even with an old preference',async t=>{
+ await installed(t,['codex','claude']);
+ await assert.rejects(resolveModels(method,{}, {env:{CLAUDECODE:'1',CODEX_THREAD_ID:'outer'},preference:'codex'}), {code:'needs_input'});
+ await assert.rejects(resolveModels(method,{}, {env:{},preference:'claude'}), {code:'needs_input'});
+});
+
+test('an explicit agent selects unconfigured profiles ahead of caller and configured default',async()=>{
+ assert.equal((await resolveModels(method,{models:{default:{backend:'codex'}}},{agent:'claude',env:{CODEX_THREAD_ID:'outer'}})).writer.backend,'claude');
+ assert.equal((await resolveModels(method,{models:{default:{backend:'claude'}}},{env:{CODEX_THREAD_ID:'outer'}})).writer.backend,'claude');
+ await assert.rejects(resolveModels(method,{}, {agent:'other'}),{code:'needs_input'});
+});
+
+test('uses the only available agent and requests setup when none is available',async t=>{
+ await installed(t,['claude']);
+ assert.equal((await resolveModels(method,{}, {env:{}})).writer.backend,'claude');
+ await rm(join(process.env.PATH,'claude'));
+ await assert.rejects(resolveModels(method,{}, {env:{}}),{code:'needs_input'});
+});
+
+test('never replaces a known caller with another installed agent',async t=>{
+ await installed(t,['codex']);
+ assert.equal((await resolveModels(method,{}, {env:{CLAUDECODE:'1'}})).writer.backend,'claude');
+});
+
+test('an incomplete saved selection cannot select a new provider',async()=>{
+ await assert.rejects(resolveModels(method,{}, {savedModels:{},agent:'codex'}),{code:'resume_mismatch'});
+});

@@ -6,16 +6,19 @@ export async function resolveModels(method, config, options = {}) {
   const profiles = { ...(config.models ?? {}) };
   const names = [...new Set(Object.values(method.steps).flatMap(step => [step.do, step.check])
     .filter(exec => exec?.kind && exec.kind !== 'run').map(exec => exec.model))];
-  if (options.savedModels) return options.savedModels;
+  if (options.savedModels) {
+    if (names.some(name => !options.savedModels[name])) fail('The checkpoint is missing its selected model profiles. Resume needs the original run records.', 'resume_mismatch');
+    return options.savedModels;
+  }
   const missing = names.filter(name => !profiles[name]);
   if (!missing.length) return profiles;
-  let selected = profiles.default;
+  if (options.agent && !['codex', 'claude'].includes(options.agent)) fail('Choose codex or claude.', 'needs_input');
+  let selected = options.agent ? { backend: options.agent } : profiles.default;
   if (!selected) {
     const env = options.env ?? process.env;
     const caller = env.CLAUDECODE && !env.CODEX_THREAD_ID ? 'claude'
       : env.CODEX_THREAD_ID && !env.CLAUDECODE ? 'codex' : undefined;
-    let backend = options.agent ?? caller ?? options.preference;
-    if (backend && !['codex', 'claude'].includes(backend)) fail('Choose codex or claude.', 'needs_input');
+    let backend = caller;
     if (!backend) {
       const found = [];
       for (const name of ['codex', 'claude']) { try { await executable(name); found.push(name); } catch {} }

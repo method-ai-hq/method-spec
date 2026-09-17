@@ -79,7 +79,8 @@ async function executeRun(file, config, options) {
   if (saved && (options.inputs || options.state)) fail('Resume uses saved inputs and state; omit --inputs and --state.', 'resume_mismatch');
   const inputs = saved?.root.inputs ?? initialValues(method.inputs, options.inputs);
   let state = saved?.root.state ?? initialValues(method.state, options.state);
-  config.models = await resolveModels(method, config, { ...options, savedModels: saved?.models ?? (saved ? Object.fromEntries(Object.values(method.steps).flatMap(s => [s.do, s.check]).filter(e => e?.model).map(e => [e.model, config.models?.[e.model] ?? {backend:'codex'}])) : undefined) });
+  if (saved && !saved.models) fail('The checkpoint is missing its selected model profiles. Resume needs the original run records.', 'resume_mismatch');
+  config.models = await resolveModels(method, config, { ...options, savedModels: saved?.models });
   const profiles = config.models, runtimeProfiles = config.runtimes ?? {}, tools = config.tools ?? {};
   const { scripts, runtimeInfo } = await preflight(method, config, sourceRoot, { ...options, checkFiles: !saved });
   const bundle = pathResolve(runDir, 'bundle');

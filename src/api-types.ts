@@ -16,7 +16,7 @@ export interface RunOptions {
   inputs?: Record<string, Json> | undefined; state?: Record<string, Json> | undefined;
   runDir?: string | undefined; resume?: boolean | undefined; retry?: string[] | undefined;
   human?: {steps: Record<string, {outputs: Record<string, Json>}>} | undefined;
-  agent?: 'codex' | 'claude' | undefined; preference?: 'codex' | 'claude' | undefined;
+  agent?: 'codex' | 'claude' | undefined;
   signal?: AbortSignal | undefined; sourceRoot?: string | undefined; processPath?: string | undefined;
   prepareBundle?: ((directory: string) => void | Promise<void>) | undefined;
   onEvent?: ((event: Record<string, any>) => void | Promise<void>) | undefined;

@@ -314,6 +314,16 @@ test('resume rejects changed methods, config, inputs, and bundles', async t => {
   await assert.rejects(f.run(config(), { resume: true }), /Method or configuration changed/);
 });
 
+test('resume refuses to guess a provider when the saved selection is missing', async t => {
+  const f = await fixture(t, method(modelStep()), {});
+  await f.run(config(), { transport: async () => response({ value: 4 }) });
+  const file = join(f.runDir, 'checkpoint.json');
+  const saved = JSON.parse(await readFile(file, 'utf8'));
+  delete saved.models;
+  await writeFile(file, JSON.stringify(saved));
+  await assert.rejects(f.run(config(), { resume: true }), { code: 'resume_mismatch' });
+});
+
 test('ask resumes with an actual supplied answer and runs its check', async t => {
   const m = method({ purpose: 'Ask a person.', ask: 'Supply a number.', out: { value: number }, check: { present: 'value' }, limits: { timeout_ms: 1500 } });
   const f = await fixture(t, m, {});

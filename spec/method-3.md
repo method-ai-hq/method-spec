@@ -84,7 +84,7 @@ On timeout or process exit, the runner kills the process group on POSIX systems.
 
 ### Models and agents
 
-Explicit model profiles take priority. Missing profiles use the configured default, an explicit `--agent`, the identified calling coding agent, or the sole installed supported agent. The SDK can also remember a provider choice. If both Codex and Claude are available without a choice, execution requests input. Both use their normal sign-in. The selected profiles remain fixed on resume. Codex starts a fresh process with approval and sandbox prompts disabled; it is trusted local execution. A supplied configuration must allow local processes. Without a config file, the CLI enables that default local path.
+Explicit model profiles take priority. Missing profiles use an explicit `--agent`, the configured default, the identified calling coding agent, or the sole installed supported agent. If both Codex and Claude are available without a choice, execution requests input. Both use their normal sign-in. The selected profiles remain fixed on resume. Codex starts a fresh process with approval and sandbox prompts disabled; it is trusted local execution. A supplied configuration must allow local processes. Without a config file, the CLI enables that default local path.
 
 The temporary Method MCP bridge exposes only the step's declared Method tools. Codex also retains its built-in and installed tools. Empty `tools` does not mean that Codex has no tools. Both `call` and `agent` use a Codex process with a structured final output on this backend. Internal Codex model requests and tools are not governed by Method's direct API request/turn counters.
 

@@ -70,7 +70,6 @@ export interface RunOptions {
         }>;
     } | undefined;
     agent?: 'codex' | 'claude' | undefined;
-    preference?: 'codex' | 'claude' | undefined;
     signal?: AbortSignal | undefined;
     sourceRoot?: string | undefined;
     processPath?: string | undefined;
