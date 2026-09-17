@@ -58,3 +58,5 @@ Runtime 0.4.0 adds one agent resolver, a Claude CLI executor with the declared M
 Runtime 0.5.0 removes the `method3` package binary. The public SDK owns the sole user command, `method`. The direct Node CLI remains a contributor test harness. This changes package ownership, not execution semantics or model quality.
 
 2026-09-17: Removed the obsolete operator spending-cap instruction at the owner's request. Provider trials use the installed agent's existing sign-in. This instruction change makes no new test-result claim.
+
+2026-09-17: Deleted the obsolete AGENTS.md at the owner's request. Its Method 2 baseline and proposal-only instructions no longer describe the current runtime.
