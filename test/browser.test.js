@@ -21,6 +21,7 @@ for(const backend of ['codex','claude'])test(`${backend} receives text and image
  const fake=join(root,'codex');await writeFile(fake,`#!/usr/bin/env node
 (async()=>{
 const args=process.argv.slice(2);const claude=${backend==='claude'};
+if(args.includes('--max-turns'))throw Error('Native agents must not receive a turn cap');
 const server=claude?JSON.parse((await import('node:fs')).readFileSync(args[args.indexOf('--mcp-config')+1],'utf8')).mcpServers.method_step:null;
 const url=claude?server.url:JSON.parse(args.find(x=>x.startsWith('mcp_servers.method_step.url=')).split('=').slice(1).join('='));
 const headers={'content-type':'application/json',authorization:claude?server.headers.Authorization:'Bearer '+process.env.METHOD_CODEX_TOOL_TOKEN};

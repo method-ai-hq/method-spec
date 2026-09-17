@@ -10,14 +10,23 @@ export async function resolveModels(method, config, options = {}) {
     if (names.some(name => !options.savedModels[name])) fail('The checkpoint is missing its selected model profiles. Resume needs the original run records.', 'resume_mismatch');
     return options.savedModels;
   }
+  if (options.agent && !['codex', 'claude'].includes(options.agent)) fail('Choose codex or claude.', 'needs_input');
+  const env = options.env ?? process.env;
+  const caller = env.CLAUDECODE && !env.CODEX_THREAD_ID ? 'claude'
+    : env.CODEX_THREAD_ID && !env.CLAUDECODE ? 'codex' : undefined;
+  const backend = options.agent ?? caller;
+  // The generic local-agent default follows the caller. Named profiles and custom
+  // executables are explicit configuration; resumed runs were returned above.
+  const genericDefault = !profiles.default ||
+    (['codex', 'claude'].includes(profiles.default.backend) && !profiles.default.command);
+  if (backend && (options.agent || genericDefault)) {
+    profiles.default = profiles.default?.backend === backend
+      ? { ...profiles.default } : { backend };
+  }
   const missing = names.filter(name => !profiles[name]);
   if (!missing.length) return profiles;
-  if (options.agent && !['codex', 'claude'].includes(options.agent)) fail('Choose codex or claude.', 'needs_input');
-  let selected = options.agent ? { backend: options.agent } : profiles.default;
+  let selected = profiles.default;
   if (!selected) {
-    const env = options.env ?? process.env;
-    const caller = env.CLAUDECODE && !env.CODEX_THREAD_ID ? 'claude'
-      : env.CODEX_THREAD_ID && !env.CLAUDECODE ? 'codex' : undefined;
     let backend = caller;
     if (!backend) {
       const found = [];

@@ -17,7 +17,6 @@ export async function executeClaude(execution, input, schema, context) {
     '--json-schema', JSON.stringify(schema), '--strict-mcp-config', '--mcp-config', join(directory, 'mcp.json'),
     '--permission-mode', 'dontAsk', '--allowedTools', 'Read,Write,Edit,Glob,Grep,mcp__method_step__*'];
   if (profile.model) args.push('--model', profile.model);
-  if (context.maxAgentTurns) args.push('--max-turns', String(context.maxAgentTurns));
   // Tokens stay in a private file, never process arguments or run events.
   await writeJSON(join(directory, 'mcp.json'), { mcpServers: { method_step: { type: 'http', url: bridge.url, headers: { Authorization: `Bearer ${bridge.token}` } } } });
   const events = [];

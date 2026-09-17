@@ -37,7 +37,7 @@ test('ambiguous callers with both agents require a choice even with an old prefe
 
 test('an explicit agent selects unconfigured profiles ahead of caller and configured default',async()=>{
  assert.equal((await resolveModels(method,{models:{default:{backend:'codex'}}},{agent:'claude',env:{CODEX_THREAD_ID:'outer'}})).writer.backend,'claude');
- assert.equal((await resolveModels(method,{models:{default:{backend:'claude'}}},{env:{CODEX_THREAD_ID:'outer'}})).writer.backend,'claude');
+ assert.equal((await resolveModels(method,{models:{default:{backend:'claude'}}},{env:{CODEX_THREAD_ID:'outer'}})).writer.backend,'codex');
  await assert.rejects(resolveModels(method,{}, {agent:'other'}),{code:'needs_input'});
 });
 
@@ -56,3 +56,10 @@ test('never replaces a known caller with another installed agent',async t=>{
 test('an incomplete saved selection cannot select a new provider',async()=>{
  await assert.rejects(resolveModels(method,{}, {savedModels:{},agent:'codex'}),{code:'resume_mismatch'});
 });
+
+ test('the default model follows the caller even when already configured',async()=>{
+ const m={steps:{work:{do:{kind:'agent',model:'default'}}}};
+ assert.equal((await resolveModels(m,{models:{default:{backend:'claude'}}},{env:{CODEX_THREAD_ID:'task'}})).default.backend,'codex');
+ assert.equal((await resolveModels(m,{models:{default:{backend:'codex'}}},{env:{CLAUDECODE:'1'}})).default.backend,'claude');
+ assert.equal((await resolveModels(m,{models:{default:{backend:'claude'}}},{agent:'codex',env:{CLAUDECODE:'1'}})).default.backend,'codex');
+ });
