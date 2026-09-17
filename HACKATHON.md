@@ -46,3 +46,7 @@ Runtime 0.3.0 accepts method/3.1 scalar prompt variables and retains method/3 li
 This documentation audit corrects the older installation, model-backend, permission, request-accounting, and ask/resume descriptions. It makes no new model-quality or game-performance claim. See VALIDATION.md for the current check results. The original release notes above remain historical records.
 
 Runtime 0.3.1 fixes an installation defect: the runtime no longer registers `method`, which could replace the full SDK CLI in a fresh project. The standalone command remains `method3`. This changes package command ownership, not the Method format or executor behavior. A regression check protects that boundary.
+
+## Portable execution — 17 September 2026
+
+Runtime 0.4.0 adds one agent resolver, a Claude CLI executor with the declared MCP tool bridge, saved agent selection on resume, and a bundle-preparation hook for the SDK. Existing tests and provider-selection fixtures run without paid model calls. Live Claude subscription execution has not yet been measured.

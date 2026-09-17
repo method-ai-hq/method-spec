@@ -1,3 +1,4 @@
+import { resolveModels } from './agents.js';
 import { configuration } from './defaults.js';
 import { readFile, stat } from 'node:fs/promises';
 import { validateMethod, validateConfig, own, fail } from './validate.js';
@@ -8,16 +9,16 @@ export async function preflight(method, config, sourceRoot, options = {}) {
   validateMethod(method);
   validateConfig(config);
   config = configuration(config);
-  const profiles = config.models ?? {}, runtimeProfiles = config.runtimes ?? {}, tools = config.tools ?? {};
+  const profiles = await resolveModels(method, config, options), runtimeProfiles = config.runtimes ?? {}, tools = config.tools ?? {};
   const executions = [], usedTools = new Set();
   for (const step of Object.values(method.steps)) {
     for (const [phase, exec] of [['action', step.do], ['check', step.check]]) if (exec?.kind) {
       executions.push(exec);
       if (exec.kind !== 'run') {
-        const profile = profiles[exec.model] ?? { backend: 'codex' };
-        if (profile.backend === 'codex') {
-          if (config.allow_local_processes !== true) fail('Codex requires allow_local_processes in operator configuration', 'preflight');
-          await executable(profile.command ?? 'codex');
+        const profile = profiles[exec.model];
+        if (['codex', 'claude'].includes(profile.backend)) {
+          if (config.allow_local_processes !== true) fail('Local agents require allow_local_processes in operator configuration', 'preflight');
+          await executable(profile.command ?? profile.backend);
         } else if (!options.transport && !process.env[profile.api_key_env]) fail(`Missing environment variable: ${profile.api_key_env}`, 'preflight');
       }
       if (exec.kind === 'agent') for (const name of exec.tools) {

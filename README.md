@@ -5,7 +5,7 @@ A Method is a YAML file that describes a reusable procedure: inputs, steps, outp
 This public MIT repository contains two parts:
 
 - **Format and validator:** JSON Schema plus semantic checks for references, types, effects, and dependency cycles.
-- **Executor (`@withmethod/runtime` 0.3.1):** local script, model, and agent execution; checks; state; run records; and checkpoint resume.
+- **Executor (`@withmethod/runtime` 0.4.0):** local script, model, and agent execution; checks; state; run records; and checkpoint resume.
 
 New Methods use `format: method/3.1`. `method/3` remains accepted with literal prompts. The original `method/2` schema is retained as a historical baseline; this executor does not run it directly.
 
@@ -28,11 +28,11 @@ The example runs checked counter steps and saves a trace. Use `node src/cli.js v
 
 ## Model setup and limits
 
-The default model backend is local Codex, using its existing sign-in, tools, and default model. Simple local-agent files need no runtime.json. Scripts, custom tools, connections, and direct API model profiles need explicit configuration. When supplying a configuration file, enable `allow_local_processes` for scripts or Codex.
+Model profiles preserve explicit settings. Otherwise the runtime selects the calling Codex or Claude Code process, or the sole installed supported agent. Ambiguous selection returns needs_input. Both use their normal sign-in. Simple local-agent files need no runtime.json. Scripts, custom tools, connections, and direct API model profiles need explicit configuration. When supplying a configuration file, enable `allow_local_processes` for scripts or Codex.
 
 An explicit `backend: openai-responses` profile uses an API key environment variable. Request and agent-turn caps govern that direct API loop. Codex manages its own internal requests and installed tools. Method records Codex process logs and enforces its timeout and declared Method tool limits; it does not count every internal request or enforce a dollar budget.
 
-Scripts and Codex are trusted local processes, not an OS sandbox. The Codex adapter disables approval and sandbox prompts. A Method tool list restricts the Method bridge, not all Codex access. Review the Method and helper code before running it.
+Scripts and local coding agents are trusted local processes, not an OS sandbox. The Codex adapter disables approval and sandbox prompts. A Method tool list restricts the Method bridge, not all Codex access. Review the Method and helper code before running it.
 
 ## Read next
 

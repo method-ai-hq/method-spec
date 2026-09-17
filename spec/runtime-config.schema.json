@@ -170,7 +170,10 @@
             "type": "object",
             "properties": {
               "backend": {
-                "const": "codex"
+                "enum": [
+                  "codex",
+                  "claude"
+                ]
               },
               "command": {
                 "type": "string",

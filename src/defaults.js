@@ -5,5 +5,5 @@ export const defaultStepLimits = Object.freeze({ timeout_ms: 600000, max_agent_t
 export function configuration(config = {}) {
   return { ...config, limits: { ...defaultLimits, ...config.limits },
     step_defaults: { ...defaultStepLimits, ...config.step_defaults },
-    models: { default: { backend: 'codex' }, ...config.models } };
+    models: { ...config.models } };
 }

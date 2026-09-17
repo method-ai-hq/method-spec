@@ -1,3 +1,5 @@
+import { resolveModels } from './agents.js';
+import { executeClaude } from './claude.js';
 import { configuration } from './defaults.js';
 import { mkdir, readFile, appendFile, realpath, open, unlink }  from 'node:fs/promises';
 import { resolve as pathResolve, dirname } from 'node:path';
@@ -60,7 +62,8 @@ async function executeRun(file, config, options) {
   if (saved && (options.inputs || options.state)) fail('Resume uses saved inputs and state; omit --inputs and --state.', 'resume_mismatch');
   const inputs = saved?.root.inputs ?? initialValues(method.inputs, options.inputs);
   let state = saved?.root.state ?? initialValues(method.state, options.state);
-  const profiles = config.models ?? {}, runtimeProfiles = config.runtimes ?? {}, tools = config.tools ?? {};
+  config.models = await resolveModels(method, config, { ...options, savedModels: saved?.models ?? (saved ? Object.fromEntries(Object.values(method.steps).flatMap(s => [s.do, s.check]).filter(e => e?.model).map(e => [e.model, config.models?.[e.model] ?? {backend:'codex'}])) : undefined) });
+  const profiles = config.models, runtimeProfiles = config.runtimes ?? {}, tools = config.tools ?? {};
   const { scripts, runtimeInfo } = await preflight(method, config, sourceRoot, { ...options, checkFiles: !saved });
   const bundle = pathResolve(runDir, 'bundle');
   if (!saved) await mkdir(bundle, { mode: 0o700 });
@@ -77,7 +80,7 @@ async function executeRun(file, config, options) {
   let active = saved?.active ?? null;
   if (active && !(options.retry ?? []).includes(active) && !(method.steps[active.split(':')[0]]?.ask && options.human?.steps?.[active])) fail(`Inspect the trace and external state, then use --retry ${active} to authorize another attempt.`, 'recovery_required');
   const checkpoint = () => writeJSON(pathResolve(runDir, 'checkpoint.json'), {
-    method_sha256: hash(method), config_sha256: hash(suppliedConfig), runtime_sha256: hash(runtimeInfo),
+    models: profiles, method_sha256: hash(method), config_sha256: hash(suppliedConfig), runtime_sha256: hash(runtimeInfo),
     started_at: startedAt, elapsed_ms: performance.now() - started, sequence, invocations, requests, toolCalls, knownUsage, inputTokens, outputTokens,
     root, accepted, skipped, active, collections, codexProcesses, codexInputTokens, codexOutputTokens, codexUsageReports,
   });
@@ -114,7 +117,7 @@ async function executeRun(file, config, options) {
   let manifest;
   try {
     manifest = saved ? JSON.parse(await readFile(pathResolve(runDir, 'manifest.json'), 'utf8')).files : await snapshotBundle(sourceRoot, [...(method.files ?? []), ...scripts.map(x => x.entrypoint)], bundle);
-    await writeJSON(pathResolve(runDir, 'manifest.json'), { method_sha256: hash(method), config_sha256: hash(suppliedConfig), files: manifest, runtime_profiles: runtimeInfo });
+    await writeJSON(pathResolve(runDir, 'manifest.json'), { method_sha256: hash(method), config_sha256: hash(suppliedConfig), files: manifest, runtime_profiles: runtimeInfo, models: profiles });
     await writeJSON(pathResolve(runDir, 'method.json'), method);
     await writeJSON(pathResolve(runDir, 'state.json'), state);
     const verifyBundle = async () => {
@@ -133,6 +136,7 @@ async function executeRun(file, config, options) {
       }
       for (const [name, def] of Object.entries(defs ?? {})) await visit(def, values[name]);
     };
+    await options.prepareBundle?.(bundle);
     await verifyBundle();
     if (saved) {
       const prior = JSON.parse(await readFile(pathResolve(runDir, 'summary.json'), 'utf8'));
@@ -147,7 +151,7 @@ async function executeRun(file, config, options) {
     const executeScript = async (exec, input, signal, scopedRecord) => {
       await verifyBundle();
       const profile = runtimeInfo[exec.runtime];
-      const environment = { PATH: process.env.PATH ?? '', LANG: 'C.UTF-8', METHOD_OUTPUT_DIR: artifacts };
+      const environment = { PATH: options.processPath ?? process.env.PATH ?? '', LANG: 'C.UTF-8', METHOD_OUTPUT_DIR: artifacts };
       for (const key of profile.env ?? []) {
         if (!process.env[key]) fail(`Missing runtime environment variable: ${key}`, 'preflight');
         environment[key] = process.env[key];
@@ -244,7 +248,8 @@ async function executeRun(file, config, options) {
           }
           const phaseContext = { ...context, record: (event, data) => scopedRecord(event, { phase, ...data }) };
           const result = exec.kind === 'run' ? await executeScript(exec, input, bound.signal, phaseContext.record)
-            : (profiles[exec.model]?.backend ?? 'codex') === 'codex' ? await executeCodex(exec, input, schema, phaseContext)
+            : profiles[exec.model].backend === 'codex' ? await executeCodex(exec, input, schema, phaseContext)
+            : profiles[exec.model].backend === 'claude' ? await executeClaude(exec, input, schema, phaseContext)
             : await executeModel(exec, input, schema, phaseContext);
           guard(); assertSchema(schema, result, `${phase} output`);
           return result;
