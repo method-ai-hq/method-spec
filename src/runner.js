@@ -39,7 +39,10 @@ export async function runMethod(file, config, options = {}) {
   const runDir = pathResolve(options.runDir ?? pathResolve('.method-runs', randomUUID()));
   if (options.resume && !options.runDir) fail('Resume needs an explicit run directory', 'preflight');
   await mkdir(dirname(runDir), { recursive: true, mode: 0o700 });
-  if (!options.resume) await mkdir(runDir, { mode: 0o700 });
+  if (!options.resume) {
+    try { await readFile(pathResolve(runDir, 'checkpoint.json')); fail('Run already exists. Use resume.', 'run_exists'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    await mkdir(runDir, { recursive: true, mode: 0o700 });
+  }
   const lockPath = pathResolve(runDir, '.lock');
   let lock;
   try { lock = await open(lockPath, 'wx', 0o600); }
