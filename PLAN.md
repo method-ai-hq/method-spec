@@ -1,6 +1,6 @@
 # Implementation plan
 
-Status: stages 1 and 2 have a first implementation. The public runtime supports all three execution types, script and exact checks, typed state, each/repeat, limits, traces, and explicit migration. Local execution, checkpoint resume, and deterministic provider fixtures are tested. Live API and Factorio comparisons remain to be run; stages 3–5 are not completed by runtime tests.
+Status: stages 1 and 2 have a first implementation. The public runtime supports all three execution types, script and exact checks, typed state, each/repeat, limits, traces, and explicit migration. Local execution, checkpoint resume, and deterministic provider fixtures are tested. Runtime tests do not complete stages 3–5. Separate measured Factorio work is recorded in [method-factorio](https://github.com/method-ai-hq/method-factorio); this file preserves the original plan.
 
 ## 1. Publish and review the boundary
 

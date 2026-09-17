@@ -1,3 +1,16 @@
+# Current validation — 17 September 2026
+
+Runtime 0.3.1 keeps the 0.3.0 execution behavior and fixes CLI command ownership:
+
+- `npm run check`: generated schemas match and all 50 runtime tests pass.
+- `npm run example`: the real checked counter completes with state count 3 and zero model requests.
+- The current grammar accepts method/3 and method/3.1. The full SDK uses the same public schema and semantic validator.
+- Model tests use fixtures and mocked transport. This audit did not make paid model calls or measure model quality.
+
+The repository has no deployment target. GitHub CI runs the contract checks and script example on Node.js 22 for macOS and Linux. Read the check status for the exact commit before treating remote CI as passed.
+
+The following records describe earlier releases; their versions, counts, and limitations apply to those releases.
+
 # Runtime 0.1.0 validation
 
 Date: 10 September 2026. Scope: the public Method 3 reference executor, not gameplay performance.

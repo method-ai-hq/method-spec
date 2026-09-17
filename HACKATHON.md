@@ -19,7 +19,7 @@ Repository created on 10 September 2026. Record actual implementation and measur
 
 "Before the hackathon, Method represented reusable procedures with agent instructions, typed inputs and outputs, state, and checks. Actions and language-based checks used separate agent runs. For harder game tasks, we built a public Method 3 executor with direct model calls, script execution, and bounded tool-using agents, so the procedure can choose where to spend reasoning time."
 
-The shipped agent backend uses the OpenAI Responses API, not a Codex subscription. Runtime 0.1.0 does not implement OS isolation, a computer-use driver, training infrastructure, or automatic recovery. No game speed or policy-search gain is established by this implementation.
+At the original 0.1.0 release, the shipped agent backend used the OpenAI Responses API, not a Codex subscription. Runtime 0.1.0 does not implement OS isolation, a computer-use driver, training infrastructure, or automatic recovery. No game speed or policy-search gain is established by this implementation.
 
 See [runtime validation](VALIDATION.md) for the 40-test suite and clean package-install result. The `v0.1.0` release identifies the implementation commit and installable artifact.
 
@@ -38,3 +38,11 @@ This record follows the rules supplied by the project owner. It is not an organi
 Runtime 0.2.0 adds explicit checkpoint resume, accepted iteration reuse, cumulative budgets, human answers, runtime/bundle identity checks, and a process lock. The CLI is now named Method, with method3 retained as an alias. Pure semantic validation is shared with the product without copying private product source here. The runtime suite now has 47 passing tests, including seven new resume tests. No new paid model or game result is claimed.
 
 Runtime 0.2.1 also freezes each-loop collections in the checkpoint when an operation changes its source state list. A real script regression test passes; the suite now has 48 tests.
+
+## Current runtime and documentation — 17 September 2026
+
+Runtime 0.3.0 accepts method/3.1 scalar prompt variables and retains method/3 literal prompts. Its public code now supplies the product's current grammar, validator, defaults, progress protocol, and executor. The local Codex backend is the default; direct Responses API profiles remain supported. Purpose, descriptions, and limit overrides are optional.
+
+This documentation audit corrects the older installation, model-backend, permission, request-accounting, and ask/resume descriptions. It makes no new model-quality or game-performance claim. See VALIDATION.md for the current check results. The original release notes above remain historical records.
+
+Runtime 0.3.1 fixes an installation defect: the runtime no longer registers `method`, which could replace the full SDK CLI in a fresh project. The standalone command remains `method3`. This changes package command ownership, not the Method format or executor behavior. A regression check protects that boundary.

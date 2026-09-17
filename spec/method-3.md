@@ -1,8 +1,8 @@
 # Method reference
 
-Implemented by `@withmethod/runtime` 0.2.1. The Method product SDK 0.4.0 includes this runtime. New methods use this format under the same Method product and command.
+Implemented by `@withmethod/runtime` 0.3.1. The full Method SDK uses this runtime at a pinned Git revision. New methods use this format under the same Method product and command.
 
-Use `format: method/3`. The machine-readable grammar is [method-3.schema.json](method-3.schema.json). Operator configuration uses [runtime-config.schema.json](runtime-config.schema.json). The validator also checks references, dependencies, data declarations, loop conditions, and effects; JSON Schema alone is insufficient.
+Use `format: method/3.1`. `method/3` remains accepted and keeps prompts literal. The machine-readable grammar is [method-3.schema.json](method-3.schema.json). Operator configuration uses [runtime-config.schema.json](runtime-config.schema.json). The validator also checks references, dependencies, data declarations, loop conditions, and effects; JSON Schema alone is insufficient.
 
 ## Installation and commands
 
@@ -14,29 +14,29 @@ npm run check
 npm run example
 ```
 
-To install the CLI from a public Git revision:
+To install the standalone CLI from the fixed runtime 0.3.1 source revision:
 
 ```sh
-npm install -g github:method-ai-hq/method-spec#v0.2.1
-method --version
+npm install -g https://codeload.github.com/method-ai-hq/method-spec/tar.gz/refs/tags/v0.3.1
+method3 --version
 ```
 
-The command is `method`; `method3` is a compatibility alias. Use the product SDK installation when you also need account, save, and dashboard sync commands. The source needs no build step. This package is distributed through GitHub; publication to the npm registry is not claimed.
+The standalone command is `method3`. The full SDK owns the `method` command. Runtime 0.3.1 removes the duplicate binary name so a dependency install cannot replace the full CLI. Use the product SDK installation when you also need account, save, and dashboard sync commands. The source needs no build step. This package is distributed through GitHub; publication to the npm registry is not claimed.
 
 ```sh
-method validate example.method --config runtime.json
-method run example.method --config runtime.json --inputs inputs.json
-method schema method
-method schema config
+method3 validate example.method --config runtime.json
+method3 run example.method --config runtime.json --inputs inputs.json
+method3 schema method
+method3 schema config
 ```
 
 `validate` checks the Method and, when supplied, the configuration grammar. `run` additionally resolves profiles, tools, capabilities, environment bindings, and bundle files. A validation pass alone does not establish executable setup or task correctness.
 
-`run` prints status, elapsed time, model request count, and the run directory. Read `result.json` in that directory for the result. Exit codes are 0 for completion, 1 for failure, and 2 for a human-input request. Existing run directories are never reused.
+`run` prints status, elapsed time, model request count, and the run directory. Read `result.json` in that directory for the result. Exit codes are 0 for completion, 1 for failure, and 2 for a human-input request. A new run needs a new directory. Use `--resume` to continue the same saved run.
 
 ## Document and data
 
-Root fields are `format`, `name`, `goal`, `inputs`, `state`, `environment`, `files`, `steps`, and `result`. Only format, name, goal, steps, and result are required.
+Root fields are `format`, `name`, `goal`, `inputs`, `state`, `environment`, `files`, `steps`, `result`, and optional plain-text `run_prompt` for the outside agent. `run_prompt` does not expand variables. Step `reading` fields provide display text and do not change execution. Only format, name, goal, steps, and result are required.
 
 Inputs and state declarations have a type and optional description and default. Supply missing initial values through `--inputs` and `--state`, each pointing to a JSON object. Unknown or wrongly typed values fail before any operation. State is saved as one atomic `state.json` checkpoint in the run directory. Method 3 does not use Method 2's per-state `file` field.
 
@@ -73,7 +73,7 @@ do:
   tools: [observe, act]
 ```
 
-`in` maps local aliases to references. `out` declares output values. The process or model returns a JSON object whose keys match `out` exactly, plus the state replacements described below. Inputs are supplied as JSON data; prompts and command lines do not receive text interpolation.
+`in` maps local aliases to references. `out` declares output values. The process or model returns a JSON object whose keys match `out` exactly, plus the state replacements described below. Inputs are supplied as JSON data. In `method/3.1`, model and human prompts can insert declared scalar inputs with `{{name}}` or `{{customer.name}}`. Agent check prompts use `{{inputs.name}}` and `{{outputs.answer}}`. Only text, finite numbers, and booleans can be inserted. Unknown references fail validation; missing runtime values fail before model execution. Escape literal opening braces with a backslash in a YAML block scalar. Values are inserted once without expression evaluation or recursive expansion. `method/3` keeps literal prompts. Command arguments, labels, tool descriptions, and run_prompt are not templates.
 
 ### Scripts
 
@@ -87,15 +87,23 @@ On timeout or process exit, the runner kills the process group on POSIX systems.
 
 ### Models and agents
 
-The included provider is the [OpenAI Responses API](https://developers.openai.com/api/docs/guides/function-calling). Model profiles specify `backend: openai-responses`, the exact model identifier, `api_key_env`, a required `max_output_tokens`, and optional `reasoning_effort`. No model is silently substituted. Use a model supporting strict structured outputs; incompatible settings return a recorded provider error.
+The default backend is local Codex. Model `default` uses the user's existing sign-in, installed tools, and default model. An unconfigured model alias also falls back to Codex. Use an explicit profile to select a different model/backend. Codex starts a fresh process with approval and sandbox prompts disabled; it is trusted local execution. A supplied configuration must allow local processes. Without a config file, the CLI enables that default local path.
+
+The temporary Method MCP bridge exposes only the step's declared Method tools. Codex also retains its built-in and installed tools. Empty `tools` does not mean that Codex has no tools. Both `call` and `agent` use a Codex process with a structured final output on this backend. Internal Codex model requests and tools are not governed by Method's direct API request/turn counters.
+
+Method enforces the Codex process deadline, prompt/output size, and Method bridge tool-call cap. It saves prompts, output schema, JSON events, stderr, and reported usage. It does not edit persistent Codex settings or enforce a monetary budget.
+
+#### Direct API backend
+
+The optional direct provider is the [OpenAI Responses API](https://developers.openai.com/api/docs/guides/function-calling). Model profiles specify `backend: openai-responses`, the exact model identifier, `api_key_env`, a required `max_output_tokens`, and optional `reasoning_effort`. No model is silently substituted. Use a model supporting strict structured outputs; incompatible settings return a recorded provider error.
 
 `call` sends one request with a strict JSON output schema and no tools. The runner validates the response locally. It does not issue repair calls or transport retries.
 
 `agent` uses a fresh conversation and an explicit function-tool loop. The allowed tools are operator-configured scripts with typed inputs and outputs. The runner validates tool arguments, invokes the allowed script, validates its result, and sends the result back to the model. Reasoning items are retained between requests. Unknown tools, malformed arguments, refusal, or incomplete responses stop the operation.
 
-Each agent tool has `effects: []` for an observation/pure operation, or a list of environment names it can change. Action tools with effects require corresponding step `changes`. Checker agents can only use tools with empty effects. This enforces which registered functions the model can call; the truth of a tool's effect declaration depends on its trusted implementation. The runner does not give the model a built-in arbitrary shell.
+Each agent tool has `effects: []` for an observation/pure operation, or a list of environment names it can change. Action tools with effects require corresponding step `changes`. Checker agents can only use tools with empty effects. This enforces which registered functions the model can call; the truth of a tool's effect declaration depends on its trusted implementation. The direct API backend does not add an arbitrary shell; the Codex backend has the separate access described above.
 
-Computer-use support can be supplied through registered tools. No browser driver, screenshot transport, built-in computer-use model backend, or Codex subscription backend ships in 0.1.0. The included backend uses an API key, not a Codex login.
+Computer-use support can be supplied through registered tools or the existing Codex setup. The runtime does not bundle a browser driver or a separate computer-use backend.
 
 ## State updates and checks
 
@@ -141,15 +149,15 @@ Output types are always checked. An omitted task check is recorded as `unchecked
 
 Repeated inputs bound to state are refreshed each iteration. Other upstream values are fixed. Repeat returns the final accepted outputs; each returns collected lists. They cannot be combined. Multi-step loop bodies and parallel shared-state execution are not included.
 
-`ask` creates a `needs_input` record and exits. This release does not implement interactive continuation or accept generated answers as human input.
+`ask` creates a `needs_input` record and exits. Resume with `--human FILE` containing the actual human answer as shown below. The runtime does not generate a human answer.
 
 ## Limits and accounting
 
 Operator configuration can override the finite default run limits: one hour, 100 model requests, 100 step invocations, 200 tool calls, and 16 MiB each for input and output. A missing configuration uses the local Codex agent as model `default`. Custom scripts, tools, and models still require their configuration. Model requests and tool calls may be zero. A Method cannot increase those caps.
 
-A model-using step can override `max_model_requests`; an agent-using step can also override `max_agent_turns`. Configuration `step_defaults` can change the defaults. Action and check share these limits and `timeout_ms` for each invocation. One agent turn is one model response. Repeated invocations share the run caps. The runner does not dispatch a tool when no follow-up model request or agent turn remains.
+A model-using step can override `max_model_requests`; an agent-using step can also override `max_agent_turns`. Configuration `step_defaults` can change the defaults. Action and check share these limits and `timeout_ms` for each invocation. For the direct API backend, one agent turn is one model response. Repeated invocations share the run caps. For a direct API agent, the runner does not dispatch a tool when no follow-up model request or agent turn remains.
 
-Provider calls have no automatic retries. Usage from completed provider responses is recorded; unavailable usage remains unknown. `cost_usd` is null because this release does not calculate prices or enforce a monetary budget. Request counts and output-token limits are resource caps, not a dollar guarantee. The operator must decide the spending allowance before live runs.
+Direct API provider calls have no automatic retries. Codex manages its own internal requests; script-internal provider calls are also outside this accounting. Usage from completed provider responses is recorded; unavailable usage remains unknown. `cost_usd` is null because this release does not calculate prices or enforce a monetary budget. Request counts and output-token limits are resource caps, not a dollar guarantee. The operator must decide the spending allowance before live runs.
 
 Run `elapsed_ms` starts after document/configuration validation, initial-value checks, and runtime resolution. It includes bundle capture, execution, checks, and recording. Measure CLI wall-clock time separately when comparing full startup overhead. Game time and pause settings belong to the game adapter; this runner does not control or pause simulation.
 
@@ -161,14 +169,14 @@ The runner verifies bundle hashes before each script execution. It records the M
 
 File outputs use `{path, sha256}`. Write them beneath `METHOD_OUTPUT_DIR`; paths are resolved relative to that artifacts directory. The runner checks their hashes. Imported input files are operator-supplied dependencies and are not automatically copied; list required policy files in `files`.
 
-Run files are private local artifacts by default (directory mode 0700, files 0600). Known configured environment-secret values are redacted from traces and result files when at least four characters long. This is a convenience, not a comprehensive secret detector. State checkpoints contain actual state values; keep state and inputs free of credentials. Do not publish raw run directories without review.
+Generic run records are private local artifacts by default (directory mode 0700, files 0600). Known configured environment-secret values are redacted from traces and result files when at least four characters long. This is a convenience, not a comprehensive secret detector. State checkpoints contain actual state values; keep state and inputs free of credentials. Do not publish raw run directories without review.
 
 Failures do not trigger automatic retries. Resume with the original method and configuration:
 
 ```sh
-method run task.method --config runtime.json --run-dir runs/example --resume
+method3 run task.method --config runtime.json --run-dir runs/example --resume
 # After inspecting an unfinished action and its external effects:
-method run task.method --config runtime.json --run-dir runs/example --resume --retry STEP:ITERATION
+method3 run task.method --config runtime.json --run-dir runs/example --resume --retry STEP:ITERATION
 ```
 
 `checkpoint.json` saves accepted iterations, typed state, inputs, runtime identity, active dispatch, and cumulative usage. Accepted work is reused, including each/repeat outputs. Method, configuration, runtime executable, and bundle hashes must match. Accepted file outputs are verified again. Run time excludes time while stopped; consumed execution time and request budgets do not reset. Completed runs return their saved result.
@@ -182,10 +190,10 @@ For new evidence or changed inputs, use a new run. `--state prior-run/state.json
 
 ## Migration and validation evidence
 
-The Method 2 baseline remains unchanged. The new runner rejects old formats until migration is explicit:
+The Method 2 baseline remains unchanged. The standalone current runner rejects Method 2 files until migration is explicit. The full product SDK separately retains its legacy executor. To create a new current-format version:
 
 ```sh
-method migrate old.method --model planner --timeout-ms 60000 \
+method3 migrate old.method --model planner --timeout-ms 60000 \
   --max-agent-turns 4 --max-model-requests 8 --output new.method
 ```
 

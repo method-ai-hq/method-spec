@@ -6,10 +6,10 @@ import {dirname,resolve} from 'node:path';
 import { runMethod, validateMethod, validateConfig, methodSchema, configSchema, readDocument, migrateMethod2 } from './index.js';
 const help = `Method — local executor
 
-method validate METHOD [--config CONFIG]
-method run METHOD [--config CONFIG] [--inputs JSON] [--state JSON] [--run-dir DIR]
-method schema [method|config]
-method migrate METHOD2 --model PROFILE --timeout-ms N --max-agent-turns N --max-model-requests N [--output FILE]
+method3 validate METHOD [--config CONFIG]
+method3 run METHOD [--config CONFIG] [--inputs JSON] [--state JSON] [--run-dir DIR]
+method3 schema [method|config]
+method3 migrate METHOD2 --model PROFILE --timeout-ms N --max-agent-turns N --max-model-requests N [--output FILE]
 
 Resume: --run-dir DIR --resume [--retry STEP:ITERATION] [--human JSON].
 run never retries a failed action. Local scripts require allow_local_processes in CONFIG.
@@ -23,7 +23,7 @@ try {
   } });
   const [command, file, ...extra] = positionals;
   if (extra.length) throw new Error('Unexpected positional arguments');
-  if (values.version) console.log('0.3.0 (method/3.1; also accepts method/3)');
+  if (values.version) console.log('0.3.1 (method/3.1; also accepts method/3)');
   else if (values.help || !command) console.log(help);
   else if (command === 'schema') {
     if (file && !['method', 'config'].includes(file)) throw new Error('Use schema method or schema config');

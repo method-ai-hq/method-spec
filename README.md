@@ -1,53 +1,57 @@
-# Method specification
+# Method format and runtime
 
-A Method is a readable, executable procedure with typed inputs and outputs, explicit state, and checks. Its execution can be inspected and its versions can be compared.
+A Method is a YAML file that describes a reusable procedure: inputs, steps, outputs, state, and checks. JSON is also accepted. A validator checks the document without executing it.
 
-This public repository separates the format from the hosted Method product.
+This public MIT repository contains two parts:
 
-## Status
+- **Format and validator:** JSON Schema plus semantic checks for references, types, effects, and dependency cycles.
+- **Executor (`@withmethod/runtime` 0.3.1):** local script, model, and agent execution; checks; state; run records; and checkpoint resume.
 
-- **Published baseline:** `method/2`, exported from the public MIT-licensed Method SDK 0.3.0. See the [format notes](spec/method-2.md) and [JSON Schema](spec/method-2.schema.json).
-- **Implemented version:** [`method/3`](spec/method-3.md), with a public validator, local executor, and CLI in this repository. Runtime package: `@withmethod/runtime` 0.2.1.
-- **Validation:** real script execution and fixture-based model/tool tests. Live billed model calls and a game speed improvement have not been measured.
+New Methods use `format: method/3.1`. `method/3` remains accepted with literal prompts. The original `method/2` schema is retained as a historical baseline; this executor does not run it directly.
 
-The format keeps one common step contract and adds three ways to execute work: an agent, one model call, or a script. Existing trained models can be called through those interfaces. Training infrastructure is outside the first scope.
+The full [Method SDK and CLI](https://docs.withmethod.ai/sdk/overview) uses a pinned revision of this runtime and adds authoring, account access, saved versions, and dashboard uploads. Its MIT source is included in the SDK download. The hosted application repository is private. The YAML format itself does not require an account or a hosted service.
 
-## Run it
+## Try the public runtime
 
-Requires Node.js 22 or later. No API key is needed for the script example.
+Requires Node.js 22 or later. The script example needs no model credentials.
 
 ```sh
+git clone https://github.com/method-ai-hq/method-spec.git
+cd method-spec
 npm ci --ignore-scripts
 npm run check
 npm run example
+node src/cli.js --version
 ```
 
-The example increases a counter through checked script steps and saves a trace. For model calls and tool-using agents, see [the reference and setup instructions](spec/method-3.md) and [model-tools.method](examples/model-tools.method). The model backend uses the OpenAI Responses API with an API key; it does not use a Codex subscription.
+The example runs checked counter steps and saves a trace. Use `node src/cli.js validate FILE`, `schema`, `run`, or `migrate` for the standalone interface. This package exposes the standalone `method3` command. The full SDK owns `method`; use it when you need authoring or dashboard commands. Runtime 0.3.1 removes its conflicting `method` binary so installing the SDK cannot select the smaller runtime CLI by mistake. Distribution is through GitHub and Method downloads, not a claimed npm registry release.
 
-Scripts and tool implementations are trusted local processes, not an OS sandbox. The CLI is named `method`. `method3` remains a compatibility alias. The product SDK includes this runtime with dashboard save and sync commands.
+## Model setup and limits
+
+The default model backend is local Codex, using its existing sign-in, tools, and default model. Simple local-agent files need no runtime.json. Scripts, custom tools, connections, and direct API model profiles need explicit configuration. When supplying a configuration file, enable `allow_local_processes` for scripts or Codex.
+
+An explicit `backend: openai-responses` profile uses an API key environment variable. Request and agent-turn caps govern that direct API loop. Codex manages its own internal requests and installed tools. Method records Codex process logs and enforces its timeout and declared Method tool limits; it does not count every internal request or enforce a dollar budget.
+
+Scripts and Codex are trusted local processes, not an OS sandbox. The Codex adapter disables approval and sandbox prompts. A Method tool list restricts the Method bridge, not all Codex access. Review the Method and helper code before running it.
 
 ## Read next
 
 | Document | Purpose |
 | --- | --- |
-| [Method 3 reference](spec/method-3.md) | Implemented syntax, runtime behavior, limits, and migration. |
-| [Original Method 3 proposal](proposals/method-3.md) | Design rationale and deferred work. |
-| [Implementation plan](PLAN.md) | Small implementation stages and acceptance checks. |
-| [Factorio experiment](EXPERIMENT.md) | How to test the execution types and policy search. |
-| [Hackathon contribution record](HACKATHON.md) | Prior work, new work, and claims supported so far. |
-| [Baseline provenance](PROVENANCE.md) | Public source, license, and artifact hashes. |
-| [Runtime validation](VALIDATION.md) | Tests, package installation, and limits of the evidence. |
-| [Script example](examples/counter.method) | Runnable without model calls. |
-| [Model and agent example](examples/model-tools.method) | One call, an agent tool loop, and an exact check. |
+| [Current reference](spec/method-3.md) | Implemented syntax, execution, limits, and recovery. |
+| [JSON Schema](spec/method-3.schema.json) | Current method/3 and method/3.1 grammar. |
+| [Configuration schema](spec/runtime-config.schema.json) | Operator runtime, model, tool, and limit settings. |
+| [Product documentation](https://docs.withmethod.ai) | Full CLI, JavaScript/Python SDKs, API, and MCP. |
+| [Validation record](VALIDATION.md) | Checked behavior and limits of the evidence. |
+| [Original proposal](proposals/method-3.md) | Historical rationale; the current reference takes precedence. |
+| [Baseline provenance](PROVENANCE.md) | Original Method 2 source and hashes. |
+| [Contribution record](HACKATHON.md) | Prior work and dated changes. |
+| [Implementation plan](PLAN.md) | Original work stages. |
 
-Game controls, playing policies, and game evidence belong in [method-factorio](https://github.com/method-ai-hq/method-factorio). This repository owns the general format and reference validator and runner. The hosted application and SDK 0.3.0 remain separate; this release does not update them.
+Game controls, policies, and measured game results belong in [method-factorio](https://github.com/method-ai-hq/method-factorio). Passing runtime tests does not establish model quality or game performance.
 
-Original material and the included SDK baseline use the [MIT license](LICENSE). No private application source or history is included.
+## Maintain the contract
 
-## Shared product runtime
+`src/schema.js` defines the grammar. `npm run schema` generates JSON schemas and static shape validators. `src/semantics.js` checks meaning beyond the grammar. The product imports these public definitions at a pinned commit; it does not maintain a second current runtime.
 
-This package also supplies the Method CLI and dashboard validation. It includes the local Codex backend, prompt variables, progress events, and dependency checks. The product imports this package at a pinned release; it does not maintain a separate runtime.
-
-Step purpose, data descriptions, and step limit overrides are optional. Operator configuration can omit limits; `src/defaults.js` defines finite defaults. The `default` model profile uses the local Codex configuration. Custom scripts, tools, and connections still need explicit bindings. Existing documents with explicit limits keep those values.
-
-`npm run schema` generates the JSON schemas and static shape validators from `src/schema.js`. Static validators let the API validate the same format without dynamic code evaluation. The generated file contains no writing rules. Run `npm run check` before release.
+Step purpose, data descriptions, and limit overrides are optional. `src/defaults.js` supplies finite defaults. Run `npm run check` before release and `npm run types` after a change that affects exported types. No private application source or history is included.

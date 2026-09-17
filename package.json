@@ -1,6 +1,6 @@
 {
   "name": "@withmethod/runtime",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Open-source Method validator and local executor",
   "type": "module",
   "license": "MIT",
@@ -8,8 +8,7 @@
     "node": ">=22"
   },
   "bin": {
-    "method3": "src/cli.js",
-    "method": "src/cli.js"
+    "method3": "src/cli.js"
   },
   "exports": {
     ".": {
