@@ -365,6 +365,5 @@ test('minimal steps use finite operator defaults without descriptive boilerplate
 
 test('runtime installation leaves the full SDK method command unclaimed', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
-  assert.equal(pkg.bin.method, undefined);
-  assert.equal(pkg.bin.method3, 'src/cli.js');
+  assert.equal(pkg.bin, undefined);
 });

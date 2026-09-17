@@ -6,10 +6,10 @@ import {dirname,resolve} from 'node:path';
 import { runMethod, validateMethod, validateConfig, methodSchema, configSchema, readDocument, migrateMethod2 } from './index.js';
 const help = `Method — local executor
 
-method3 validate METHOD [--config CONFIG]
-method3 run METHOD [--config CONFIG] [--inputs JSON] [--state JSON] [--run-dir DIR]
-method3 schema [method|config]
-method3 migrate METHOD2 --model PROFILE --timeout-ms N --max-agent-turns N --max-model-requests N [--output FILE]
+node src/cli.js validate METHOD [--config CONFIG]
+node src/cli.js run METHOD [--config CONFIG] [--inputs JSON] [--state JSON] [--run-dir DIR]
+node src/cli.js schema [method|config]
+node src/cli.js migrate METHOD2 --model PROFILE --timeout-ms N --max-agent-turns N --max-model-requests N [--output FILE]
 
 Resume: --run-dir DIR --resume [--retry STEP:ITERATION] [--human JSON].
 run never retries a failed action. Local scripts require allow_local_processes in CONFIG.

@@ -5,7 +5,7 @@ A Method is a YAML file that describes a reusable procedure: inputs, steps, outp
 This public MIT repository contains two parts:
 
 - **Format and validator:** JSON Schema plus semantic checks for references, types, effects, and dependency cycles.
-- **Executor (`@withmethod/runtime` 0.4.0):** local script, model, and agent execution; checks; state; run records; and checkpoint resume.
+- **Executor (`@withmethod/runtime` 0.5.0):** local script, model, and agent execution; checks; state; run records; and checkpoint resume.
 
 New Methods use `format: method/3.1`. `method/3` remains accepted with literal prompts. The original `method/2` schema is retained as a historical baseline; this executor does not run it directly.
 
@@ -24,7 +24,7 @@ npm run example
 node src/cli.js --version
 ```
 
-The example runs checked counter steps and saves a trace. Use `node src/cli.js validate FILE`, `schema`, `run`, or `migrate` for the standalone interface. This package exposes the standalone `method3` command. The full SDK owns `method`; use it when you need authoring or dashboard commands. Runtime 0.3.1 removes its conflicting `method` binary so installing the SDK cannot select the smaller runtime CLI by mistake. Distribution is through GitHub and Method downloads, not a claimed npm registry release.
+The example runs checked counter steps and saves a trace. `node src/cli.js` is a contributor test harness. This package installs no executable command. Use the public [SDK](https://github.com/method-ai-hq/method-sdk) and its `method` command for user workflows. Version 0.5.0 removes `method3`; existing installations must install the SDK. Distribution is through GitHub and Method downloads.
 
 ## Model setup and limits
 
