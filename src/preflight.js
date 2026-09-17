@@ -9,16 +9,20 @@ export async function preflight(method, config, sourceRoot, options = {}) {
   validateMethod(method);
   validateConfig(config);
   config = configuration(config);
-  const profiles = await resolveModels(method, config, options), runtimeProfiles = config.runtimes ?? {}, tools = config.tools ?? {};
+  const missingSetup = [];
+  let profiles;
+  try { profiles = await resolveModels(method, config, options); } catch (error) { if (!options.allowMissingSetup || error.code !== 'needs_input') throw error; missingSetup.push(error.message); profiles = {}; }
+  const runtimeProfiles = config.runtimes ?? {}, tools = config.tools ?? {};
   const executions = [], usedTools = new Set();
   for (const step of Object.values(method.steps)) {
     for (const [phase, exec] of [['action', step.do], ['check', step.check]]) if (exec?.kind) {
       executions.push(exec);
       if (exec.kind !== 'run') {
         const profile = profiles[exec.model];
-        if (['codex', 'claude'].includes(profile.backend)) {
+        if (!profile && options.allowMissingSetup) { /* run resolves the agent */ }
+        else if (['codex', 'claude'].includes(profile.backend)) {
           if (config.allow_local_processes !== true) fail('Local agents require allow_local_processes in operator configuration', 'preflight');
-          await executable(profile.command ?? profile.backend);
+          try { await executable(profile.command ?? profile.backend); } catch(error) { if(!options.allowMissingSetup)throw error; missingSetup.push(error.message); }
         } else if (!options.transport && !process.env[profile.api_key_env]) fail(`Missing environment variable: ${profile.api_key_env}`, 'preflight');
       }
       if (exec.kind === 'agent') for (const name of exec.tools) {
@@ -37,6 +41,7 @@ export async function preflight(method, config, sourceRoot, options = {}) {
   const runtimeInfo = {};
   for (const exec of scripts) {
     const profile = runtimeProfiles[exec.runtime];
+    if (!profile && options.allowMissingSetup && ['node','python'].includes(exec.runtime)) { missingSetup.push(`Prepare ${exec.runtime} with method run.`); continue; }
     if (!profile) fail(`Unknown runtime: ${exec.runtime}`, 'preflight');
     for (const key of profile.env ?? []) if (!process.env[key]) fail(`Missing runtime environment variable: ${key}`, 'preflight');
     if (!runtimeInfo[exec.runtime]) {
@@ -45,7 +50,7 @@ export async function preflight(method, config, sourceRoot, options = {}) {
     }
   }
   for (const name of Object.keys(method.environment ?? {})) {
-    if (!own(config.environment, name)) fail(`Missing environment binding: ${name}`, 'preflight');
+    if (!own(config.environment, name)) { if(options.allowMissingSetup)missingSetup.push(`Bind input: ${name}`); else fail(`Missing environment binding: ${name}`, 'preflight'); }
   }
   const files = [...new Set([...(method.files ?? []), ...scripts.map(x => x.entrypoint)])];
   for (const name of options.checkFiles === false ? [] : files) {
@@ -58,5 +63,5 @@ export async function preflight(method, config, sourceRoot, options = {}) {
     if (info.size > 20_000_000) fail(`Bundle file exceeds 20 MB: ${name}`, 'preflight');
     await readFile(file);
   }
-  return { scripts, runtimeInfo, files };
+  return { scripts, runtimeInfo, files, missingSetup };
 }

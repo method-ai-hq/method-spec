@@ -211,7 +211,7 @@ test('ask stops with an inspectable request and never calls a model', async t =>
   assert.ok((await f.events()).some(e => e.event === 'human.required'));
 });
 test('existing run directories cannot be overwritten', async t => {
-  const f = await fixture(t); await f.run(); await assert.rejects(f.run(), /EEXIST/);
+  const f = await fixture(t); await f.run(); await assert.rejects(f.run(), {code:'run_exists'});
 });
 test('migration preserves a Method 2 equality check and makes defaults explicit', async t => {
   const old = { format: 'method/2', name: 'Copy', goal: 'Copy exactly.', inputs: { message: { type: 'text', description: 'Message.', default: 'hello' } }, steps: { copy: { in: { message: 'inputs.message' }, do: 'Copy message as copied.', out: { copied: { type: 'text', description: 'Copy.' } }, check: { equals: { actual: 'copied', expected: 'message' } } } }, result: 'copied' };

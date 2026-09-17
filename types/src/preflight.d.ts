@@ -3,4 +3,5 @@ export function preflight(method: any, config: any, sourceRoot: any, options?: {
     scripts: any[];
     runtimeInfo: {};
     files: any[];
+    missingSetup: any[];
 }>;

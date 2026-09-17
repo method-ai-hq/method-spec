@@ -46,7 +46,15 @@ export async function runMethod(file, config, options = {}) {
   const lockPath = pathResolve(runDir, '.lock');
   let lock;
   try { lock = await open(lockPath, 'wx', 0o600); }
-  catch { fail('Run is locked. Confirm its process has stopped before removing .lock.', 'run_locked'); }
+  catch {
+    if (!options.resume) fail('Run is locked. Use resume after its process stops.', 'run_locked');
+    const owner = Number(await readFile(lockPath, 'utf8'));
+    if (!Number.isSafeInteger(owner) || owner <= 0) fail('The run lock has no valid process ID. Inspect the run before removing it.', 'run_locked');
+    try { process.kill(owner, 0); fail('Run is locked. The process is still active.', 'run_locked'); }
+    catch(error) { if(error.code !== 'ESRCH') throw error; }
+    await unlink(lockPath);
+    lock = await open(lockPath, 'wx', 0o600);
+  }
   await lock.writeFile(String(process.pid));
   try { return await executeRun(file, config, { ...options, runDir }); }
   finally { await lock.close(); await unlink(lockPath); }
