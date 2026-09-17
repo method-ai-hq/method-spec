@@ -2,7 +2,7 @@
 
 Implemented by `@withmethod/runtime` 0.6.0. The full Method SDK uses this runtime at a pinned Git revision. New methods use this format under the same Method product and command.
 
-Use `format: method/3.1`. `method/3` remains accepted and keeps prompts literal. The machine-readable grammar is [method-3.schema.json](method-3.schema.json). Operator configuration uses [runtime-config.schema.json](runtime-config.schema.json). The validator also checks references, dependencies, data declarations, loop conditions, and effects; JSON Schema alone is insufficient.
+Use `format: method/3.1`. The machine-readable grammar is [method-3.schema.json](method-3.schema.json). Operator configuration uses [runtime-config.schema.json](runtime-config.schema.json). The validator also checks references, dependencies, data declarations, loop conditions, and effects; JSON Schema alone is insufficient.
 
 ## Installation and commands
 
@@ -70,7 +70,7 @@ do:
   tools: [observe, act]
 ```
 
-`in` maps local aliases to references. `out` declares output values. The process or model returns a JSON object whose keys match `out` exactly, plus the state replacements described below. Inputs are supplied as JSON data. In `method/3.1`, model and human prompts can insert declared scalar inputs with `{{name}}` or `{{customer.name}}`. Agent check prompts use `{{inputs.name}}` and `{{outputs.answer}}`. Only text, finite numbers, and booleans can be inserted. Unknown references fail validation; missing runtime values fail before model execution. Escape literal opening braces with a backslash in a YAML block scalar. Values are inserted once without expression evaluation or recursive expansion. `method/3` keeps literal prompts. Command arguments, labels, tool descriptions, and run_prompt are not templates.
+`in` maps local aliases to references. `out` declares output values. The process or model returns a JSON object whose keys match `out` exactly, plus the state replacements described below. Inputs are supplied as JSON data. In `method/3.1`, model and human prompts can insert declared scalar inputs with `{{name}}` or `{{customer.name}}`. Agent check prompts use `{{inputs.name}}` and `{{outputs.answer}}`. Only text, finite numbers, and booleans can be inserted. Unknown references fail validation; missing runtime values fail before model execution. Escape literal opening braces with a backslash in a YAML block scalar. Values are inserted once without expression evaluation or recursive expansion. Command arguments, labels, tool descriptions, and run_prompt are not templates.
 
 ### Scripts
 
@@ -185,18 +185,9 @@ A process lock prevents concurrent resume. An abruptly killed process can leave 
 For new evidence or changed inputs, use a new run. `--state prior-run/state.json` imports state but starts the method from the beginning. An application ledger of evidence hashes can select only changed work. This is separate from resuming a stopped run.
 
 
-## Migration and validation evidence
+## Validation evidence
 
-The Method 2 baseline remains unchanged. The standalone current runner rejects Method 2 files until migration is explicit. The SDK also rejects legacy execution. Only explicit document conversion remains. To create a new current-format version:
-
-```sh
-method migrate old.method --model planner --timeout-ms 60000 \
-  --max-agent-turns 4 --max-model-requests 8 --output new.method
-```
-
-Migration preserves text instructions, exact checks, data bindings, and applicable control flow. It adds explicit profiles and limits, changes text instructions to agent objects, removes legacy state-file locations, and prints review notes. Tool lists start empty. It does not promise identical behavior to Codex execution or load old state files. Review unsupported old constructs and tool access before running.
-
-The test suite executes real local scripts and the complete model/tool orchestration against deterministic response fixtures. The HTTP request format, error handling, output validation, and accounting are tested with a mocked HTTP transport. No live billed model call or game performance result is claimed by those tests. See [the contribution record](../docs/archive/HACKATHON.md).
+The test suite executes real local scripts and the complete model/tool orchestration against deterministic response fixtures. The HTTP request format, error handling, output validation, and accounting are tested with a mocked HTTP transport. No live billed model call or game performance result is claimed by those tests.
 
 ## Parsing and API contract
 

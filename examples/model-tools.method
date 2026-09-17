@@ -1,4 +1,4 @@
-format: method/3
+format: method/3.1
 name: A model call and a tool-using agent
 goal: Extract a number, then use a checked tool to increase it.
 inputs:

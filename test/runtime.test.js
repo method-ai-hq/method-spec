@@ -3,14 +3,14 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, readFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve as pathResolve } from 'node:path';
-import { runMethod, validateMethod, validateConfig, readDocument, migrateMethod2 } from '../src/index.js';
+import { runMethod, validateMethod, validateConfig, readDocument } from '../src/index.js';
 import { safeData } from '../src/validate.js';
 
 const number = { type: 'number', description: 'A test number.' };
 const boolean = { type: 'boolean', description: 'A test condition.' };
 const script = entrypoint => ({ kind: 'run', runtime: 'node', entrypoint });
 const step = (out = { value: number }) => ({ purpose: 'Test an operation.', do: script('action.mjs'), out, limits: { timeout_ms: 1500 } });
-const method = (s = step()) => ({ format: 'method/3', name: 'Test', goal: 'Test execution.', steps: { work: s }, result: Object.keys(s.out ?? {})[0] ?? 'inputs.value' });
+const method = (s = step()) => ({ format: 'method/3.1', name: 'Test', goal: 'Test execution.', steps: { work: s }, result: Object.keys(s.out ?? {})[0] ?? 'inputs.value' });
 function config() {
   return { limits: { timeout_ms: 10000, max_model_requests: 5, max_invocations: 20, max_tool_calls: 5, max_output_bytes: 100000, max_request_bytes: 100000 }, allow_local_processes: true,
     runtimes: { node: { command: process.execPath, version: process.version } },
@@ -212,13 +212,6 @@ test('ask stops with an inspectable request and never calls a model', async t =>
 });
 test('existing run directories cannot be overwritten', async t => {
   const f = await fixture(t); await f.run(); await assert.rejects(f.run(), {code:'run_exists'});
-});
-test('migration preserves a Method 2 equality check and makes defaults explicit', async t => {
-  const old = { format: 'method/2', name: 'Copy', goal: 'Copy exactly.', inputs: { message: { type: 'text', description: 'Message.', default: 'hello' } }, steps: { copy: { in: { message: 'inputs.message' }, do: 'Copy message as copied.', out: { copied: { type: 'text', description: 'Copy.' } }, check: { equals: { actual: 'copied', expected: 'message' } } } }, result: 'copied' };
-  const { method: migrated, warnings } = migrateMethod2(old, { model: 'model', timeout_ms: 1000, max_agent_turns: 2, max_model_requests: 2 });
-  assert.equal(migrated.steps.copy.do.kind, 'agent'); assert.ok(warnings.length);
-  const f = await fixture(t, migrated); assert.equal((await f.run(config(), { transport: async () => response({ copied: 'hello' }) })).result, 'hello');
-  assert.throws(() => migrateMethod2(old, {}), /requires/);
 });
 test('unknown configuration fields, unsafe data and cycles are rejected', () => {
   const cfg = config(); cfg.models.model.temperature = 0.2; assert.throws(() => validateConfig(cfg));

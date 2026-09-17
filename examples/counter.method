@@ -1,4 +1,4 @@
-format: method/3
+format: method/3.1
 name: A checked counter
 goal: Increase a saved count to three through checked script operations.
 inputs:

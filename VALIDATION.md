@@ -4,4 +4,4 @@ For this checkout, run `npm ci --ignore-scripts` and `npm run check`. The check 
 
 Tests use local scripts and mocked model responses. They do not establish live model quality or billed-provider compatibility. No account is required for the script example. The runtime has no hosted deployment target; its source and installable package are distributed through GitHub.
 
-Use `node src/cli.js --version` and the CI result for the exact commit. Earlier observations are in [the archive](docs/archive/validation-through-0.5.md) and apply only to their stated release.
+Use `node src/cli.js --version` and the CI result for the exact commit.

@@ -110,19 +110,17 @@ export function validateSemantics(method, assertData) {
       globalRef(target);
     }
     if (changes.some(x => x.startsWith('environment.')) && !step.check) fail('External changes require a check');
-    if (method.format === 'method/3.1') {
-      const validate = (prompt, definitions, location) => {
-        try { validatePrompt(prompt, definitions, typeAt); }
-        catch (error) { fail(`${id}.${location}: ${error.message}`, 'invalid_prompt'); }
-      };
-      if (step.do?.kind !== 'run' && step.do) validate(step.do.prompt, local, 'do.prompt');
-      if (step.ask) validate(step.ask, local, 'ask');
-      if (step.check?.kind === 'agent') validate(step.check.prompt, {
-        inputs: { type: 'record', fields: local }, outputs: { type: 'record', fields: step.out ?? {} },
-        state_before: definitions.state, state_after: definitions.state,
-        evidence: { type: 'list', items: 'text' },
-      }, 'check.prompt');
-    }
+    const validate = (prompt, definitions, location) => {
+      try { validatePrompt(prompt, definitions, typeAt); }
+      catch (error) { fail(`${id}.${location}: ${error.message}`, 'invalid_prompt'); }
+    };
+    if (step.do?.kind !== 'run' && step.do) validate(step.do.prompt, local, 'do.prompt');
+    if (step.ask) validate(step.ask, local, 'ask');
+    if (step.check?.kind === 'agent') validate(step.check.prompt, {
+      inputs: { type: 'record', fields: local }, outputs: { type: 'record', fields: step.out ?? {} },
+      state_before: definitions.state, state_after: definitions.state,
+      evidence: { type: 'list', items: 'text' },
+    }, 'check.prompt');
     const check = step.check;
     if (check && !check.kind) {
       const scope = { ...local, ...step.out };

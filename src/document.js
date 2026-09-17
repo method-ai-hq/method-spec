@@ -38,7 +38,7 @@ export function shapeErrors(definition, value, label = 'value') {
 export function validateMethod(value) {
   try {
     const method = parseDocumentValue(value);
-    if (!['method/3', 'method/3.1'].includes(method?.format)) throw new MethodValidationError('UNSUPPORTED_FORMAT: use a method/3 or method/3.1 document. Legacy execution is removed.', 'unsupported_format');
+    if (method?.format !== 'method/3.1') throw new MethodValidationError('UNSUPPORTED_FORMAT: use a method/3.1 document.', 'unsupported_format');
     if (!methodShape(method)) throw Error('Method: ' + methodShape.errors.map(error => `${error.instancePath}: ${error.message}`).join('; '));
     return validateSemantics(method, (def, value) => {
       const errors = shapeErrors(def, value, 'Default');

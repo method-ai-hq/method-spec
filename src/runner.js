@@ -254,7 +254,7 @@ async function executeRun(file, config, options) {
         };
         const execute = async (exec, input, schema, phase) => {
           guard();
-          if (method.format === 'method/3.1' && exec.kind !== 'run') {
+          if (exec.kind !== 'run') {
             const template = exec.prompt;
             let rendered;
             try { rendered = renderPrompt(template, input); }
@@ -277,9 +277,9 @@ async function executeRun(file, config, options) {
           await scopedRecord('step.started', { inputs: bindings, state_before: state, external_effects_possible: (step.changes ?? []).some(x => x.startsWith('environment.')) });
           const answer = options.human?.steps?.[active];
           if (step.ask) {
-            const prompt = method.format === 'method/3.1' ? renderPrompt(step.ask, bindings) : step.ask;
+            const prompt = renderPrompt(step.ask, bindings);
             if (Buffer.byteLength(prompt) + Buffer.byteLength(JSON.stringify(bindings)) > config.limits.max_request_bytes) fail('Expanded prompt exceeds request limit', 'input_limit');
-            if (method.format === 'method/3.1') await scopedRecord('prompt.rendered', { phase: 'action', template: step.ask, rendered: prompt });
+            await scopedRecord('prompt.rendered', { phase: 'action', template: step.ask, rendered: prompt });
             if (!answer) {
               await scopedRecord('human.required', { prompt, inputs: bindings });
               fail('Human input required; this runner does not auto-answer ask', 'needs_input');

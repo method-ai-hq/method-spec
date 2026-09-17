@@ -1,6 +1,5 @@
 export { runMethod } from "./runner.js";
 export { readDocument } from "./io.js";
-export { migrateMethod2 } from "./migrate.js";
 export type RuntimeConfig = import("./api-types.js").RuntimeConfig;
 export type RunOptions = import("./api-types.js").RunOptions;
 export type RunResult = import("./api-types.js").RunResult;

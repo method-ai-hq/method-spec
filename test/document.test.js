@@ -20,7 +20,7 @@ test('shared parser preserves text and accepts bounded aliases', () => {
   assert.throws(()=>parseDocumentValue('x'.repeat(2_000_001)),MethodValidationError);
 });
 test('unsupported formats have a typed validation code', () => {
-  assert.throws(()=>validateMethod({...base,format:'method/2'}),error=>error instanceof MethodValidationError&&error.code==='unsupported_format');
+  for (const format of ['method/2', 'method/3', 'workflow/2']) assert.throws(()=>validateMethod({...base,format}),error=>error instanceof MethodValidationError&&error.code==='unsupported_format');
 });
 test('contributor harness reports package version and accepts agent choice', () => {
   assert.match(execFileSync(process.execPath,['src/cli.js','--version'],{encoding:'utf8'}),new RegExp(info.version.replaceAll('.','\\.')));

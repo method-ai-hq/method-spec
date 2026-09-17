@@ -1,6 +1,6 @@
 # Example for Method 3. Use openai.config.json; this makes a billed model call.
 # This example selects a goal from a supplied observation. It does not play a game.
-format: method/3
+format: method/3.1
 name: Choose a factory goal
 goal: Use a fast calculation and a model decision to select the next production goal.
 inputs:

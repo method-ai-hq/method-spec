@@ -5,7 +5,6 @@
   "properties": {
     "format": {
       "enum": [
-        "method/3",
         "method/3.1"
       ]
     },

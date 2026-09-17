@@ -1,16 +1,14 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
-import { readFile, writeFile } from 'node:fs/promises';
-import YAML from 'yaml';
+import { readFile } from 'node:fs/promises';
 import packageInfo from '../package.json' with { type: 'json' };
 import {dirname,resolve} from 'node:path';
-import { runMethod, validateMethod, validateConfig, methodSchema, configSchema, readDocument, migrateMethod2 } from './index.js';
+import { runMethod, validateMethod, validateConfig, methodSchema, configSchema, readDocument } from './index.js';
 const help = `Method — local executor
 
 node src/cli.js validate METHOD [--config CONFIG]
 node src/cli.js run METHOD [--config CONFIG] [--inputs JSON] [--state JSON] [--run-dir DIR]
 node src/cli.js schema [method|config]
-node src/cli.js migrate METHOD2 --model PROFILE --timeout-ms N --max-agent-turns N --max-model-requests N [--output FILE]
 
 Resume: --run-dir DIR --resume [--retry STEP:ITERATION] [--human JSON].
 run never retries a failed action. Local scripts require allow_local_processes in CONFIG.
@@ -20,11 +18,11 @@ Use --version for the runtime version. Documentation: spec/method-3.md
 try {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
     agent: { type: 'string' }, help: { type: 'boolean' }, version: { type: 'boolean' }, config: { type: 'string' }, inputs: { type: 'string' }, state: { type: 'string' }, resume: { type: 'boolean' }, retry: { type: 'string', multiple: true }, human: { type: 'string' },
-    'run-dir': { type: 'string' }, model: { type: 'string' }, 'timeout-ms': { type: 'string' }, 'max-agent-turns': { type: 'string' }, 'max-model-requests': { type: 'string' }, output: { type: 'string' },
+    'run-dir': { type: 'string' },
   } });
   const [command, file, ...extra] = positionals;
   if (extra.length) throw new Error('Unexpected positional arguments');
-  if (values.version) console.log(`${packageInfo.version} (method/3.1; also accepts method/3)`);
+  if (values.version) console.log(`${packageInfo.version} (method/3.1)`);
   else if (values.help || !command) console.log(help);
   else if (command === 'schema') {
     if (file && !['method', 'config'].includes(file)) throw new Error('Use schema method or schema config');
@@ -49,11 +47,5 @@ try {
     process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
     console.log(JSON.stringify({ status: result.status, code: result.code, run_dir: result.run_dir, elapsed_ms: result.elapsed_ms, model_requests: result.model_requests }));
     process.exitCode = result.status === 'completed' ? 0 : result.status === 'needs_input' ? 2 : 1;
-  } else if (command === 'migrate') {
-    if (!file) throw new Error('Supply a Method 2 file');
-    const { method, warnings } = migrateMethod2(await readDocument(file), { model: values.model, timeout_ms: Number(values['timeout-ms']), max_agent_turns: Number(values['max-agent-turns']), max_model_requests: Number(values['max-model-requests']) });
-    warnings.forEach(warning => console.error(warning));
-    const text = YAML.stringify(method);
-    if (values.output) await writeFile(values.output, text, { flag: 'wx' }); else process.stdout.write(text);
   } else throw new Error(`Unknown command: ${command}`);
 } catch (error) { console.error(error.message); process.exitCode = 1; }
