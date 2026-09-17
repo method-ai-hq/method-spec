@@ -1,3 +1,4 @@
+import { executionTools, validateToolResult } from './tool-connections.js';
 import { resolveModels } from './agents.js';
 import { executorVersion, assertCheckpointExecutor } from './executor-version.js';
 import { executeClaude } from './claude.js';
@@ -243,12 +244,27 @@ async function executeRun(file, config, options) {
               knownUsage++; inputTokens += value.input_tokens; outputTokens += value.output_tokens;
             }
           },
-          toolDefinition(name) { return { type: 'function', name, description: tools[name].description, parameters: outputSchema(tools[name].in), strict: true }; },
+          toolDefinition(name) { return { type: 'function', name, description: tools[name].description, parameters: tools[name].parameters ?? outputSchema(tools[name].in), strict: !tools[name].connection }; },
           async invokeTool(name, args, callId) {
             guard();
             if (++toolCalls > config.limits.max_tool_calls) fail('Tool-call cap reached', 'tool_limit');
             const tool = tools[name];
-            assertSchema(outputSchema(tool.in), args, 'Tool arguments');
+            assertSchema(tool.parameters ?? outputSchema(tool.in), args, 'Tool arguments');
+            if (tool.connection) {
+              // Page content is returned to the agent, never session secrets or raw provider logs.
+              await this.record('tool.dispatched', {tool:name,call_id:callId,effects:tool.effects});
+              const call = options.connections[tool.connection].call(tool.tool, args, bound.signal);
+              const output = await new Promise((resolve,reject) => {
+                const abort=()=>reject(bound.signal.reason);
+                bound.signal.addEventListener('abort',abort,{once:true});
+                Promise.resolve(call).then(resolve,reject).finally(()=>bound.signal.removeEventListener('abort',abort));
+                if(bound.signal.aborted)abort();
+              });
+              guard(); validateToolResult(output);
+              if(Buffer.byteLength(JSON.stringify(output))>config.limits.max_output_bytes)fail('Tool output exceeds limit','output_limit');
+              await this.record('tool.completed',{tool:name,call_id:callId,isError:!!output.isError});
+              return output;
+            }
             await this.record('tool.dispatched', { tool: name, call_id: callId, arguments: args, effects: tool.effects });
             const output = await executeScript(tool.run, args, bound.signal, (event, data) => this.record(event, { ...data, tool: name, call_id: callId }));
             assertSchema(outputSchema(tool.out), output, 'Tool output');
@@ -259,6 +275,7 @@ async function executeRun(file, config, options) {
         const execute = async (exec, input, schema, phase) => {
           guard();
           if (exec.kind !== 'run') {
+            exec = exec.kind === 'agent' ? {...exec, tools:executionTools(exec, tools)} : exec;
             const template = exec.prompt;
             let rendered;
             try { rendered = renderPrompt(template, input); }

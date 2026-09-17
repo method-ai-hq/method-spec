@@ -436,13 +436,16 @@
                 }
               },
               "uniqueItems": true
+            },
+            "browser": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*|\\.[0-9]+)*$"
             }
           },
           "required": [
             "kind",
             "model",
-            "prompt",
-            "tools"
+            "prompt"
           ],
           "additionalProperties": false
         }
@@ -608,13 +611,16 @@
                 }
               },
               "uniqueItems": true
+            },
+            "browser": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*|\\.[0-9]+)*$"
             }
           },
           "required": [
             "kind",
             "model",
-            "prompt",
-            "tools"
+            "prompt"
           ],
           "additionalProperties": false
         }

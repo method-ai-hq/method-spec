@@ -12,7 +12,7 @@ const shapeProperties = {
 };
 const run = object({ kind: { const: 'run' }, runtime: name, entrypoint: path, args: { type: 'array', items: { type: 'string' } } }, ['kind', 'runtime', 'entrypoint']);
 const call = object({ kind: { const: 'call' }, model: name, prompt: text });
-const agent = object({ kind: { const: 'agent' }, model: name, prompt: text, tools: list(name) });
+const agent = object({ kind: { const: 'agent' }, model: name, prompt: text, tools: list(name), browser: ref }, ['kind', 'model', 'prompt']);
 const exact = [
   object({ equals: object({ actual: ref, expected: ref }) }),
   object({ count: object({ value: ref, min: { type: 'integer', minimum: 0 }, max: { type: 'integer', minimum: 0 } }, ['value']) }),
@@ -59,7 +59,7 @@ export const configSchema = {
     allow_local_processes: { type: 'boolean' },
     runtimes: map(object({ command: text, args: { type: 'array', items: { type: 'string' } }, version: text, env: list({ type: 'string', pattern: '^[A-Z_][A-Z0-9_]*$' }) }, ['command', 'version'])),
     models: map({ oneOf: [object({ backend: { const: 'openai-responses' }, model: text, api_key_env: { type: 'string', pattern: '^[A-Z_][A-Z0-9_]*$' }, max_output_tokens: positive, reasoning_effort: { enum: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] } }, ['backend', 'model', 'api_key_env', 'max_output_tokens']), object({ backend: { enum: ['codex', 'claude'] }, command: text, model: text, reasoning_effort: text }, ['backend'])] }),
-    tools: map(object({ description: text, in: map({ $ref: `${methodSchema.$id}#/$defs/data` }), out: map({ $ref: `${methodSchema.$id}#/$defs/data` }), run, effects: list(name) }, ['description', 'in', 'out', 'run', 'effects'])),
+    tools: map({oneOf: [object({ description: text, in: map({ $ref: `${methodSchema.$id}#/$defs/data` }), out: map({ $ref: `${methodSchema.$id}#/$defs/data` }), run, effects: list(name) }), object({description: text, connection: name, tool: text, parameters: {type:'object'}, effects: list(name)})]}),
     environment: map({ type: 'string' }),
   }, []),
 };

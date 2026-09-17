@@ -214,56 +214,123 @@
         }
       },
       "additionalProperties": {
-        "type": "object",
-        "properties": {
-          "description": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 16000
-          },
-          "in": {
-            "type": "object",
-            "propertyNames": {
-              "type": "string",
-              "pattern": "^[a-z][a-z0-9_]*$",
-              "maxLength": 80,
-              "not": {
-                "enum": [
-                  "constructor",
-                  "prototype",
-                  "__proto__"
-                ]
-              }
-            },
-            "additionalProperties": {
-              "$ref": "https://github.com/method-ai-hq/method-spec/raw/main/spec/method-3.schema.json#/$defs/data"
-            }
-          },
-          "out": {
-            "type": "object",
-            "propertyNames": {
-              "type": "string",
-              "pattern": "^[a-z][a-z0-9_]*$",
-              "maxLength": 80,
-              "not": {
-                "enum": [
-                  "constructor",
-                  "prototype",
-                  "__proto__"
-                ]
-              }
-            },
-            "additionalProperties": {
-              "$ref": "https://github.com/method-ai-hq/method-spec/raw/main/spec/method-3.schema.json#/$defs/data"
-            }
-          },
-          "run": {
+        "oneOf": [
+          {
             "type": "object",
             "properties": {
-              "kind": {
-                "const": "run"
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 16000
               },
-              "runtime": {
+              "in": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$",
+                  "maxLength": 80,
+                  "not": {
+                    "enum": [
+                      "constructor",
+                      "prototype",
+                      "__proto__"
+                    ]
+                  }
+                },
+                "additionalProperties": {
+                  "$ref": "https://github.com/method-ai-hq/method-spec/raw/main/spec/method-3.schema.json#/$defs/data"
+                }
+              },
+              "out": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$",
+                  "maxLength": 80,
+                  "not": {
+                    "enum": [
+                      "constructor",
+                      "prototype",
+                      "__proto__"
+                    ]
+                  }
+                },
+                "additionalProperties": {
+                  "$ref": "https://github.com/method-ai-hq/method-spec/raw/main/spec/method-3.schema.json#/$defs/data"
+                }
+              },
+              "run": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "run"
+                  },
+                  "runtime": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$",
+                    "maxLength": 80,
+                    "not": {
+                      "enum": [
+                        "constructor",
+                        "prototype",
+                        "__proto__"
+                      ]
+                    }
+                  },
+                  "entrypoint": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  },
+                  "args": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "kind",
+                  "runtime",
+                  "entrypoint"
+                ],
+                "additionalProperties": false
+              },
+              "effects": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$",
+                  "maxLength": 80,
+                  "not": {
+                    "enum": [
+                      "constructor",
+                      "prototype",
+                      "__proto__"
+                    ]
+                  }
+                },
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "description",
+              "in",
+              "out",
+              "run",
+              "effects"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 16000
+              },
+              "connection": {
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9_]*$",
                 "maxLength": 80,
@@ -275,50 +342,41 @@
                   ]
                 }
               },
-              "entrypoint": {
+              "tool": {
                 "type": "string",
                 "minLength": 1,
-                "maxLength": 500
+                "maxLength": 16000
               },
-              "args": {
+              "parameters": {
+                "type": "object"
+              },
+              "effects": {
                 "type": "array",
                 "items": {
-                  "type": "string"
-                }
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$",
+                  "maxLength": 80,
+                  "not": {
+                    "enum": [
+                      "constructor",
+                      "prototype",
+                      "__proto__"
+                    ]
+                  }
+                },
+                "uniqueItems": true
               }
             },
             "required": [
-              "kind",
-              "runtime",
-              "entrypoint"
+              "description",
+              "connection",
+              "tool",
+              "parameters",
+              "effects"
             ],
             "additionalProperties": false
-          },
-          "effects": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "pattern": "^[a-z][a-z0-9_]*$",
-              "maxLength": 80,
-              "not": {
-                "enum": [
-                  "constructor",
-                  "prototype",
-                  "__proto__"
-                ]
-              }
-            },
-            "uniqueItems": true
           }
-        },
-        "required": [
-          "description",
-          "in",
-          "out",
-          "run",
-          "effects"
-        ],
-        "additionalProperties": false
+        ]
       }
     },
     "environment": {

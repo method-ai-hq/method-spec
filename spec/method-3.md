@@ -196,3 +196,11 @@ The SDK and runtime use the same parser and document validator. Parsing permits 
 The JavaScript API exports `RuntimeConfig`, `RunOptions`, and the status-based `RunResult` union. `runMethod(file, config, options)` returns completed, failed, or needs_input records. It does not perform the product CLI's account sync or automatic environment preparation.
 
 The executor records its package version as `executor_version` in the checkpoint, manifest, and run start/resume events. Resume requires that exact executor version before setup or execution. A checkpoint without this field requires its original SDK/runtime installation. These checks are separate from script executable hashes. Completed results can still be uploaded without execution.
+
+## Browser connections
+
+An agent can select `browser: environment.NAME`, where NAME is a browser
+environment. The host supplies that connection's standard browser controls.
+Omitted `tools` means no custom tools. Interactive controls require the
+connection in `changes` and a declared check. Browser sessions and credentials
+are supplied by the host, outside the Method.

@@ -9,10 +9,11 @@ export interface RuntimeConfig {
   step_defaults?: {timeout_ms?: number; max_agent_turns?: number; max_model_requests?: number};
   runtimes?: Record<string, {command: string; version: string; args?: string[]; env?: string[]}>;
   models?: Record<string, ModelProfile>;
-  tools?: Record<string, {description: string; in: Record<string, Shape>; out: Record<string, Shape>; run: Script; effects: string[]}>;
+  tools?: Record<string, {description: string; in: Record<string, Shape>; out: Record<string, Shape>; run: Script; effects: string[]} | {description:string; connection:string; tool:string; parameters:Record<string,any>; effects:string[]}>;
   environment?: Record<string, string>;
 }
 export interface RunOptions {
+  connections?: Record<string, {call: (name:string, args:any, signal:AbortSignal) => Promise<any>}>;
   inputs?: Record<string, Json> | undefined; state?: Record<string, Json> | undefined;
   runDir?: string | undefined; resume?: boolean | undefined; retry?: string[] | undefined;
   human?: {steps: Record<string, {outputs: Record<string, Json>}>} | undefined;

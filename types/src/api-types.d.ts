@@ -55,10 +55,19 @@ export interface RuntimeConfig {
         out: Record<string, Shape>;
         run: Script;
         effects: string[];
+    } | {
+        description: string;
+        connection: string;
+        tool: string;
+        parameters: Record<string, any>;
+        effects: string[];
     }>;
     environment?: Record<string, string>;
 }
 export interface RunOptions {
+    connections?: Record<string, {
+        call: (name: string, args: any, signal: AbortSignal) => Promise<any>;
+    }>;
     inputs?: Record<string, Json> | undefined;
     state?: Record<string, Json> | undefined;
     runDir?: string | undefined;

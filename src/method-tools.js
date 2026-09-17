@@ -1,3 +1,4 @@
+import { toolContent } from './tool-connections.js';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { fail, safeData } from './validate.js';
@@ -6,7 +7,7 @@ import { fail, safeData } from './validate.js';
 // It has no file access or tool execution path of its own.
 export async function startMethodTools(execution, context) {
   const token = randomUUID();
-  const names = execution.kind === 'agent' ? execution.tools : [];
+  const names = execution.kind === 'agent' ? (execution.tools ?? []) : [];
   let queue = Promise.resolve();
   const server = createServer(async (req, res) => {
     if (req.headers.authorization !== `Bearer ${token}`) { res.writeHead(401).end(); return; }
@@ -42,7 +43,7 @@ export async function startMethodTools(execution, context) {
         queue = call.catch(() => {});
         try {
           const value = await call;
-          result = { content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value };
+          result = toolContent(value);
         } catch (error) {
           result = { isError: true, content: [{ type: 'text', text: error.message }] };
         }

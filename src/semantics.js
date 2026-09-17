@@ -109,6 +109,10 @@ export function validateSemantics(method, assertData) {
       if (!/^(state|environment)\.[a-z][a-z0-9_]*$/.test(target)) fail(`Invalid change target: ${target}`);
       globalRef(target);
     }
+    for (const exec of [step.do, step.check]) if (exec?.kind === 'agent' && exec.browser) {
+      const match = /^environment\.([a-z][a-z0-9_]*)$/.exec(exec.browser);
+      if (!match || method.environment?.[match[1]]?.type !== 'browser') fail('Agent browser must refer to a browser environment');
+    }
     if (changes.some(x => x.startsWith('environment.')) && !step.check) fail('External changes require a check');
     const validate = (prompt, definitions, location) => {
       try { validatePrompt(prompt, definitions, typeAt); }

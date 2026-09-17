@@ -61,7 +61,7 @@ export async function responsesRequest(body, profile, context) {
 export async function executeModel(execution, input, schema, context) {
   const profile = context.models[execution.model];
   const inputItems = [{ role: 'user', content: JSON.stringify(input) }];
-  const tools = execution.kind === 'agent' ? execution.tools.map(name => context.toolDefinition(name)) : [];
+  const tools = execution.kind === 'agent' ? (execution.tools ?? []).map(name => context.toolDefinition(name)) : [];
   const turns = execution.kind === 'agent' ? context.maxAgentTurns : 1;
   for (let turn = 0; turn < turns; turn++) {
     context.guard();
@@ -84,7 +84,7 @@ export async function executeModel(execution, input, schema, context) {
       if (turn + 1 >= turns || !context.canRequest() || !context.canAgentTurn()) fail('No remaining model turn for tool results', 'model_limit');
       inputItems.push(...response.output);
       for (const item of calls) {
-        if (!execution.tools.includes(item.name)) fail(`Tool is not allowed: ${item.name}`, 'tool_denied');
+        if (!(execution.tools ?? []).includes(item.name)) fail(`Tool is not allowed: ${item.name}`, 'tool_denied');
         const args = JSON.parse(item.arguments); safeData(args);
         const result = await context.invokeTool(item.name, args, item.call_id);
         inputItems.push({ type: 'function_call_output', call_id: item.call_id, output: JSON.stringify(result) });

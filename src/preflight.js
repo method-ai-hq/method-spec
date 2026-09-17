@@ -1,3 +1,4 @@
+import { executionTools } from './tool-connections.js';
 import { resolveModels } from './agents.js';
 import { configuration } from './defaults.js';
 import { readFile, stat } from 'node:fs/promises';
@@ -25,9 +26,18 @@ export async function preflight(method, config, sourceRoot, options = {}) {
           try { await executable(profile.command ?? profile.backend); } catch(error) { if(!options.allowMissingSetup)throw error; missingSetup.push(error.message); }
         } else if (!options.transport && !process.env[profile.api_key_env]) fail(`Missing environment variable: ${profile.api_key_env}`, 'preflight');
       }
-      if (exec.kind === 'agent') for (const name of exec.tools) {
+      if (exec.browser && !Object.values(tools).some(t => t.connection === exec.browser.split('.')[1])) {
+        if(options.allowMissingSetup) missingSetup.push(`Prepare browser: ${exec.browser}`);
+        else fail(`Missing browser connection: ${exec.browser}`, 'needs_input');
+      }
+      if (exec.kind === 'agent') for (const name of executionTools(exec, tools)) {
         if (!own(tools, name)) fail(`Unknown tool: ${name}`, 'preflight');
         const tool = tools[name]; usedTools.add(name);
+        if (tool.connection && !options.connections?.[tool.connection]) {
+          if(options.allowMissingSetup) missingSetup.push(`Connect tool: ${name}`);
+          else fail(`Missing tool connection: ${tool.connection}`, 'needs_input');
+        }
+        if(tool.connection && profiles[exec.model]?.backend === 'openai-responses') fail('Connection browser tools require Codex or Claude; select an agent.', 'preflight');
         for (const effect of tool.effects) {
           if (phase === 'check') fail(`Checker cannot use effectful tool: ${name}`, 'preflight');
           if (!(step.changes ?? []).includes(`environment.${effect}`)) fail(`Undeclared tool effect: ${name} -> ${effect}`, 'preflight');
@@ -35,7 +45,7 @@ export async function preflight(method, config, sourceRoot, options = {}) {
       }
     }
   }
-  for (const name of usedTools) executions.push(tools[name].run);
+  for (const name of usedTools) if(tools[name].run) executions.push(tools[name].run);
   const scripts = executions.filter(x => x.kind === 'run');
   if (scripts.length && config.allow_local_processes !== true) fail('This method requires allow_local_processes in operator configuration', 'preflight');
   const runtimeInfo = {};
