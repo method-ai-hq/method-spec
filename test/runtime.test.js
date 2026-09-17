@@ -4,6 +4,7 @@ import { mkdtemp, writeFile, readFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve as pathResolve } from 'node:path';
 import { runMethod, validateMethod, validateConfig, readDocument } from '../src/index.js';
+import { executorVersion } from '../src/executor-version.js';
 import { safeData } from '../src/validate.js';
 
 const number = { type: 'number', description: 'A test number.' };
@@ -369,4 +370,37 @@ test('minimal steps use finite operator defaults without descriptive boilerplate
 test('runtime installation leaves the full SDK method command unclaimed', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
   assert.equal(pkg.bin, undefined);
+});
+
+for (const version of [undefined, '0.0.0', executorVersion]) test(`resume requires the saved executor before another external action: ${version}`, async t => {
+  const m = method();
+  m.environment = { ledger: { type: 'files', description: 'Test ledger.' } };
+  m.steps.work.changes = ['environment.ledger'];
+  m.inputs = { expected: { type: 'number', default: 4 } };
+  m.steps.work.in = { expected: 'inputs.expected' };
+  m.steps.work.check = { equals: { actual: 'value', expected: 'expected' } };
+  m.steps.confirm = { after: 'work', ask: 'Continue?', out: { answer: { type: 'text' } } };
+  const f = await fixture(t, m, { 'action.mjs': "import {appendFileSync} from 'node:fs';appendFileSync(JSON.parse(process.env.METHOD_ENVIRONMENT).ledger,'action\\n');console.log(JSON.stringify({value:4}));" });
+  const ledger = join(f.dir, 'ledger');
+  const cfg = { ...config(), environment: { ledger } };
+  assert.equal((await f.run(cfg)).status, 'needs_input');
+  const file = join(f.runDir, 'checkpoint.json');
+  const saved = JSON.parse(await readFile(file, 'utf8'));
+  assert.equal(saved.executor_version, executorVersion);
+  assert.equal(JSON.parse(await readFile(join(f.runDir, 'manifest.json'), 'utf8')).executor_version, executorVersion);
+  assert.equal((await f.events()).find(e => e.event === 'run.started').executor_version, executorVersion);
+  saved.executor_version = version;
+  await writeFile(file, JSON.stringify(saved));
+  const before = await readFile(file, 'utf8');
+  let prepared = false;
+  const resume = () => f.run(cfg, { resume: true, human: { steps: { 'confirm:0': { outputs: { answer: 'yes' } } } }, prepareBundle: async () => { prepared = true; } });
+  if (version === executorVersion) {
+    assert.equal((await resume()).status, 'completed');
+    assert.equal((await f.events()).find(e => e.event === 'run.resumed').executor_version, executorVersion);
+  } else {
+    await assert.rejects(resume(), { code: 'resume_mismatch' });
+    assert.equal(prepared, false);
+    assert.equal(await readFile(file, 'utf8'), before);
+  }
+  assert.equal(await readFile(ledger, 'utf8'), 'action\n');
 });

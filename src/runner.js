@@ -1,4 +1,5 @@
 import { resolveModels } from './agents.js';
+import { executorVersion, assertCheckpointExecutor } from './executor-version.js';
 import { executeClaude } from './claude.js';
 import { configuration } from './defaults.js';
 import { mkdir, readFile, appendFile, realpath, open, unlink }  from 'node:fs/promises';
@@ -67,14 +68,15 @@ export async function runMethod(file, config, options = {}) {
 }
 
 async function executeRun(file, config, options) {
+  const runDir = options.runDir;
+  const saved = options.resume ? JSON.parse(await readFile(pathResolve(runDir, 'checkpoint.json'), 'utf8')) : null;
+  if (saved) assertCheckpointExecutor(saved);
   const method = await readDocument(file);
   const { order } = validateMethod(method);
   validateConfig(config);
   const suppliedConfig = config;
   config = configuration(config);
   const sourceRoot = await realpath(options.sourceRoot ?? dirname(pathResolve(file)));
-  const runDir = options.runDir;
-  const saved = options.resume ? JSON.parse(await readFile(pathResolve(runDir, 'checkpoint.json'), 'utf8')) : null;
   if (saved && (saved.method_sha256 !== hash(method) || saved.config_sha256 !== hash(suppliedConfig))) fail('Method or configuration changed. Resume needs the original version.', 'resume_mismatch');
   if (saved && (options.inputs || options.state)) fail('Resume uses saved inputs and state; omit --inputs and --state.', 'resume_mismatch');
   const inputs = saved?.root.inputs ?? initialValues(method.inputs, options.inputs);
@@ -98,6 +100,7 @@ async function executeRun(file, config, options) {
   let active = saved?.active ?? null;
   if (active && !(options.retry ?? []).includes(active) && !(method.steps[active.split(':')[0]]?.ask && options.human?.steps?.[active])) fail(`Inspect the trace and external state, then use --retry ${active} to authorize another attempt.`, 'recovery_required');
   const checkpoint = () => writeJSON(pathResolve(runDir, 'checkpoint.json'), {
+    executor_version: executorVersion,
     models: profiles, method_sha256: hash(method), config_sha256: hash(suppliedConfig), runtime_sha256: hash(runtimeInfo),
     started_at: startedAt, elapsed_ms: performance.now() - started, sequence, invocations, requests, toolCalls, knownUsage, inputTokens, outputTokens,
     root, accepted, skipped, active, collections, codexProcesses, codexInputTokens, codexOutputTokens, codexUsageReports,
@@ -135,7 +138,7 @@ async function executeRun(file, config, options) {
   let manifest;
   try {
     manifest = saved ? JSON.parse(await readFile(pathResolve(runDir, 'manifest.json'), 'utf8')).files : await snapshotBundle(sourceRoot, [...(method.files ?? []), ...scripts.map(x => x.entrypoint)], bundle);
-    await writeJSON(pathResolve(runDir, 'manifest.json'), { method_sha256: hash(method), config_sha256: hash(suppliedConfig), files: manifest, runtime_profiles: runtimeInfo, models: profiles });
+    await writeJSON(pathResolve(runDir, 'manifest.json'), { executor_version: executorVersion, method_sha256: hash(method), config_sha256: hash(suppliedConfig), files: manifest, runtime_profiles: runtimeInfo, models: profiles });
     await writeJSON(pathResolve(runDir, 'method.json'), method);
     await writeJSON(pathResolve(runDir, 'state.json'), state);
     const verifyBundle = async () => {
@@ -164,7 +167,7 @@ async function executeRun(file, config, options) {
       }
     }
     await writeJSON(pathResolve(runDir, 'summary.json'), { status: 'running', started_at: startedAt });
-    await record(saved ? 'run.resumed' : 'run.started', { method, config, inputs, initial_state: state, runtime_profiles: runtimeInfo, isolation: 'trusted-local-processes; not an OS sandbox' });
+    await record(saved ? 'run.resumed' : 'run.started', { executor_version: executorVersion, method, config, inputs, initial_state: state, runtime_profiles: runtimeInfo, isolation: 'trusted-local-processes; not an OS sandbox' });
     await options.onStart?.({ method, inputs, state, runDir });
     const executeScript = async (exec, input, signal, scopedRecord) => {
       await verifyBundle();
