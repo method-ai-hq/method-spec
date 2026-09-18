@@ -48,9 +48,9 @@ export async function executable(command) {
   }
   fail(`Runtime executable not found: ${command}`, 'preflight');
 }
-// Keep line buffers bounded and preserve UTF-8 across pipe chunks. Long or invalid
-// progress lines are ignored; they must never become part of a script's result.
-export async function readLines(stream, receive, maxBytes = Infinity) {
+// Preserve UTF-8 across pipe chunks. Progress lines use a small bound; agent
+// events use the process output bound so complete results reach their parser.
+export async function readLines(stream, receive, maxBytes = Infinity, maxLineBytes = 16_384) {
   const decoder = new StringDecoder('utf8');
   let line = '', skipping = false, bytes = 0;
   const consume = async text => {
@@ -58,7 +58,7 @@ export async function readLines(stream, receive, maxBytes = Infinity) {
       const ends = part.endsWith('\n');
       if (!skipping) {
         line += part;
-        if (Buffer.byteLength(line) > 16_384) { line = ''; skipping = true; }
+        if (Buffer.byteLength(line) > maxLineBytes) { line = ''; skipping = true; }
       }
       if (ends) {
         if (!skipping && line.trim()) await receive(line.trim());
@@ -94,7 +94,7 @@ export function executeProcess({ command, args, cwd, input, env, signal, maxByte
     child.stdout.on('data', collect(stdout)); child.stderr.on('data', collect(stderr));
     const pumps = [];
     const pump = promise => pumps.push(promise.catch(error => { failure = error; kill(); }));
-    if (onStdoutLine) pump(readLines(child.stdout, onStdoutLine));
+    if (onStdoutLine) pump(readLines(child.stdout, onStdoutLine, Infinity, maxBytes));
     if (onProgress) pump(readLines(child.stdio[3], async line => {
       let value;
       try { value = JSON.parse(line); } catch { return; }
