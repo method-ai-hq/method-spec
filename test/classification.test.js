@@ -115,3 +115,25 @@ test('operation IDs distinguish phases and survive failed-check retry',async t=>
   const other=await g.run({inputs:{}});assert.notEqual(other.result,started[0].operation_id);
   assert.throws(()=>validateConfig({runtimes:{node:{command:'node',version:'22',env:['METHOD_OPERATION_ID']}}}),/reserved/);
 });
+
+test('explicit cancellation stops classification without accepting a late answer', async t=>{
+  const f=await fixture(t); const controller=new AbortController(); let calls=0;
+  f.provider.evaluate=async (_request,signal)=>{
+    calls++; controller.abort(new Error('Operator cancelled'));
+    assert.equal(signal.aborted,true);
+    return answer();
+  };
+  const result=await f.run({signal:controller.signal});
+  assert.equal(result.status,'failed'); assert.equal(calls,1);
+  assert.equal((await f.events()).some(event=>event.event==='step.accepted'),false);
+});
+test('script iterations receive distinct stable operation IDs',async t=>{
+  const method={format:'method/3.2',name:'Iterations',goal:'Record each operation ID.',inputs:{items:{type:'list',items:'text'}},steps:{work:{name:'Record ID',purpose:'Returns the operation ID for this item.',each:{item:'inputs.items'},do:{kind:'run',runtime:'node',entrypoint:'action.mjs'},out:{id:{type:'text',description:'The operation ID.'}}}},result:'id'};
+  const f=await fixture(t,method,{'action.mjs':'console.log(JSON.stringify({id:process.env.METHOD_OPERATION_ID}))'});
+  const result=await f.run({inputs:{items:['first','second']}});
+  assert.equal(result.status,'completed'); assert.equal(result.result.length,2);
+  assert.notEqual(result.result[0],result.result[1]);
+  const resumed=await f.run({resume:true,inputs:undefined});
+  assert.deepEqual(resumed.result,result.result);
+  assert.equal((await f.events()).filter(event=>event.event==='process.started').length,2);
+});

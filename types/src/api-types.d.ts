@@ -124,6 +124,8 @@ export interface RunOptions {
 }
 export interface RunSummary {
     run_dir: string;
+    started_at: string;
+    device_name: string;
     elapsed_ms: number;
     invocations: number;
     model_requests: number;

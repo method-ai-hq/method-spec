@@ -5,7 +5,7 @@ A Method is a YAML file that describes a reusable procedure: inputs, steps, outp
 This public MIT repository contains two parts:
 
 - **Format and validator:** JSON Schema plus semantic checks for references, types, effects, and dependency cycles.
-- **Executor (`@withmethod/runtime` 0.9.0):** local script, model, and agent execution; checks; state; run records; and checkpoint resume.
+- **Executor (`@withmethod/runtime` 0.9.1):** local script, model, and agent execution; checks; state; run records; and checkpoint resume.
 
 New methods use `format: method/3.2`. Existing `method/3.1` documents keep their validation rules.
 

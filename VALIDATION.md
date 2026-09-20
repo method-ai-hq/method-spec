@@ -6,4 +6,4 @@ Tests use local scripts and mocked model responses. They do not establish live m
 
 Use `node src/cli.js --version` and the CI result for the exact commit.
 
-Classification tests cover response validation, uncertainty, request and byte limits, deadline expiry, late responses, each-loop ordering, empty collections, explicit retry, and saved-model resume. Script tests cover stable operation IDs across retries and distinct check identities. These use injected providers; they do not claim live TypeSafe quality or service availability.
+Classification tests cover response validation, uncertainty, request and byte limits, deadline expiry, explicit cancellation, late responses, each-loop ordering, empty collections, explicit retry, and saved-model resume. Script tests cover stable operation IDs across retries and distinct check and iteration identities. These use injected providers; they do not claim live TypeSafe quality or service availability.

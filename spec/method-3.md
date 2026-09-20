@@ -1,6 +1,6 @@
 # Method reference
 
-Implemented by `@withmethod/runtime` 0.9.0. The full Method SDK uses this runtime at a pinned Git revision. New methods use this format under the same Method product and command.
+Implemented by `@withmethod/runtime` 0.9.1. The full Method SDK uses this runtime at a pinned Git revision. New methods use this format under the same Method product and command.
 
 Use `format: method/3.2` for new documents. Existing `method/3.1` documents retain their validation rules. The machine-readable grammar is [method-3.schema.json](method-3.schema.json). Operator configuration uses [runtime-config.schema.json](runtime-config.schema.json). The validator also checks references, dependencies, data declarations, loop conditions, and effects; JSON Schema alone is insufficient.
 

@@ -35,5 +35,5 @@ export interface RunOptions {
   /** Test/provider adapter for Responses requests. */
   transport?: ((...args: any[]) => Promise<any>) | undefined;
 }
-export interface RunSummary {run_dir: string; elapsed_ms: number; invocations: number; model_requests: number; tool_calls: number; usage: Record<string, Json>}
+export interface RunSummary {run_dir: string; started_at: string; device_name: string; elapsed_ms: number; invocations: number; model_requests: number; tool_calls: number; usage: Record<string, Json>}
 export type RunResult = RunSummary & ({status: 'completed'; result: Json} | {status: 'failed' | 'needs_input'; code: string; error: string; recovery: string});
