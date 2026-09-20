@@ -7,3 +7,6 @@ export { parseDocumentValue, MethodValidationError, shapeErrors } from './docume
 /** @typedef {import('./api-types.js').RuntimeConfig} RuntimeConfig */
 /** @typedef {import('./api-types.js').RunOptions} RunOptions */
 /** @typedef {import('./api-types.js').RunResult} RunResult */
+
+export { effectiveOutputs } from './semantics.js';
+/** @typedef {import('./api-types.js').ClassificationProvider} ClassificationProvider */

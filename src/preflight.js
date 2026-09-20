@@ -18,7 +18,11 @@ export async function preflight(method, config, sourceRoot, options = {}) {
   for (const step of Object.values(method.steps)) {
     for (const [phase, exec] of [['action', step.do], ['check', step.check]]) if (exec?.kind) {
       executions.push(exec);
-      if (exec.kind !== 'run') {
+      if (exec.kind === 'classify' && (!config.classification || !options.classification?.evaluate)) {
+        const message = 'Classification needs Method sign-in or an embedded classification provider.';
+        if (options.allowMissingSetup) missingSetup.push(message); else fail(message, 'needs_input');
+      }
+      if (['call', 'agent'].includes(exec.kind)) {
         const profile = profiles[exec.model];
         if (!profile && options.allowMissingSetup) { /* run resolves the agent */ }
         else if (['codex', 'claude'].includes(profile.backend)) {
@@ -33,6 +37,7 @@ export async function preflight(method, config, sourceRoot, options = {}) {
       if (exec.kind === 'agent') for (const name of executionTools(exec, tools)) {
         if (!own(tools, name)) fail(`Unknown tool: ${name}`, 'preflight');
         const tool = tools[name]; usedTools.add(name);
+        if (method.format === 'method/3.2' && tool.run && !tool.description.trim()) fail(`Tool ${name}: describe its operation and effects.`);
         if (tool.connection && !options.connections?.[tool.connection]) {
           if(options.allowMissingSetup) missingSetup.push(`Connect tool: ${name}`);
           else fail(`Missing tool connection: ${tool.connection}`, 'needs_input');

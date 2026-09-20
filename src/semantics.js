@@ -19,6 +19,23 @@ export function safeData(value, seen = new Set(), depth = 0) {
   if (typeof value === 'bigint' || typeof value === 'undefined' || typeof value === 'function') fail('Value is not JSON data');
 }
 export function shape(def) { return typeof def === 'string' ? { type: def } : def; }
+/** Derive primitive outputs once for validators, executors, and readers. */
+export function effectiveOutputs(step) {
+  if (step.do?.kind !== 'classify') return step.out ?? {};
+  return { [step.out]: {
+    type: 'record', description: 'Selected category and probabilities for each option.',
+    fields: { choice: 'text', probabilities: { type: 'record', fields:
+      Object.fromEntries(Object.keys(step.do.options).map(id => [id, 'number'])) } },
+  } };
+}
+function containsFile(definition) {
+  const def = shape(definition);
+  return def.type === 'file' || Object.values(def.fields ?? {}).some(containsFile) ||
+    (def.items ? containsFile(def.items) : false);
+}
+function requiredText(value, path, message) {
+  if (typeof value !== 'string' || !value.trim()) fail(`${path}: ${message}`);
+}
 export function dataSchema(definition) {
   const def = shape(definition);
   let result;
@@ -75,8 +92,25 @@ export function validateSemantics(method, assertData) {
   const producers = {};
   for (const [id, step] of Object.entries(method.steps)) {
     if (reserved.has(id)) fail(`Reserved step name: ${id}`);
-    validateDefs(step.out);
-    for (const [key, def] of Object.entries(step.out ?? {})) {
+    const outputs = effectiveOutputs(step);
+    if (method.format === 'method/3.2') {
+      if (step.do?.kind === 'run') {
+        requiredText(step.name, `${id}.name`, 'Give this script step a name.');
+        requiredText(step.purpose, `${id}.purpose`, "Describe this script's rules, result, and external changes.");
+        for (const [name, def] of Object.entries(outputs)) requiredText(def.description, `${id}.out.${name}.description`, 'Describe the returned value.');
+      }
+      if (step.check?.kind === 'run') requiredText(step.reading?.check, `${id}.reading.check`, 'Describe what this script checks.');
+    }
+    if (step.do?.kind === 'classify') {
+      if (method.format !== 'method/3.2') fail(`${id}: classify requires method/3.2`);
+      requiredText(step.name, `${id}.name`, 'Give this classification step a name.');
+      requiredText(step.do.question, `${id}.do.question`, 'Write the classification question.');
+      for (const [name, description] of Object.entries(step.do.options)) requiredText(description, `${id}.do.options.${name}`, 'Describe this option.');
+      if (!Object.keys(step.in ?? {}).length && !Object.keys(step.each ?? {}).length) fail(`${id}: classification requires an input`);
+      if (step.changes?.length) fail(`${id}: classification cannot change state or connections`);
+    }
+    validateDefs(outputs);
+    for (const [key, def] of Object.entries(outputs)) {
       if (own(definitions, key)) fail(`Duplicate or reserved output: ${key}`);
       definitions[key] = step.each ? { type: 'list', items: def } : def;
       producers[key] = id;
@@ -84,6 +118,7 @@ export function validateSemantics(method, assertData) {
   }
   const dependencies = {};
   for (const [id, step] of Object.entries(method.steps)) {
+    const outputs = effectiveOutputs(step);
     const deps = new Set(typeof step.after === 'string' ? [step.after] : step.after ?? []);
     const globalRef = (ref) => {
       const def = typeAt(definitions, ref);
@@ -93,17 +128,18 @@ export function validateSemantics(method, assertData) {
     };
     const local = {};
     for (const [key, ref] of Object.entries(step.in ?? {})) {
-      if (reserved.has(key) || own(step.out, key)) fail(`Reserved or ambiguous input alias: ${key}`);
+      if (reserved.has(key) || own(outputs, key)) fail(`Reserved or ambiguous input alias: ${key}`);
       local[key] = globalRef(ref);
     }
     for (const [key, ref] of Object.entries(step.each ?? {})) {
-      if (reserved.has(key) || own(local, key) || own(step.out, key)) fail(`Duplicate iteration alias: ${key}`);
+      if (reserved.has(key) || own(local, key) || own(outputs, key)) fail(`Duplicate iteration alias: ${key}`);
       const def = globalRef(ref);
       if (def.type !== 'list') fail(`each requires a list: ${ref}`);
       local[key] = def.fields ? { type: 'record', fields: def.fields } : def.items;
     }
+    if (step.do?.kind === 'classify' && Object.values(local).some(containsFile)) fail(`${id}: extract file content before classification`);
     if (step.when && globalRef(step.when).type !== 'boolean') fail('when requires a boolean');
-    if (step.repeat?.until && typeAt(step.out ?? {}, step.repeat.until).type !== 'boolean') fail('repeat.until requires a boolean output');
+    if (step.repeat?.until && typeAt(outputs, step.repeat.until).type !== 'boolean') fail('repeat.until requires a boolean output');
     const changes = step.changes ?? [];
     for (const target of changes) {
       if (!/^(state|environment)\.[a-z][a-z0-9_]*$/.test(target)) fail(`Invalid change target: ${target}`);
@@ -118,16 +154,16 @@ export function validateSemantics(method, assertData) {
       try { validatePrompt(prompt, definitions, typeAt); }
       catch (error) { fail(`${id}.${location}: ${error.message}`, 'invalid_prompt'); }
     };
-    if (step.do?.kind !== 'run' && step.do) validate(step.do.prompt, local, 'do.prompt');
+    if (['call', 'agent'].includes(step.do?.kind)) validate(step.do.prompt, local, 'do.prompt');
     if (step.ask) validate(step.ask, local, 'ask');
     if (step.check?.kind === 'agent') validate(step.check.prompt, {
-      inputs: { type: 'record', fields: local }, outputs: { type: 'record', fields: step.out ?? {} },
+      inputs: { type: 'record', fields: local }, outputs: { type: 'record', fields: outputs },
       state_before: definitions.state, state_after: definitions.state,
       evidence: { type: 'list', items: 'text' },
     }, 'check.prompt');
     const check = step.check;
     if (check && !check.kind) {
-      const scope = { ...local, ...step.out };
+      const scope = { ...local, ...outputs };
       if (check.equals) {
         typeAt(scope, check.equals.actual); typeAt(scope, check.equals.expected);
       } else if (check.count) {

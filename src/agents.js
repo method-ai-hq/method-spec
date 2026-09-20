@@ -5,11 +5,12 @@ import { fail } from './validate.js';
 export async function resolveModels(method, config, options = {}) {
   const profiles = { ...(config.models ?? {}) };
   const names = [...new Set(Object.values(method.steps).flatMap(step => [step.do, step.check])
-    .filter(exec => exec?.kind && exec.kind !== 'run').map(exec => exec.model))];
+    .filter(exec => ['call', 'agent'].includes(exec?.kind)).map(exec => exec.model))];
   if (options.savedModels) {
     if (names.some(name => !options.savedModels[name])) fail('The checkpoint is missing its selected model profiles. Resume needs the original run records.', 'resume_mismatch');
     return options.savedModels;
   }
+  if (!names.length) return {};
   if (options.agent && !['codex', 'claude'].includes(options.agent)) fail('Choose codex or claude.', 'needs_input');
   const env = options.env ?? process.env;
   const caller = env.CLAUDECODE && !env.CODEX_THREAD_ID ? 'claude'

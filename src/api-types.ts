@@ -3,7 +3,15 @@ export type Json = null | boolean | number | string | Json[] | { [key: string]: 
 export type Shape = 'text' | 'number' | 'boolean' | 'record' | 'list' | 'file' | {type: Exclude<Shape, object>; description?: string; fields?: Record<string, Shape>; items?: Shape; format?: string};
 export type Script = {kind: 'run'; runtime: string; entrypoint: string; args?: string[]};
 export type ModelProfile = {backend: 'codex' | 'claude'; command?: string; model?: string; reasoning_effort?: string} | {backend: 'openai-responses'; model: string; api_key_env: string; max_output_tokens: number; reasoning_effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'};
+export interface ClassificationProvider {
+  resolve(signal: AbortSignal): Promise<{provider: 'typesafe'; model: string}>;
+  evaluate(request: {request_id: string; model: string; question: string; options: Record<string, string>; inputs: Record<string, Json>}, signal: AbortSignal): Promise<{
+    choice: string; probabilities: Record<string, number>; provider: 'typesafe'; model: string;
+    confidence: number; usage: {input_tokens: number; output_tokens: number} | null;
+  }>;
+}
 export interface RuntimeConfig {
+  classification?: {provider: 'typesafe'; model: string};
   allow_local_processes?: boolean;
   limits?: {timeout_ms?: number; max_model_requests?: number; max_invocations?: number; max_tool_calls?: number; max_output_bytes?: number; max_request_bytes?: number};
   step_defaults?: {timeout_ms?: number; max_agent_turns?: number; max_model_requests?: number};
@@ -13,6 +21,8 @@ export interface RuntimeConfig {
   environment?: Record<string, string>;
 }
 export interface RunOptions {
+  classification?: ClassificationProvider;
+  deviceName?: string;
   connections?: Record<string, {call: (name:string, args:any, signal:AbortSignal) => Promise<any>}>;
   inputs?: Record<string, Json> | undefined; state?: Record<string, Json> | undefined;
   runDir?: string | undefined; resume?: boolean | undefined; retry?: string[] | undefined;

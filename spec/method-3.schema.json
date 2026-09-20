@@ -5,7 +5,8 @@
   "properties": {
     "format": {
       "enum": [
-        "method/3.1"
+        "method/3.1",
+        "method/3.2"
       ]
     },
     "name": {
@@ -448,6 +449,47 @@
             "prompt"
           ],
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "classify"
+            },
+            "question": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16000
+            },
+            "options": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*$",
+                "maxLength": 80,
+                "not": {
+                  "enum": [
+                    "constructor",
+                    "prototype",
+                    "__proto__"
+                  ]
+                }
+              },
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 16000
+              },
+              "minProperties": 2,
+              "maxProperties": 255
+            }
+          },
+          "required": [
+            "kind",
+            "question",
+            "options"
+          ],
+          "additionalProperties": false
         }
       ]
     },
@@ -696,22 +738,38 @@
           }
         },
         "out": {
-          "type": "object",
-          "propertyNames": {
-            "type": "string",
-            "pattern": "^[a-z][a-z0-9_]*$",
-            "maxLength": 80,
-            "not": {
-              "enum": [
-                "constructor",
-                "prototype",
-                "__proto__"
-              ]
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "maxLength": 80,
+              "not": {
+                "enum": [
+                  "constructor",
+                  "prototype",
+                  "__proto__"
+                ]
+              }
+            },
+            {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*$",
+                "maxLength": 80,
+                "not": {
+                  "enum": [
+                    "constructor",
+                    "prototype",
+                    "__proto__"
+                  ]
+                }
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/data"
+              }
             }
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/data"
-          }
+          ]
         },
         "do": {
           "$ref": "#/$defs/execution"
@@ -859,7 +917,69 @@
           "each",
           "repeat"
         ]
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "do": {
+                "properties": {
+                  "kind": {
+                    "const": "classify"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              }
+            },
+            "required": [
+              "do"
+            ]
+          },
+          "then": {
+            "required": [
+              "out"
+            ],
+            "properties": {
+              "out": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*$",
+                "maxLength": 80,
+                "not": {
+                  "enum": [
+                    "constructor",
+                    "prototype",
+                    "__proto__"
+                  ]
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "out": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$",
+                  "maxLength": 80,
+                  "not": {
+                    "enum": [
+                      "constructor",
+                      "prototype",
+                      "__proto__"
+                    ]
+                  }
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/data"
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

@@ -22,7 +22,7 @@ try {
   } });
   const [command, file, ...extra] = positionals;
   if (extra.length) throw new Error('Unexpected positional arguments');
-  if (values.version) console.log(`${packageInfo.version} (method/3.1)`);
+  if (values.version) console.log(`${packageInfo.version} (method/3.1, method/3.2)`);
   else if (values.help || !command) console.log(help);
   else if (command === 'schema') {
     if (file && !['method', 'config'].includes(file)) throw new Error('Use schema method or schema config');

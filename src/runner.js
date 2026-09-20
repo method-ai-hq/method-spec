@@ -1,3 +1,6 @@
+import { hostname } from 'node:os';
+import { executeClassification } from './classification.js';
+import { effectiveOutputs } from './semantics.js';
 import { executionTools, validateToolResult } from './tool-connections.js';
 import { resolveModels } from './agents.js';
 import { executorVersion, assertCheckpointExecutor } from './executor-version.js';
@@ -94,6 +97,8 @@ async function executeRun(file, config, options) {
   let sequence = saved?.sequence ?? 0, invocations = saved?.invocations ?? 0, requests = saved?.requests ?? 0, toolCalls = saved?.toolCalls ?? 0, knownUsage = saved?.knownUsage ?? 0, inputTokens = saved?.inputTokens ?? 0, outputTokens = saved?.outputTokens ?? 0;
   let started = performance.now() - (saved?.elapsed_ms ?? 0), deadline = started + config.limits.timeout_ms;
   let codexProcesses = saved?.codexProcesses ?? 0, codexInputTokens = saved?.codexInputTokens ?? 0, codexOutputTokens = saved?.codexOutputTokens ?? 0, codexUsageReports = saved?.codexUsageReports ?? 0;
+  const executionId = saved?.execution_id ?? randomUUID();
+  const deviceName = saved?.device_name ?? options.deviceName ?? hostname();
   const startedAt = saved?.started_at ?? new Date().toISOString();
   const root = saved?.root ?? { inputs, state, environment: config.environment ?? {}, run: { started_at: startedAt } };
   const accepted = saved?.accepted ?? {}, skipped = saved?.skipped ?? [];
@@ -101,7 +106,7 @@ async function executeRun(file, config, options) {
   let active = saved?.active ?? null;
   if (active && !(options.retry ?? []).includes(active) && !(method.steps[active.split(':')[0]]?.ask && options.human?.steps?.[active])) fail(`Inspect the trace and external state, then use --retry ${active} to authorize another attempt.`, 'recovery_required');
   const checkpoint = () => writeJSON(pathResolve(runDir, 'checkpoint.json'), {
-    executor_version: executorVersion,
+    executor_version: executorVersion, execution_id: executionId, device_name: deviceName,
     models: profiles, method_sha256: hash(method), config_sha256: hash(suppliedConfig), runtime_sha256: hash(runtimeInfo),
     started_at: startedAt, elapsed_ms: performance.now() - started, sequence, invocations, requests, toolCalls, knownUsage, inputTokens, outputTokens,
     root, accepted, skipped, active, collections, codexProcesses, codexInputTokens, codexOutputTokens, codexUsageReports,
@@ -133,7 +138,7 @@ async function executeRun(file, config, options) {
     journal = write.catch(() => {});
     return write;
   };
-  const summary = () => ({ run_dir: runDir, elapsed_ms: performance.now() - started, invocations, model_requests: requests, tool_calls: toolCalls,
+  const summary = () => ({ run_dir: runDir, started_at: startedAt, device_name: deviceName, elapsed_ms: performance.now() - started, invocations, model_requests: requests, tool_calls: toolCalls,
     ...(codexProcesses ? { codex: { processes: codexProcesses, input_tokens: codexUsageReports ? codexInputTokens : null, output_tokens: codexUsageReports ? codexOutputTokens : null, scope: 'Codex-reported usage; internal requests and built-in tools are managed by Codex' } } : {}),
     usage: { responses_with_usage: knownUsage, responses_without_usage: requests - knownUsage, input_tokens: knownUsage ? inputTokens : null, output_tokens: knownUsage ? outputTokens : null, cost_usd: null, scope: 'executor-managed model requests only' } });
   let manifest;
@@ -163,23 +168,24 @@ async function executeRun(file, config, options) {
     if (saved) {
       const prior = JSON.parse(await readFile(pathResolve(runDir, 'summary.json'), 'utf8'));
       if (prior.status === 'completed') {
-        for (const [id, iterations] of Object.entries(accepted)) for (const outputs of iterations) await checkFiles(method.steps[id].out, outputs);
+        for (const [id, iterations] of Object.entries(accepted)) for (const outputs of iterations) await checkFiles(effectiveOutputs(method.steps[id]), outputs);
         return prior;
       }
     }
     await writeJSON(pathResolve(runDir, 'summary.json'), { status: 'running', started_at: startedAt });
-    await record(saved ? 'run.resumed' : 'run.started', { executor_version: executorVersion, method, config, inputs, initial_state: state, runtime_profiles: runtimeInfo, isolation: 'trusted-local-processes; not an OS sandbox' });
+    await record(saved ? 'run.resumed' : 'run.started', { executor_version: executorVersion, execution_id: executionId, device_name: deviceName, method, config, inputs, initial_state: state, runtime_profiles: runtimeInfo, isolation: 'trusted-local-processes; not an OS sandbox' });
     await options.onStart?.({ method, inputs, state, runDir });
-    const executeScript = async (exec, input, signal, scopedRecord) => {
+    const executeScript = async (exec, input, signal, scopedRecord, operationId) => {
       await verifyBundle();
       const profile = runtimeInfo[exec.runtime];
       const environment = { PATH: options.processPath ?? process.env.PATH ?? '', LANG: 'C.UTF-8', METHOD_OUTPUT_DIR: artifacts, METHOD_ENVIRONMENT: JSON.stringify(config.environment ?? {}) };
+      if (operationId) environment.METHOD_OPERATION_ID = operationId;
       for (const key of profile.env ?? []) {
         if (!process.env[key]) fail(`Missing runtime environment variable: ${key}`, 'preflight');
         environment[key] = process.env[key];
       }
       if (Buffer.byteLength(JSON.stringify(input)) > config.limits.max_request_bytes) fail('Script input exceeds request limit', 'input_limit');
-      await scopedRecord('process.started', { entrypoint: exec.entrypoint, runtime: exec.runtime, args: exec.args ?? [] });
+      await scopedRecord('process.started', { ...(operationId ? {operation_id: operationId} : {}), entrypoint: exec.entrypoint, runtime: exec.runtime, args: exec.args ?? [] });
       let result;
       try {
         result = await executeProcess({ command: profile.command, args: [...(profile.args ?? []), await containedFile(bundle, exec.entrypoint), ...(exec.args ?? [])], cwd: bundle, input, env: environment, signal, maxBytes: config.limits.max_output_bytes,
@@ -198,6 +204,7 @@ async function executeRun(file, config, options) {
     await verifyBundle();
     for (const id of order) {
       const step = method.steps[id];
+      const stepOutputs = effectiveOutputs(step);
     const limits = { ...config.step_defaults, ...step.limits };
       if (skipped.includes(id)) continue;
       if (!accepted[id]?.length && step.when && resolve(root, step.when) === false) { skipped.push(id); await record('step.skipped', { step: id }); continue; }
@@ -206,12 +213,12 @@ async function executeRun(file, config, options) {
       const collection = eachEntry ? collections[id] : null;
       const count = collection ? collection.length : (step.repeat?.max_iterations ?? 1);
       if (!step.repeat?.until && count - (accepted[id]?.length ?? 0) > config.limits.max_invocations - invocations) fail('Loop exceeds remaining invocation cap', 'invocation_limit');
-      const collected = Object.fromEntries(Object.keys(step.out ?? {}).map(k => [k, []]));
+      const collected = Object.fromEntries(Object.keys(stepOutputs).map(k => [k, []]));
       let untilReached = false;
       for (let iteration = 0; iteration < count; iteration++) {
         const previous = accepted[id]?.[iteration];
         if (previous) {
-          await checkFiles(step.out, previous);
+          await checkFiles(stepOutputs, previous);
           if (eachEntry) for (const key of Object.keys(collected)) collected[key].push(previous[key]);
           else Object.assign(root, previous);
           if (step.repeat?.until && resolve(previous, step.repeat.until) === true) { untilReached = true; break; }
@@ -228,7 +235,7 @@ async function executeRun(file, config, options) {
         const scopedRecord = (event, data) => record(event, { step: id, iteration, ...data });
         const guard = () => { if (bound.signal.aborted) throw bound.signal.reason; if (performance.now() >= deadline) throw timeoutError(); };
         const stateNames = (step.changes ?? []).filter(x => x.startsWith('state.')).map(x => x.slice(6));
-        const outputDefs = { ...(step.out ?? {}) };
+        const outputDefs = { ...stepOutputs };
         if (stateNames.length) outputDefs.state = { type: 'record', fields: Object.fromEntries(stateNames.map(k => [k, method.state[k]])) };
         const schema = outputSchema(outputDefs);
         const context = {
@@ -281,7 +288,7 @@ async function executeRun(file, config, options) {
         };
         const execute = async (exec, input, schema, phase) => {
           guard();
-          if (exec.kind !== 'run') {
+          if (['call', 'agent'].includes(exec.kind)) {
             exec = exec.kind === 'agent' ? {...exec, tools:executionTools(exec, tools)} : exec;
             const template = exec.prompt;
             let rendered;
@@ -292,7 +299,8 @@ async function executeRun(file, config, options) {
             exec = { ...exec, prompt: rendered };
           }
           const phaseContext = { ...context, record: (event, data) => scopedRecord(event, { phase, ...data }) };
-          const result = exec.kind === 'run' ? await executeScript(exec, input, bound.signal, phaseContext.record)
+          const result = exec.kind === 'classify' ? {[step.out]: await executeClassification(exec, input, config.classification, options.classification, phaseContext)}
+            : exec.kind === 'run' ? await executeScript(exec, input, bound.signal, phaseContext.record, 'mop_' + hash([executionId, id, iteration, phase]))
             : profiles[exec.model].backend === 'codex' ? await executeCodex(exec, input, schema, phaseContext)
             : profiles[exec.model].backend === 'claude' ? await executeClaude(exec, input, schema, phaseContext)
             : await executeModel(exec, input, schema, phaseContext);

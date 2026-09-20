@@ -5,9 +5,9 @@ A Method is a YAML file that describes a reusable procedure: inputs, steps, outp
 This public MIT repository contains two parts:
 
 - **Format and validator:** JSON Schema plus semantic checks for references, types, effects, and dependency cycles.
-- **Executor (`@withmethod/runtime` 0.7.0):** local script, model, and agent execution; checks; state; run records; and checkpoint resume.
+- **Executor (`@withmethod/runtime` 0.9.0):** local script, model, and agent execution; checks; state; run records; and checkpoint resume.
 
-Methods use `format: method/3.1`.
+New methods use `format: method/3.2`. Existing `method/3.1` documents keep their validation rules.
 
 The full [Method SDK and CLI](https://docs.withmethod.ai/sdk/overview) uses a pinned revision of this runtime and adds authoring, account access, saved versions, and dashboard uploads. The SDK source and releases are public at [method-sdk](https://github.com/method-ai-hq/method-sdk). The hosted application repository is private. The YAML format itself does not require an account or a hosted service.
 
@@ -39,7 +39,7 @@ Scripts and local coding agents are trusted local processes, not an OS sandbox. 
 | Document | Purpose |
 | --- | --- |
 | [Current reference](spec/method-3.md) | Implemented syntax, execution, limits, and recovery. |
-| [JSON Schema](spec/method-3.schema.json) | Current method/3.1 grammar. |
+| [JSON Schema](spec/method-3.schema.json) | Method 3.1 and 3.2 grammar. |
 | [Configuration schema](spec/runtime-config.schema.json) | Operator runtime, model, tool, and limit settings. |
 | [Product documentation](https://docs.withmethod.ai) | Full CLI, JavaScript/Python SDKs, API, and MCP. |
 | [Validation record](VALIDATION.md) | Checked behavior and limits of the evidence. |
@@ -50,4 +50,4 @@ Game controls, policies, and measured game results belong in [method-factorio](h
 
 `src/schema.js` defines the grammar. `npm run schema` generates JSON schemas and static shape validators. `src/document.js` owns browser-safe YAML parsing, typed document errors, default values, and document validation. It preserves text and permits bounded YAML aliases. `src/semantics.js` owns shapes, references, and dependency rules. The product imports these public definitions at a pinned commit; it does not maintain a second current runtime.
 
-Step purpose, data descriptions, and limit overrides are optional. `src/defaults.js` supplies finite defaults. Run `npm run check` before release and `npm run types` after a change that affects exported types. No private application source or history is included.
+Method 3.2 requires script names, purposes, output descriptions, and script-check descriptions. Limit overrides remain optional. `src/defaults.js` supplies finite defaults. Run `npm run check` before release and `npm run types` after a change that affects exported types. No private application source or history is included.

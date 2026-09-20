@@ -1,8 +1,8 @@
 # Method reference
 
-Implemented by `@withmethod/runtime` 0.6.0. The full Method SDK uses this runtime at a pinned Git revision. New methods use this format under the same Method product and command.
+Implemented by `@withmethod/runtime` 0.9.0. The full Method SDK uses this runtime at a pinned Git revision. New methods use this format under the same Method product and command.
 
-Use `format: method/3.1`. The machine-readable grammar is [method-3.schema.json](method-3.schema.json). Operator configuration uses [runtime-config.schema.json](runtime-config.schema.json). The validator also checks references, dependencies, data declarations, loop conditions, and effects; JSON Schema alone is insufficient.
+Use `format: method/3.2` for new documents. Existing `method/3.1` documents retain their validation rules. The machine-readable grammar is [method-3.schema.json](method-3.schema.json). Operator configuration uses [runtime-config.schema.json](runtime-config.schema.json). The validator also checks references, dependencies, data declarations, loop conditions, and effects; JSON Schema alone is insufficient.
 
 ## Installation and commands
 
@@ -45,7 +45,7 @@ The `environment` declarations describe connections. Operator configuration supp
 
 ## Executable steps
 
-Step `purpose` and `limits` are optional. Default step limits are ten minutes and 32 model requests or agent turns; explicit limits override these values. Use exactly one of `do` or `ask`. The three `do` forms are:
+Script actions require a nonempty `name` and `purpose` in Method 3.2. Other step purposes and all limit overrides are optional. Default step limits are ten minutes and 32 model requests or agent turns; explicit limits override these values. Use exactly one of `do` or `ask`. The `do` forms are:
 
 ```yaml
 do:
@@ -70,9 +70,42 @@ do:
   tools: [observe, act]
 ```
 
-`in` maps local aliases to references. `out` declares output values. The process or model returns a JSON object whose keys match `out` exactly, plus the state replacements described below. Inputs are supplied as JSON data. In `method/3.1`, model and human prompts can insert declared scalar inputs with `{{name}}` or `{{customer.name}}`. Agent check prompts use `{{inputs.name}}` and `{{outputs.answer}}`. Only text, finite numbers, and booleans can be inserted. Unknown references fail validation; missing runtime values fail before model execution. Escape literal opening braces with a backslash in a YAML block scalar. Values are inserted once without expression evaluation or recursive expansion. Command arguments, labels, tool descriptions, and run_prompt are not templates.
+`in` maps local aliases to references. `out` declares output values. The process or model returns a JSON object whose keys match `out` exactly, plus the state replacements described below. Inputs are supplied as JSON data. Model and human prompts can insert declared scalar inputs with `{{name}}` or `{{customer.name}}`. Agent check prompts use `{{inputs.name}}` and `{{outputs.answer}}`. Only text, finite numbers, and booleans can be inserted. Unknown references fail validation; missing runtime values fail before model execution. Escape literal opening braces with a backslash in a YAML block scalar. Values are inserted once without expression evaluation or recursive expansion. Command arguments, labels, tool descriptions, and run_prompt are not templates.
+
+### Classification
+
+Classification is available in Method 3.2:
+
+```yaml
+name: Classify message
+in:
+  message: inputs.message
+do:
+  kind: classify
+  question: Which team should handle this message?
+  options:
+    billing: Invoices and payments
+    other: Anything else
+out: message_category
+```
+
+Provide a nonempty step name and question, 2–255 named options with nonempty descriptions, and at least one bound input through `in` or `each`. Questions and option descriptions are literal text. Inputs must be JSON data; declared files, including nested files, require an earlier extraction step. Classification cannot declare changes. Conditions, loops, checks, and limits use the normal step lifecycle.
+
+Only classification uses an output name shorthand. `effectiveOutputs(step)` derives a record with `choice: text` and a `probabilities` record containing one numeric field for each option. Other steps retain their output maps. Downstream steps can reference `message_category.choice` and `message_category.probabilities.billing`.
+
+The provider must return exactly the declared probability keys, finite probabilities in [0,1] whose sum differs from one by at most 1e-6, and a choice within 1e-6 of the maximum. Ties and uncertain answers are valid results. Provider confidence is finite in [0,1] and is trace metadata, separate from option probabilities. Business rules belong in a following script.
+
+Embedded callers supply `config.classification: {provider: 'typesafe', model: '<pinned version>'}` and a `ClassificationProvider` through run options. The SDK resolves this identity once through the Method account and saves it in the resolved configuration. Resume uses that identity. Classification-only runs do not prepare an agent. Missing provider setup returns `needs_input`.
+
+Each invocation reserves one model request and calls the provider once. Requests and responses are bounded to 64 KiB or the smaller configured byte limit. The invocation deadline and cancellation apply. Responses must match the saved provider and model. Invalid responses fail without repair or automatic retry. The result follows the existing candidate, check, and acceptance path. `model.request` and `model.response` carry `kind: classify`, request ID, provider, and model; the response adds confidence, usage, and duration. Missing usage remains unknown.
 
 ### Scripts
+
+In Method 3.2, give each script action a name and purpose that describe its rules, result, and external changes. Describe each top-level output. Describe script checks in `reading.check` and script tools in their configured `description`. Review these descriptions whenever behavior changes.
+
+Split scripts where retrying one operation could repeat another completed action. Keep calculations together when they serve one decision. Return the decision rule or external receipt as inspectable output. For external writes, describe how to check uncertain completion and use the service's duplicate-prevention key when available.
+
+Script actions and checks receive `METHOD_OPERATION_ID`: `mop_` followed by SHA-256 of the JSON array `[execution_id, step_id, iteration, phase]`, where phase is `action` or `check`. The saved execution ID is a UUID. Explicit retries reuse this operation ID; new runs, iterations, and phases have distinct IDs. The variable is reserved and cannot be supplied through runtime environment configuration. Tool call identities keep their existing behavior.
 
 Runtime profiles name an executable, optional fixed arguments, a declared version, and optional environment-variable names. Commands use argument arrays without shell expansion. Node, Python, or another JSON-speaking executable can be registered.
 
@@ -176,7 +209,7 @@ method run task.method --config runtime.json --run-dir runs/example --resume
 method run task.method --config runtime.json --run-dir runs/example --resume --retry STEP:ITERATION
 ```
 
-`checkpoint.json` saves accepted iterations, typed state, inputs, runtime identity, active dispatch, and cumulative usage. Accepted work is reused, including each/repeat outputs. Method, configuration, runtime executable, and bundle hashes must match. Accepted file outputs are verified again. Run time excludes time while stopped; consumed execution time and request budgets do not reset. Completed runs return their saved result.
+`checkpoint.json` saves the execution ID and device name, accepted iterations, typed state, inputs, runtime identity, active dispatch, and cumulative usage. Accepted work is reused, including each/repeat outputs. Method, configuration, runtime executable, and bundle hashes must match. Accepted file outputs are verified again. Run time excludes time while stopped; consumed execution time and request budgets do not reset. Completed runs return their saved result.
 
 An unfinished invocation requires explicit retry. A stopped `ask` accepts `--human JSON` with `{steps: {"STEP:ITERATION": {outputs: {...}}}}`; checks still run. The runner does not guess whether an uncertain external action completed. Inspect the target first.
 
@@ -194,6 +227,8 @@ The test suite executes real local scripts and the complete model/tool orchestra
 The SDK and runtime use the same parser and document validator. Parsing permits bounded YAML aliases (maximum expansion count 20), rejects duplicate keys and documents over 2 MB, and preserves text whitespace. File values require exactly `path` and a lowercase 64-character `sha256`. Invalid documents throw `MethodValidationError` with `invalid_method` or `unsupported_format`.
 
 The JavaScript API exports `RuntimeConfig`, `RunOptions`, and the status-based `RunResult` union. `runMethod(file, config, options)` returns completed, failed, or needs_input records. It does not perform the product CLI's account sync or automatic environment preparation.
+
+`run.started` records the execution ID and device name. The summary preserves `started_at` and `device_name` from the original run on resume.
 
 The executor records its package version as `executor_version` in the checkpoint, manifest, and run start/resume events. Resume requires that exact executor version before setup or execution. A checkpoint without this field requires its original SDK/runtime installation. These checks are separate from script executable hashes. Completed results can still be uploaded without execution.
 

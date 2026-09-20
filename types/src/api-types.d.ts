@@ -27,7 +27,34 @@ export type ModelProfile = {
     max_output_tokens: number;
     reasoning_effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 };
+export interface ClassificationProvider {
+    resolve(signal: AbortSignal): Promise<{
+        provider: 'typesafe';
+        model: string;
+    }>;
+    evaluate(request: {
+        request_id: string;
+        model: string;
+        question: string;
+        options: Record<string, string>;
+        inputs: Record<string, Json>;
+    }, signal: AbortSignal): Promise<{
+        choice: string;
+        probabilities: Record<string, number>;
+        provider: 'typesafe';
+        model: string;
+        confidence: number;
+        usage: {
+            input_tokens: number;
+            output_tokens: number;
+        } | null;
+    }>;
+}
 export interface RuntimeConfig {
+    classification?: {
+        provider: 'typesafe';
+        model: string;
+    };
     allow_local_processes?: boolean;
     limits?: {
         timeout_ms?: number;
@@ -65,6 +92,8 @@ export interface RuntimeConfig {
     environment?: Record<string, string>;
 }
 export interface RunOptions {
+    classification?: ClassificationProvider;
+    deviceName?: string;
     connections?: Record<string, {
         call: (name: string, args: any, signal: AbortSignal) => Promise<any>;
     }>;

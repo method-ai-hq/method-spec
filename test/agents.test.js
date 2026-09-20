@@ -63,3 +63,8 @@ test('an incomplete saved selection cannot select a new provider',async()=>{
  assert.equal((await resolveModels(m,{models:{default:{backend:'codex'}}},{env:{CLAUDECODE:'1'}})).default.backend,'claude');
  assert.equal((await resolveModels(m,{models:{default:{backend:'claude'}}},{agent:'codex',env:{CLAUDECODE:'1'}})).default.backend,'codex');
  });
+
+ test('classification and scripts do not prepare an unused agent', async () => {
+   const method = {steps: {classify: {do: {kind: 'classify'}}, route: {do: {kind: 'run'}}}};
+   assert.deepEqual(await resolveModels(method, {models: {default: {backend: 'codex'}}}, {env: {CODEX_THREAD_ID: 'outer'}}), {});
+ });

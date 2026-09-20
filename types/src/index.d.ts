@@ -1,8 +1,10 @@
 export { runMethod } from "./runner.js";
 export { readDocument } from "./io.js";
+export { effectiveOutputs } from "./semantics.js";
 export type RuntimeConfig = import("./api-types.js").RuntimeConfig;
 export type RunOptions = import("./api-types.js").RunOptions;
 export type RunResult = import("./api-types.js").RunResult;
+export type ClassificationProvider = import("./api-types.js").ClassificationProvider;
 export { parsePrompt, validatePrompt, renderPrompt } from "./prompt.js";
 export { validateMethod, validateConfig, dataSchema, outputSchema } from "./validate.js";
 export { methodSchema, configSchema } from "./schema.js";
