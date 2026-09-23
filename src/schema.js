@@ -24,7 +24,7 @@ export const methodSchema = {
   $schema: 'http://json-schema.org/draft-07/schema#',
   $id: 'https://github.com/method-ai-hq/method-spec/raw/main/spec/method-3.schema.json',
   ...object({
-    format: { enum: ['method/3.1', 'method/3.2'] }, name: text, goal: text, run_prompt: text, run_label_input: name,
+    format: { enum: ['method/3.1', 'method/3.2'] }, name: text, goal: text, run_prompt: text, run_label: ref,
     files: list(path), inputs: map({ $ref: '#/$defs/input' }), state: map({ $ref: '#/$defs/input' }),
     environment: map(object({ type: { enum: ['browser', 'service', 'desktop', 'files', 'tool'] }, description: text })),
     steps: { ...map({ $ref: '#/$defs/step' }), minProperties: 1 },

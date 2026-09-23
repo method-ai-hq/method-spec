@@ -24,17 +24,9 @@
       "minLength": 1,
       "maxLength": 16000
     },
-    "run_label_input": {
+    "run_label": {
       "type": "string",
-      "pattern": "^[a-z][a-z0-9_]*$",
-      "maxLength": 80,
-      "not": {
-        "enum": [
-          "constructor",
-          "prototype",
-          "__proto__"
-        ]
-      }
+      "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*|\\.[0-9]+)*$"
     },
     "files": {
       "type": "array",

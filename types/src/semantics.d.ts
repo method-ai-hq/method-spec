@@ -7,6 +7,8 @@ export function dataSchema(definition: any): any;
 export function outputSchema(definitions?: {}): any;
 export function resolve(root: any, reference: any): any;
 export function typeAt(root: any, reference: any): any;
+/** A label selects one scalar input or one non-repeated step's saved output. */
+export function runLabelType(method: any): any;
 export function validateSemantics(method: any, assertData: any): {
     method: any;
     order: string[];

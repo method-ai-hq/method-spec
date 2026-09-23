@@ -242,11 +242,15 @@ are supplied by the host, outside the Method.
 
 ### Run labels
 
-Optional `run_label_input` names one declared text, number, or boolean input whose
-value identifies a run. Example: `run_label_input: date`. Choose a short,
-non-sensitive value; it will be visible in run lists and navigation.
-Viewers use the current method definition with each run's recorded input value.
-They never apply current defaults to historical runs. Missing, blank, or wrongly
-typed values fall back to the run timestamp. Whitespace is collapsed and labels
-are limited to 160 characters. The timestamp remains available for repeat runs.
-This field changes display only; historical execution versions are unchanged.
+Optional `run_label` selects a saved scalar value, such as `inputs.topic` or
+`steps.prepare.outputs.plan.date`. The reference must end at a declared text,
+number, or boolean field. Step references must select a step without `each` or
+`repeat`; selecting one invocation from a repeated step is not supported.
+Choose a short, non-sensitive value; it will be visible in run lists and navigation.
+Viewers use the current method definition with each run's recorded inputs or
+step outputs. They never apply current defaults to historical runs. Missing,
+blank, wrongly typed, or ambiguous values fall back to the run timestamp.
+Before a step saves its output, its run uses the timestamp. Whitespace is collapsed
+and labels are limited to 160 characters. The timestamp remains available for
+repeat runs. This field changes display only; historical execution versions and
+saved evidence are unchanged.

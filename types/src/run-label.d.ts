@@ -1,2 +1,2 @@
-/** Display metadata comes from the current method; values come only from the recorded run. */
-export function runLabel(method: any, inputs: any): string;
+/** The current method selects the value; the saved inspection supplies it. */
+export function runLabel(method: any, inspection: any): string;

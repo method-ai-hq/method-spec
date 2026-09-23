@@ -79,15 +79,29 @@ export function typeAt(root, reference) {
   }
   return def;
 }
+/** A label selects one scalar input or one non-repeated step's saved output. */
+export function runLabelType(method) {
+  const reference = method.run_label;
+  if (typeof reference !== 'string' || reference.split('.').some(key => ['constructor', 'prototype', '__proto__'].includes(key))) fail('Invalid run_label reference');
+  let def;
+  if (reference.startsWith('inputs.')) {
+    def = typeAt(method.inputs ?? {}, reference.slice(7));
+  } else {
+    const [root, id, outputs, ...path] = reference.split('.');
+    if (root !== 'steps' || outputs !== 'outputs' || !path.length || !own(method.steps, id)) fail('run_label must reference inputs or a step output');
+    const step = method.steps[id];
+    if (step.each || step.repeat) fail('run_label cannot select a repeated step');
+    def = typeAt(effectiveOutputs(step), path.join('.'));
+  }
+  if (!['text', 'number', 'boolean'].includes(def.type)) fail('run_label must select a text, number, or boolean value');
+  return def.type;
+}
 export function validateSemantics(method, assertData) {
   safeData(method);
 
   const validateDefs = (defs = {}) => { for (const def of Object.values(defs)) { dataSchema(def); if (own(def, 'default')) assertData(def, def.default); } };
   validateDefs(method.inputs); validateDefs(method.state);
-  if (method.run_label_input !== undefined) {
-    const input = method.inputs?.[method.run_label_input];
-    if (!input || !['text', 'number', 'boolean'].includes(input.type)) fail('run_label_input must name a text, number, or boolean input');
-  }
+  if (method.run_label !== undefined) runLabelType(method);
   const definitions = {
     inputs: { type: 'record', fields: method.inputs ?? {} }, state: { type: 'record', fields: method.state ?? {} },
     environment: { type: 'record', fields: Object.fromEntries(Object.keys(method.environment ?? {}).map(k => [k, 'text'])) },
