@@ -239,3 +239,14 @@ environment. The host supplies that connection's standard browser controls.
 Omitted `tools` means no custom tools. Interactive controls require the
 connection in `changes` and a declared check. Browser sessions and credentials
 are supplied by the host, outside the Method.
+
+### Run labels
+
+Optional `run_label_input` names one declared text, number, or boolean input whose
+value identifies a run. Example: `run_label_input: date`. Choose a short,
+non-sensitive value; it will be visible in run lists and navigation.
+Viewers use the current method definition with each run's recorded input value.
+They never apply current defaults to historical runs. Missing, blank, or wrongly
+typed values fall back to the run timestamp. Whitespace is collapsed and labels
+are limited to 160 characters. The timestamp remains available for repeat runs.
+This field changes display only; historical execution versions are unchanged.

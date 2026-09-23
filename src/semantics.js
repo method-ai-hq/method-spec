@@ -84,6 +84,10 @@ export function validateSemantics(method, assertData) {
 
   const validateDefs = (defs = {}) => { for (const def of Object.values(defs)) { dataSchema(def); if (own(def, 'default')) assertData(def, def.default); } };
   validateDefs(method.inputs); validateDefs(method.state);
+  if (method.run_label_input !== undefined) {
+    const input = method.inputs?.[method.run_label_input];
+    if (!input || !['text', 'number', 'boolean'].includes(input.type)) fail('run_label_input must name a text, number, or boolean input');
+  }
   const definitions = {
     inputs: { type: 'record', fields: method.inputs ?? {} }, state: { type: 'record', fields: method.state ?? {} },
     environment: { type: 'record', fields: Object.fromEntries(Object.keys(method.environment ?? {}).map(k => [k, 'text'])) },
