@@ -340,7 +340,7 @@ async function executeRun(file, config, options) {
               check = { status: pass ? 'pass' : 'fail', reason: `Exact ${Object.keys(spec)[0]} check`, evidence: [] };
             }
             await scopedRecord('check.completed', { check });
-            if (check.status !== 'pass') fail(`Step check returned ${check.status}`, 'check_failed');
+            if (check.status !== 'pass') fail(`Declared check returned ${check.status}`, 'check_failed');
           }
           guard();
           await writeJSON(pathResolve(runDir, 'state.json'), nextState);
