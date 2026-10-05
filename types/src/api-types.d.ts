@@ -102,6 +102,10 @@ export interface RunOptions {
     runDir?: string | undefined;
     resume?: boolean | undefined;
     retry?: string[] | undefined;
+    /** Parent run directory for a new run that reuses accepted steps. Requires reuse. */
+    fromRun?: string | undefined;
+    /** Steps whose accepted outputs a fork takes from the parent run. Their upstream steps must be listed too. */
+    reuse?: string[] | undefined;
     human?: {
         steps: Record<string, {
             outputs: Record<string, Json>;
@@ -122,6 +126,23 @@ export interface RunOptions {
     /** Test/provider adapter for Responses requests. */
     transport?: ((...args: any[]) => Promise<any>) | undefined;
 }
+export interface ForkProvenance {
+    run_dir: string;
+    execution_id: string;
+    executor_version: string;
+    method_sha256: string;
+    steps: Array<{
+        step: string;
+        skipped?: true;
+        iterations?: number;
+        outputs_sha256?: string;
+    }>;
+    changed_files: Array<{
+        file: string;
+        change: 'added' | 'removed' | 'changed';
+    }>;
+    file_evidence: 'bundle' | 'entrypoints';
+}
 export interface RunSummary {
     run_dir: string;
     started_at: string;
@@ -131,6 +152,7 @@ export interface RunSummary {
     model_requests: number;
     tool_calls: number;
     usage: Record<string, Json>;
+    forked_from?: ForkProvenance;
 }
 export type RunResult = RunSummary & ({
     status: 'completed';

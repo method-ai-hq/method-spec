@@ -217,6 +217,27 @@ A process lock prevents concurrent resume. An abruptly killed process can leave 
 
 For new evidence or changed inputs, use a new run. `--state prior-run/state.json` imports state but starts the method from the beginning. An application ledger of evidence hashes can select only changed work. This is separate from resuming a stopped run.
 
+### Fork a run
+
+When a fix changes only steps that a stopped or completed run did not accept, start a new run that reuses the unchanged accepted steps:
+
+```sh
+method run task.method --config runtime.json --from-run runs/example --reuse prepare,write
+```
+
+The fork gets a new run directory and a new bundle from the current files. It keeps the parent's inputs and initial state unless `--inputs` or `--state` supplies new values. Each listed step is reused only when all of these are true:
+
+- The parent accepted all of its iterations, or skipped it.
+- Every step it depends on is also listed.
+- Its definition is unchanged. `name` and `reading` are display text and do not count.
+- The `inputs`, `environment`, `state`, and `run` values that it references are equal. A step that reads state is not reused when any step changes state. A step that references `run.started_at` is not reused.
+- It does not change state or an external system.
+- Its model profiles, classification setup, tool definitions, script and tool entrypoint files, and runtime profiles are unchanged.
+
+Otherwise the run fails with `fork_mismatch` and gives the reason. The runner copies the declared file outputs of reused steps (and the assets of a `method-website` file) into the new `artifacts/` and checks their hashes. It does not copy files that a step wrote without declaring them.
+
+`run.started`, `checkpoint.json`, `manifest.json`, and the summary record `forked_from`: the parent run directory, execution ID, executor version, and Method hash; each reused step with its iteration count and output hash; and `changed_files`, the bundle files that differ from the parent. `file_evidence` is `bundle` when no bundle file changed. It is `entrypoints` when a file changed: the runner checked the entrypoints of the reused steps, but it does not trace the helper files that those entrypoints import. A `step.imported` event records each reused step and its outputs. Resume a stopped fork with `--resume` alone; it keeps its `forked_from` record.
+
 
 ## Validation evidence
 

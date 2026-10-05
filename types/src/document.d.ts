@@ -4,6 +4,7 @@ export function shapeErrors(definition: any, value: any, label?: string): any;
 export function validateMethod(value: any): {
     method: any;
     order: string[];
+    dependencies: {};
 };
 export class MethodValidationError extends Error {
     constructor(message: any, code?: string);

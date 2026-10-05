@@ -12,5 +12,6 @@ export function runLabelType(method: any): any;
 export function validateSemantics(method: any, assertData: any): {
     method: any;
     order: string[];
+    dependencies: {};
 };
 export function own(obj: any, key: any): boolean;

@@ -11,6 +11,7 @@ node src/cli.js run METHOD [--config CONFIG] [--inputs JSON] [--state JSON] [--r
 node src/cli.js schema [method|config]
 
 Resume: --run-dir DIR --resume [--retry STEP:ITERATION] [--human JSON].
+Fork: --from-run PARENT_DIR --reuse STEP[,STEP] starts a new run that reuses those accepted steps when nothing they depend on changed.
 run never retries a failed action. Local scripts require allow_local_processes in CONFIG.
 A supported local agent needs no config file. Use --agent codex or --agent claude to choose. Custom scripts, tools, and API models need configuration.
 Use --version for the runtime version. Documentation: spec/method-3.md
@@ -18,7 +19,7 @@ Use --version for the runtime version. Documentation: spec/method-3.md
 try {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
     agent: { type: 'string' }, help: { type: 'boolean' }, version: { type: 'boolean' }, config: { type: 'string' }, inputs: { type: 'string' }, state: { type: 'string' }, resume: { type: 'boolean' }, retry: { type: 'string', multiple: true }, human: { type: 'string' },
-    'run-dir': { type: 'string' },
+    'run-dir': { type: 'string' }, 'from-run': { type: 'string' }, reuse: { type: 'string', multiple: true },
   } });
   const [command, file, ...extra] = positionals;
   if (extra.length) throw new Error('Unexpected positional arguments');
@@ -42,7 +43,7 @@ try {
     process.once('SIGINT', stop); process.once('SIGTERM', stop);
     const json = async path => path ? JSON.parse(await readFile(path, 'utf8')) : undefined;
     const result = await runMethod(file, config, {
-      agent: values.agent, inputs: await json(values.inputs), state: await json(values.state), runDir: values['run-dir'], resume: values.resume, retry: values.retry, human: await json(values.human), signal: controller.signal,
+      agent: values.agent, inputs: await json(values.inputs), state: await json(values.state), runDir: values['run-dir'], resume: values.resume, retry: values.retry, fromRun: values['from-run'], reuse: values.reuse?.flatMap(x => x.split(',')).map(x => x.trim()).filter(Boolean), human: await json(values.human), signal: controller.signal,
     });
     process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
     console.log(JSON.stringify({ status: result.status, code: result.code, run_dir: result.run_dir, elapsed_ms: result.elapsed_ms, model_requests: result.model_requests }));

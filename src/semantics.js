@@ -201,5 +201,5 @@ export function validateSemantics(method, assertData) {
     if (!ready) fail('Cyclic step dependencies');
     pending.delete(ready); order.push(ready);
   }
-  return { method, order };
+  return { method, order, dependencies };
 }

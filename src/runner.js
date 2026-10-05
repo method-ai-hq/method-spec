@@ -18,6 +18,7 @@ import { executeCodex } from './codex.js';
 import { renderPrompt } from './prompt.js';
 import { preflight } from './preflight.js';
 import { progressMessage } from './progress.js';
+import { readParentRun, planFork, copyForkFiles } from './fork.js';
 
 function initialValues(defs = {}, supplied = {}) {
   const result = {};
@@ -49,6 +50,9 @@ function boundedSignal(ms, parent) {
 export async function runMethod(file, config, options = {}) {
   const runDir = pathResolve(options.runDir ?? pathResolve('.method-runs', randomUUID()));
   if (options.resume && !options.runDir) fail('Resume needs an explicit run directory', 'preflight');
+  if (options.fromRun && options.resume) fail('A fork starts a new run. Resume the fork with --resume alone.', 'preflight');
+  if (options.fromRun && !options.reuse?.length) fail('Name the accepted steps to reuse with --reuse STEP.', 'preflight');
+  if (options.reuse?.length && !options.fromRun) fail('Reuse needs --from-run with the parent run directory.', 'preflight');
   await mkdir(dirname(runDir), { recursive: true, mode: 0o700 });
   if (!options.resume) {
     try { await readFile(pathResolve(runDir, 'checkpoint.json')); fail('Run already exists. Use resume.', 'run_exists'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
@@ -76,15 +80,17 @@ async function executeRun(file, config, options) {
   const saved = options.resume ? JSON.parse(await readFile(pathResolve(runDir, 'checkpoint.json'), 'utf8')) : null;
   if (saved) assertCheckpointExecutor(saved);
   const method = await readDocument(file);
-  const { order } = validateMethod(method);
+  const { order, dependencies } = validateMethod(method);
   validateConfig(config);
   const suppliedConfig = config;
   config = configuration(config);
   const sourceRoot = await realpath(options.sourceRoot ?? dirname(pathResolve(file)));
   if (saved && (saved.method_sha256 !== hash(method) || saved.config_sha256 !== hash(suppliedConfig))) fail('Method or configuration changed. Resume needs the original version.', 'resume_mismatch');
   if (saved && (options.inputs || options.state)) fail('Resume uses saved inputs and state; omit --inputs and --state.', 'resume_mismatch');
-  const inputs = saved?.root.inputs ?? initialValues(method.inputs, options.inputs);
-  let state = saved?.root.state ?? initialValues(method.state, options.state);
+  const parent = options.fromRun ? await readParentRun(pathResolve(options.fromRun)) : null;
+  // A fork keeps the parent's inputs and initial state unless new values are supplied.
+  const inputs = saved?.root.inputs ?? initialValues(method.inputs, options.inputs ?? parent?.checkpoint.root?.inputs);
+  let state = saved?.root.state ?? initialValues(method.state, options.state ?? parent?.initialState);
   if (saved && !saved.models) fail('The checkpoint is missing its selected model profiles. Resume needs the original run records.', 'resume_mismatch');
   config.models = await resolveModels(method, config, { ...options, savedModels: saved?.models });
   const profiles = config.models, runtimeProfiles = config.runtimes ?? {}, tools = config.tools ?? {};
@@ -104,12 +110,14 @@ async function executeRun(file, config, options) {
   const accepted = saved?.accepted ?? {}, skipped = saved?.skipped ?? [];
   const collections = saved?.collections ?? {};
   let active = saved?.active ?? null;
+  let forkedFrom = saved?.forked_from ?? null;
   if (active && !(options.retry ?? []).includes(active) && !(method.steps[active.split(':')[0]]?.ask && options.human?.steps?.[active])) fail(`Inspect the trace and external state, then use --retry ${active} to authorize another attempt.`, 'recovery_required');
   const checkpoint = () => writeJSON(pathResolve(runDir, 'checkpoint.json'), {
     executor_version: executorVersion, execution_id: executionId, device_name: deviceName,
     models: profiles, method_sha256: hash(method), config_sha256: hash(suppliedConfig), runtime_sha256: hash(runtimeInfo),
     started_at: startedAt, elapsed_ms: performance.now() - started, sequence, invocations, requests, toolCalls, knownUsage, inputTokens, outputTokens,
     root, accepted, skipped, active, collections, codexProcesses, codexInputTokens, codexOutputTokens, codexUsageReports,
+    ...(forkedFrom ? { forked_from: forkedFrom } : {}),
   });
   const secrets = [...new Set([
     ...Object.values(profiles).map(p => process.env[p.api_key_env]),
@@ -140,11 +148,18 @@ async function executeRun(file, config, options) {
   };
   const summary = () => ({ run_dir: runDir, started_at: startedAt, device_name: deviceName, elapsed_ms: performance.now() - started, invocations, model_requests: requests, tool_calls: toolCalls,
     ...(codexProcesses ? { codex: { processes: codexProcesses, input_tokens: codexUsageReports ? codexInputTokens : null, output_tokens: codexUsageReports ? codexOutputTokens : null, scope: 'Codex-reported usage; internal requests and built-in tools are managed by Codex' } } : {}),
+    ...(forkedFrom ? { forked_from: forkedFrom } : {}),
     usage: { responses_with_usage: knownUsage, responses_without_usage: requests - knownUsage, input_tokens: knownUsage ? inputTokens : null, output_tokens: knownUsage ? outputTokens : null, cost_usd: null, scope: 'executor-managed model requests only' } });
   let manifest;
   try {
     manifest = saved ? JSON.parse(await readFile(pathResolve(runDir, 'manifest.json'), 'utf8')).files : await snapshotBundle(sourceRoot, [...(method.files ?? []), ...scripts.map(x => x.entrypoint)], bundle);
-    await writeJSON(pathResolve(runDir, 'manifest.json'), { executor_version: executorVersion, method_sha256: hash(method), config_sha256: hash(suppliedConfig), files: manifest, runtime_profiles: runtimeInfo, models: profiles });
+    if (parent) {
+      const fork = planFork({ parent, method, dependencies, steps: options.reuse, root, profiles, config, runtimeInfo, manifest });
+      Object.assign(accepted, fork.accepted); skipped.push(...fork.skipped); Object.assign(collections, fork.collections);
+      forkedFrom = fork.provenance;
+      await copyForkFiles(parent, method, fork.accepted, artifacts);
+    }
+    await writeJSON(pathResolve(runDir, 'manifest.json'), { executor_version: executorVersion, method_sha256: hash(method), config_sha256: hash(suppliedConfig), files: manifest, runtime_profiles: runtimeInfo, models: profiles, ...(forkedFrom ? { forked_from: forkedFrom } : {}) });
     await writeJSON(pathResolve(runDir, 'method.json'), method);
     await writeJSON(pathResolve(runDir, 'state.json'), state);
     const verifyBundle = async () => {
@@ -173,7 +188,8 @@ async function executeRun(file, config, options) {
       }
     }
     await writeJSON(pathResolve(runDir, 'summary.json'), { status: 'running', started_at: startedAt });
-    await record(saved ? 'run.resumed' : 'run.started', { executor_version: executorVersion, execution_id: executionId, device_name: deviceName, method, config, inputs, initial_state: state, runtime_profiles: runtimeInfo, isolation: 'trusted-local-processes; not an OS sandbox' });
+    await record(saved ? 'run.resumed' : 'run.started', { executor_version: executorVersion, execution_id: executionId, device_name: deviceName, method, config, inputs, initial_state: state, runtime_profiles: runtimeInfo, isolation: 'trusted-local-processes; not an OS sandbox', ...(forkedFrom ? { forked_from: forkedFrom } : {}) });
+    if (parent) for (const entry of forkedFrom.steps) await record('step.imported', { ...entry, outputs: accepted[entry.step] ?? null, parent_execution_id: forkedFrom.execution_id, parent_run_dir: forkedFrom.run_dir });
     await options.onStart?.({ method, inputs, state, runDir });
     const executeScript = async (exec, input, signal, scopedRecord, operationId) => {
       await verifyBundle();
@@ -364,7 +380,11 @@ async function executeRun(file, config, options) {
     await writeJSON(pathResolve(runDir, 'summary.json'), redact(completed));
     return completed;
   } catch (error) {
-    const failed = { ...summary(), status: error.code === 'needs_input' ? 'needs_input' : 'failed', code: error.code ?? 'execution_failed', error: error.message, recovery: 'Resume with --run-dir and --resume. Inspect unfinished actions before authorizing --retry STEP:ITERATION. Accepted iterations are not repeated.' };
+    const unfinished = active?.split(':')[0];
+    const reusable = order.filter(id => skipped.includes(id) || (accepted[id]?.length && id !== unfinished));
+    // Resume keeps the run's bundle, so a code fix needs a fork that reuses the accepted steps.
+    const fork = reusable.length ? ` To fix a step that was not accepted, edit it, then start a new run with --from-run ${runDir} --reuse ${reusable.join(',')}. The fork refuses a listed step that changed.` : '';
+    const failed = { ...summary(), status: error.code === 'needs_input' ? 'needs_input' : 'failed', code: error.code ?? 'execution_failed', error: error.message, recovery: 'Resume with --run-dir and --resume. Inspect unfinished actions before authorizing --retry STEP:ITERATION. Accepted iterations are not repeated.' + fork };
     await record('run.failed', failed);
     await writeJSON(pathResolve(runDir, 'summary.json'), redact(failed));
     return failed;
