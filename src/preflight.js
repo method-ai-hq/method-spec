@@ -52,7 +52,7 @@ export async function preflight(method, config, sourceRoot, options = {}) {
     }
   }
   for (const name of usedTools) if(tools[name].run) executions.push(tools[name].run);
-  for (const step of Object.values(method.steps)) for (const effect of Object.values(step.effects ?? {})) executions.push(effect.observe, effect.judge);
+  for (const step of Object.values(method.steps)) for (const effect of Object.values(step.effects ?? {})) if (effect.observe.kind === 'run') executions.push(effect.observe, effect.judge);
   const scripts = executions.filter(x => x.kind === 'run');
   if (scripts.length && config.allow_local_processes !== true) fail('This method requires allow_local_processes in operator configuration', 'preflight');
   const runtimeInfo = {};

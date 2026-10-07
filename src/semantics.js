@@ -105,12 +105,22 @@ export function effectSchedule(effect) {
   return [first, ...then, horizon].map(durationMs);
 }
 const observers = method => new Set(Object.entries(method.environment ?? {}).filter(([, env]) => env.role === 'observer').map(([name]) => `environment.${name}`));
+function templateAliases(value, out = []) {
+  if (typeof value === 'string') for (const match of value.matchAll(/\{inputs\.([a-z][a-z0-9_]*)/g)) out.push(match[1]);
+  else if (value && typeof value === 'object') for (const item of Object.values(value)) templateAliases(item, out);
+  return out;
+}
 function validateEffects(method, id, step, globalRef, outputs) {
   const environmentChanges = (step.changes ?? []).filter(x => x.startsWith('environment.'));
-  // A browser connection must be declared to use its controls, also for reading, so its effects are optional.
-  const observable = environmentChanges.filter(x => method.environment?.[x.slice(12)]?.type !== 'browser');
+  if (step.no_effect_reason !== undefined) {
+    // A declared waiver: the run report lists it, so a person can see which changes nobody observes.
+    requiredText(step.no_effect_reason, `${id}.no_effect_reason`, 'Say why no observer confirms this change.');
+    if (!environmentChanges.length) fail(`${id}: no_effect_reason applies only to a step that changes an environment`);
+    if (step.effects) fail(`${id}: use effects or no_effect_reason, not both`);
+    return;
+  }
   if (!step.effects) {
-    if (observable.length) fail(`${id}: external changes require effects. Declare how an observer confirms each intended change.`);
+    if (environmentChanges.length) fail(`${id}: external changes require effects. Declare how an observer confirms the intended result, or give no_effect_reason.`);
     return;
   }
   if (!environmentChanges.length) fail(`${id}: effects describe external changes; declare the changed connection in changes`);
@@ -125,6 +135,15 @@ function validateEffects(method, id, step, globalRef, outputs) {
       if (!observed.has(ref) && ref.startsWith('environment.')) fail(`${where}.in: observers bind only observer connections`);
       globalRef(ref);
     }
+    if (effect.observe.kind === 'run') {
+      if (!effect.judge || !effect.fixtures) fail(`${where}: a script observer needs a judge and fixtures`);
+    } else {
+      if (effect.judge || effect.fixtures) fail(`${where}: a built-in ${effect.observe.kind} observer has its own judge; remove judge and fixtures`);
+      if (!observed.has(`environment.${effect.observe.connection}`)) fail(`${where}.observe.connection must name an environment with role: observer`);
+      const type = method.environment[effect.observe.connection].type;
+      if (['file', 'sqlite'].includes(effect.observe.kind) && type !== 'files') fail(`${where}: a ${effect.observe.kind} observer reads a files connection`);
+      for (const alias of templateAliases(effect.observe)) if (!own(effect.in ?? {}, alias)) fail(`${where}.observe uses {inputs.${alias}}, which effect in does not bind`);
+    }
     const offsets = effectSchedule(effect);
     for (let i = 1; i < offsets.length; i++) if (offsets[i] <= offsets[i - 1]) fail(`${where}.schedule: each observation must come after the one before it, and the horizon last`);
   }
@@ -133,7 +152,7 @@ export function validateSemantics(method, assertData) {
   safeData(method);
   const current = method.format === 'method/3.3';
   if (!current) {
-    if (Object.values(method.steps).some(step => step.effects)) fail('effects require method/3.3');
+    if (Object.values(method.steps).some(step => step.effects || step.no_effect_reason !== undefined)) fail('effects and no_effect_reason require method/3.3');
     if (Object.values(method.environment ?? {}).some(env => env.role)) fail('Environment roles require method/3.3');
   }
 

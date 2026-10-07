@@ -915,41 +915,265 @@
                 }
               },
               "observe": {
-                "type": "object",
-                "properties": {
-                  "kind": {
-                    "const": "run"
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "run"
+                      },
+                      "runtime": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$",
+                        "maxLength": 80,
+                        "not": {
+                          "enum": [
+                            "constructor",
+                            "prototype",
+                            "__proto__"
+                          ]
+                        }
+                      },
+                      "entrypoint": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "args": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "runtime",
+                      "entrypoint"
+                    ],
+                    "additionalProperties": false
                   },
-                  "runtime": {
-                    "type": "string",
-                    "pattern": "^[a-z][a-z0-9_]*$",
-                    "maxLength": 80,
-                    "not": {
-                      "enum": [
-                        "constructor",
-                        "prototype",
-                        "__proto__"
-                      ]
-                    }
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "file"
+                      },
+                      "connection": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$",
+                        "maxLength": 80,
+                        "not": {
+                          "enum": [
+                            "constructor",
+                            "prototype",
+                            "__proto__"
+                          ]
+                        }
+                      },
+                      "path": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 16000
+                      },
+                      "expect": {
+                        "type": "object",
+                        "properties": {
+                          "exists": {
+                            "type": "boolean"
+                          },
+                          "contains": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 16000
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 16000
+                          }
+                        },
+                        "required": [],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "connection",
+                      "path"
+                    ],
+                    "additionalProperties": false
                   },
-                  "entrypoint": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 500
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "sqlite"
+                      },
+                      "connection": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$",
+                        "maxLength": 80,
+                        "not": {
+                          "enum": [
+                            "constructor",
+                            "prototype",
+                            "__proto__"
+                          ]
+                        }
+                      },
+                      "database": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 16000
+                      },
+                      "query": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 16000
+                      },
+                      "params": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]*$",
+                          "maxLength": 80,
+                          "not": {
+                            "enum": [
+                              "constructor",
+                              "prototype",
+                              "__proto__"
+                            ]
+                          }
+                        },
+                        "additionalProperties": {
+                          "type": [
+                            "string",
+                            "number"
+                          ]
+                        }
+                      },
+                      "expect": {
+                        "type": "object",
+                        "properties": {
+                          "rows": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "min_rows": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "max_rows": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        },
+                        "required": [],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "connection",
+                      "database",
+                      "query",
+                      "expect"
+                    ],
+                    "additionalProperties": false
                   },
-                  "args": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "http"
+                      },
+                      "connection": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_]*$",
+                        "maxLength": 80,
+                        "not": {
+                          "enum": [
+                            "constructor",
+                            "prototype",
+                            "__proto__"
+                          ]
+                        }
+                      },
+                      "path": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 16000
+                      },
+                      "method": {
+                        "enum": [
+                          "GET",
+                          "POST"
+                        ]
+                      },
+                      "body": {},
+                      "expect": {
+                        "type": "object",
+                        "properties": {
+                          "status": {
+                            "type": "array",
+                            "items": {
+                              "type": "integer"
+                            },
+                            "minItems": 1
+                          },
+                          "fields": {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)*$"
+                            },
+                            "additionalProperties": {
+                              "anyOf": [
+                                {
+                                  "type": [
+                                    "string",
+                                    "number",
+                                    "boolean",
+                                    "null"
+                                  ]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "at_least": {
+                                      "type": "number"
+                                    },
+                                    "at_most": {
+                                      "type": "number"
+                                    },
+                                    "increases": {
+                                      "const": true
+                                    }
+                                  },
+                                  "required": [],
+                                  "additionalProperties": false
+                                }
+                              ]
+                            },
+                            "minProperties": 1
+                          }
+                        },
+                        "required": [
+                          "fields"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "connection",
+                      "path",
+                      "expect"
+                    ],
+                    "additionalProperties": false
                   }
-                },
-                "required": [
-                  "kind",
-                  "runtime",
-                  "entrypoint"
-                ],
-                "additionalProperties": false
+                ]
               },
               "judge": {
                 "type": "object",
@@ -1037,14 +1261,17 @@
             "required": [
               "intent",
               "observe",
-              "judge",
-              "fixtures",
               "schedule",
               "confirm"
             ],
             "additionalProperties": false
           },
           "minProperties": 1
+        },
+        "no_effect_reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16000
         },
         "limits": {
           "type": "object",

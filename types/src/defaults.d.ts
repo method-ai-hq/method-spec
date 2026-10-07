@@ -11,6 +11,7 @@ export const defaultLimits: Readonly<{
     max_tool_calls: 200;
     max_output_bytes: 16777216;
     max_request_bytes: 16777216;
+    effect_wait_ms: 300000;
 }>;
 export const defaultStepLimits: Readonly<{
     timeout_ms: 600000;

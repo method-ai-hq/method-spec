@@ -2,7 +2,7 @@ import { readFile, open, unlink, readdir, stat, appendFile } from 'node:fs/promi
 import { resolve as pathResolve, join } from 'node:path';
 import { fail } from './validate.js';
 import { hash, containedFile, writeJSON } from './io.js';
-import { connectionsFor, observeEffect, readLedger, appendLedger, currentEffects, effectSummary, statusWithEffects, runObserverScript } from './effects.js';
+import { connectionsFor, observeEffect, readLedger, appendLedger, currentEffects, effectSummary, statusWithEffects, runObserverScript, previousObservations } from './effects.js';
 
 async function lockRun(runDir) {
   const path = pathResolve(runDir, '.lock');
@@ -47,8 +47,8 @@ export async function observeRun(runDir, options = {}) {
       const spec = method.steps[stepId]?.effects?.[name];
       if (!spec) continue;
       const entry = await observeEffect({
-        effect: spec, key: last.effect, token: last.token, inputs: last.inputs ?? {}, attempt: last.attempt + 1, actionOutcome: last.action_outcome, completedAt: last.completed_at, runDir, now,
-        run: async (exec, input, role) => { await verify(exec.entrypoint); return runObserverScript({ exec, input, role, token: last.token, bundle, runtimeInfo: manifest.runtime_profiles, connections: connectionsFor(method, config.environment, 'observer'), processPath: options.processPath, signal, maxBytes: config.limits?.max_output_bytes ?? 16_777_216 }); },
+        effect: spec, key: last.effect, token: last.token, inputs: last.inputs ?? {}, attempt: last.attempt + 1, actionOutcome: last.action_outcome, completedAt: last.completed_at, runDir, now, previous: await previousObservations(runDir, last.effect),
+        run: async (exec, input, role) => { if (exec.kind === 'run') await verify(exec.entrypoint); return runObserverScript({ exec, input, role, token: last.token, bundle, runtimeInfo: manifest.runtime_profiles, connections: connectionsFor(method, config.environment, 'observer'), processPath: options.processPath, signal, maxBytes: config.limits?.max_output_bytes ?? 16_777_216 }); },
       });
       await appendLedger(runDir, entry);
       await record('effect.observed', entry);

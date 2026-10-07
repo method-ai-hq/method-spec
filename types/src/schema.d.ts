@@ -14,5 +14,6 @@ export namespace observationSchema {
     export { required };
     export let additionalProperties: boolean;
 }
+export const builtinObserverKinds: string[];
 export namespace judgmentSchema { }
 export namespace checkResultSchema { }

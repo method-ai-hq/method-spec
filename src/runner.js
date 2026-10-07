@@ -19,7 +19,7 @@ import { renderPrompt } from './prompt.js';
 import { preflight } from './preflight.js';
 import { progressMessage } from './progress.js';
 import { readParentRun, planFork, copyForkFiles } from './fork.js';
-import { effectKey, connectionsFor, testFixtures, runObserverScript, observeEffect, readLedger, appendLedger, currentEffects, effectSummary, statusWithEffects, waitUntil, nextObservation, horizonAt } from './effects.js';
+import { effectKey, connectionsFor, testFixtures, runObserverScript, observeEffect, readLedger, appendLedger, currentEffects, effectSummary, statusWithEffects, waitUntil, nextObservation, horizonAt, previousObservations } from './effects.js';
 import { replayedCandidate, unverifiable } from './replay.js';
 
 function initialValues(defs = {}, supplied = {}) {
@@ -227,6 +227,9 @@ async function executeRun(file, config, options) {
     };
     const fixtures = await testFixtures(method, bundle, manifest, async (effect, input) => (await observerScript(effect.judge, input, 'judge', input.token, options.signal ?? new AbortController().signal)).output);
     if (fixtures.length) await record('effects.fixtures_passed', { fixtures });
+    // Declared waivers are part of the record, so a reader sees which external changes nobody observes.
+    const waived = Object.entries(method.steps).filter(([, step]) => step.no_effect_reason !== undefined).map(([step, { no_effect_reason, changes }]) => ({ step, reason: no_effect_reason, changes: changes.filter(c => c.startsWith('environment.')) }));
+    if (waived.length && !saved) await record('effects.waived', { waived });
     // Observe one effect, write the ledger, and record the verdict in the run's events.
     const observe = async (spec, data) => {
       const signal = options.signal ?? new AbortController().signal;
@@ -235,7 +238,7 @@ async function executeRun(file, config, options) {
       // absence of evidence stays pending, because the recording does not show that the horizon passed.
       const entry = options.replay && !replay
         ? { effect: data.key, token: data.token, inputs: data.inputs, action_outcome: data.actionOutcome, attempt: data.attempt, observed_at: new Date().toISOString(), verdict: 'not_replayed', reason: 'The case supplies no observations for this effect.', evidence: [], final: true, completed_at: data.completedAt, horizon_at: horizonAt(spec, data.completedAt), next_observation_at: null }
-        : await observeEffect({ ...data, effect: spec, runDir, replay, final: options.replay ? false : undefined, run: (exec, input, role) => observerScript(exec, input, role, data.token, signal) });
+        : await observeEffect({ ...data, effect: spec, runDir, replay, final: options.replay ? false : undefined, previous: options.replay ? [] : await previousObservations(runDir, data.key), run: (exec, input, role) => observerScript(exec, input, role, data.token, signal) });
       await appendLedger(runDir, entry);
       await record('effect.observed', entry);
       return entry;
@@ -447,15 +450,21 @@ async function executeRun(file, config, options) {
     }
     if (performance.now() >= deadline) throw timeoutError();
     const result = typeof method.result === 'string' ? resolve(root, method.result) : Object.fromEntries(Object.entries(method.result).map(([k, ref]) => [k, resolve(root, ref)]));
-    // Each effect gets its first observation before the run reports. Later ones come from method observe.
-    const unobserved = currentEffects(await readLedger(runDir)).filter(entry => entry.attempt === 0).sort((a, b) => a.next_observation_at.localeCompare(b.next_observation_at));
-    for (const entry of unobserved) {
-      const [stepId, , name] = entry.effect.split('/');
-      const spec = method.steps[stepId].effects[name];
-      if (!options.replay && !await waitUntil(entry.next_observation_at, deadline, options.signal)) continue;
-      await observe(spec, { key: entry.effect, token: entry.token, inputs: entry.inputs, attempt: 1, actionOutcome: 'ok', completedAt: entry.completed_at });
+    // Before the run reports, it makes the observations that are due within effect_wait_ms (and the run deadline).
+    // Later ones come from method observe. A replay judges each effect once, on its recorded observations.
+    const until = Math.min(deadline, performance.now() + config.limits.effect_wait_ms);
+    const specOf = key => { const [stepId, , name] = key.split('/'); return method.steps[stepId].effects[name]; };
+    if (options.replay) {
+      for (const entry of currentEffects(await readLedger(runDir)).filter(entry => entry.attempt === 0))
+        await observe(specOf(entry.effect), { key: entry.effect, token: entry.token, inputs: entry.inputs, attempt: 1, actionOutcome: 'ok', completedAt: entry.completed_at });
+    } else for (;;) {
+      const next = currentEffects(await readLedger(runDir)).filter(entry => !entry.final && entry.next_observation_at)
+        .sort((a, b) => a.next_observation_at.localeCompare(b.next_observation_at))[0];
+      if (!next || !await waitUntil(next.next_observation_at, until, options.signal)) break;
+      await observe(specOf(next.effect), { key: next.effect, token: next.token, inputs: next.inputs, attempt: next.attempt + 1, actionOutcome: next.action_outcome, completedAt: next.completed_at });
     }
     const completed = statusWithEffects({ ...summary(), status: 'completed', result }, effectSummary(await readLedger(runDir)));
+    if (waived.length) completed.unobserved_changes = waived;
     await record(completed.status === 'failed' ? 'run.failed' : 'run.completed', completed);
     if (completed.status !== 'failed') await writeJSON(pathResolve(runDir, 'result.json'), redact(result));
     await writeJSON(pathResolve(runDir, 'summary.json'), redact(completed));

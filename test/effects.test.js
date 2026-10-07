@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm, readdir } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runMethod, validateMethod, observeRun, readLedger } from '../src/index.js';
@@ -77,16 +79,26 @@ test('method/3.3 requires effects for external changes and keeps observers apart
     [m => { delete m.steps.send.changes; }, /state the changes this step can make|effects describe external changes/],
     [m => { m.steps.send.effects.delivered.schedule = { first: '2h', horizon: '1h' }; }, /horizon last/],
     [m => { m.steps.send.effects.delivered.schedule = { first: '10x', horizon: '1h' }; }, /must match pattern/],
-    [m => { m.format = 'method/3.2'; }, /effects require method\/3.3/],
+    [m => { m.format = 'method/3.2'; }, /require method\/3.3/],
     [m => { m.steps.later = { name: 'Later', purpose: 'Compute.', do: script('later.mjs'), out: { done: text } }; }, /state the changes this step can make/],
   ];
   for (const [edit, pattern] of invalid) { const m = method(); edit(m); assert.throws(() => validateMethod(m), pattern); }
   const ok = method(); ok.steps.later = { name: 'Later', purpose: 'Compute.', do: script('later.mjs'), out: { done: text }, changes: [] };
   assert.doesNotThrow(() => validateMethod(ok));
-  // Reading with a browser needs its controls but changes nothing to observe.
+  // A browser step must say how its change is observed, or why nothing is observed.
   const reading = method(); reading.environment.web = { type: 'browser', description: 'Browser.' };
   reading.steps.read = { name: 'Read', do: { kind: 'agent', model: 'default', prompt: 'Read.', browser: 'environment.web' }, out: { notes: text }, changes: ['environment.web'] };
+  assert.throws(() => validateMethod(reading), /require effects.*or give no_effect_reason/);
+  reading.steps.read.no_effect_reason = 'Reads pages only; submits and posts nothing.';
   assert.doesNotThrow(() => validateMethod(reading));
+  for (const [edit, pattern] of [
+    [m => { m.steps.send.no_effect_reason = 'x'; }, /effects or no_effect_reason, not both/],
+    [m => { m.steps.send.effects.delivered.observe = { kind: 'file', connection: 'mailbox', path: 'x' }; }, /has its own judge/],
+    [m => { m.steps.send.effects.delivered = { ...m.steps.send.effects.delivered, judge: undefined, fixtures: undefined, observe: { kind: 'file', connection: 'mail', path: 'x' } }; delete m.steps.send.effects.delivered.judge; delete m.steps.send.effects.delivered.fixtures; }, /role: observer/],
+    [m => { const e = m.steps.send.effects.delivered; delete e.judge; delete e.fixtures; e.observe = { kind: 'file', connection: 'mailbox', path: 'out/{inputs.missing}.txt' }; m.environment.mailbox.type = 'files'; }, /does not bind/],
+    [m => { const e = m.steps.send.effects.delivered; delete e.judge; delete e.fixtures; e.observe = { kind: 'sqlite', connection: 'mailbox', database: 'x.db', query: 'select 1', expect: { rows: 1 } }; }, /reads a files connection/],
+    [m => { delete m.steps.send.effects.delivered.judge; }, /needs a judge and fixtures/],
+  ]) { const m = method(); edit(m); assert.throws(() => validateMethod(m), pattern); }
 });
 
 test('a judge that cannot report a contradiction fails before any action runs', async t => {
@@ -188,4 +200,93 @@ test('after an action fails, the runtime observes its effects before anyone retr
   assert.equal(ledger[0].action_outcome, 'indeterminate');
   assert.equal(result.effects.effects[0].action_outcome, 'indeterminate');
   assert.match(result.recovery, /Observed after the failed action: send\/0\/delivered confirmed \(the change happened; do not retry it\)/);
+});
+
+// Built-in observers: shapes taken from real Methods (a SQLite ledger, a local folder, a game API).
+async function builtinSetup(t, step, environment, files = {}) {
+  const dir = await mkdtemp(join(tmpdir(), 'method-builtin-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  for (const [name, source] of Object.entries(files)) await writeFile(join(dir, name), source);
+  const doc = { format: 'method/3.3', name: 'Builtin', goal: 'Test built-in observers.', inputs: { note: { type: 'text' } },
+    environment: { store: { type: 'files', description: 'Writable store.' }, store_reader: { type: 'files', description: 'Same store, read only.', role: 'observer' },
+      game: { type: 'service', description: 'Game.' }, game_reader: { type: 'service', description: 'Game, observe only.', role: 'observer' } },
+    steps: { act: { name: 'Act', purpose: 'Change the store or the game.', in: { note: 'inputs.note' }, do: script('act.mjs'), out: { receipt: text }, changes: [step.changes], effects: step.effects, limits: { timeout_ms: 5000 } } },
+    result: 'receipt' };
+  const file = join(dir, 'b.method'); await writeFile(file, JSON.stringify(doc));
+  let n = 0;
+  return { dir, run: (inputs, extra = {}) => runMethod(file, config({ store: dir, store_reader: dir, game: 'http://127.0.0.1:9/', game_reader: 'http://127.0.0.1:9/', ...environment(dir) }), { runDir: join(dir, `run-${++n}`), inputs, ...extra }).then(result => ({ result, runDir: join(dir, `run-${n}`) })) };
+}
+
+test('a sqlite observer finds the written row by business key, and reports a duplicate from a retry', async t => {
+  const act = `import{DatabaseSync}from"node:sqlite";import{readFileSync}from"node:fs";const a=JSON.parse(readFileSync(0,"utf8"));const env=JSON.parse(process.env.METHOD_ENVIRONMENT);
+const db=new DatabaseSync(env.store+"/memory.sqlite");db.exec("create table if not exists memory(id integer primary key, note text)");
+const times=a.note.startsWith("twice")?2:a.note.startsWith("none")?0:1;for(let i=0;i<times;i++)db.prepare("insert into memory(note) values (?)").run(a.note);console.log(JSON.stringify({receipt:"row saved"}))`;
+  const effects = { stored: { intent: 'One memory row holds the exact words.', in: { note: 'inputs.note' },
+    observe: { kind: 'sqlite', connection: 'store_reader', database: 'memory.sqlite', query: 'SELECT id FROM memory WHERE note = :note', params: { note: '{inputs.note}' }, expect: { rows: 1 } },
+    schedule: { first: '0s', horizon: '1s' }, confirm: 'positive', blocking: true } };
+  const { run } = await builtinSetup(t, { changes: 'environment.store', effects }, dir => ({ store: dir, store_reader: dir }), { 'act.mjs': `process.removeAllListeners("warning");${act}` });
+  assert.equal((await run({ note: 'loved it, 4 stars' })).result.status, 'completed');
+  const twice = await run({ note: 'twice: watched it' });
+  assert.equal(twice.result.code, 'effect_contradicted'); assert.match(twice.result.error, /2 matching rows; at most 1 intended \(a duplicate\)/);
+  // A row that never appears is unconfirmed: the runtime cannot tell "slow" from "never".
+  const none = await run({ note: 'none: never saved' });
+  assert.equal(none.result.status, 'unconfirmed');
+});
+
+test('a file observer confirms a local write without any script or fixture', async t => {
+  const act = `import{readFileSync,writeFileSync,mkdirSync}from"node:fs";const a=JSON.parse(readFileSync(0,"utf8"));const env=JSON.parse(process.env.METHOD_ENVIRONMENT);
+if(!a.note.startsWith("skip")){mkdirSync(env.store+"/reports",{recursive:true});writeFileSync(env.store+"/reports/result.md","# Result\\n"+a.note)}console.log(JSON.stringify({receipt:"saved"}))`;
+  const effects = { saved: { intent: 'The report file holds the note.', in: { note: 'inputs.note' },
+    observe: { kind: 'file', connection: 'store_reader', path: 'reports/result.md', expect: { contains: '{inputs.note}' } },
+    schedule: { first: '0s', horizon: '1s' }, confirm: 'positive', blocking: true } };
+  const { run } = await builtinSetup(t, { changes: 'environment.store', effects }, dir => ({ store: dir, store_reader: dir }), { 'act.mjs': act });
+  const ok = await run({ note: 'Ada owes a draft' });
+  assert.equal(ok.result.status, 'completed'); assert.equal(ok.result.effects.confirmed, 1);
+  // The step reported success but wrote nothing; the file still holds the earlier text.
+  const stale = await run({ note: 'skip this' });
+  assert.equal(stale.result.code, 'effect_contradicted'); assert.match(stale.result.error, /does not contain the intended text/);
+});
+
+test('an http observer judges a trend over several readings, like continued game production', async t => {
+  let produced = 0, running = true;
+  const server = createServer((req, res) => { let b = ''; req.on('data', c => b += c); req.on('end', () => {
+    if (JSON.parse(b || '{}').action === 'observe') { if (running) produced += 5; res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true, state: { tick: produced * 240, iron_plates_produced: produced } })); }
+    else { res.end('{"ok":true}'); }
+  }); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const url = `http://127.0.0.1:${server.address().port}/`;
+  const effects = { producing: { intent: 'The chain keeps producing iron plates.',
+    observe: { kind: 'http', connection: 'game_reader', path: '/', method: 'POST', body: { action: 'observe' }, expect: { fields: { 'state.iron_plates_produced': { increases: true } } } },
+    schedule: { first: '0s', then: ['1s'], horizon: '2s' }, confirm: 'positive' } };
+  const { run } = await builtinSetup(t, { changes: 'environment.game', effects }, () => ({ game: url, game_reader: url }), { 'act.mjs': 'console.log(JSON.stringify({receipt:"ready"}))' });
+  const good = await run({ note: 'x' });
+  assert.equal(good.result.status, 'completed'); assert.equal(good.result.effects.confirmed, 1);
+  assert.deepEqual((await readLedger(good.runDir)).map(e => e.verdict), ['pending', 'pending', 'pending', 'confirmed']);
+  running = false;
+  const stopped = await run({ note: 'x' });
+  assert.equal(stopped.result.code, 'effect_contradicted'); assert.match(stopped.result.error, /stopped increasing/);
+});
+
+test('a declared waiver is recorded with the run', async t => {
+  const doc = method();
+  delete doc.steps.send.effects; doc.steps.send.no_effect_reason = 'The outbox is a local test folder that the next step reads.';
+  const { run, events } = await setup(t, doc);
+  const { result, runDir } = await run({ to: 'ap@example.com' });
+  assert.equal(result.status, 'completed');
+  assert.deepEqual(result.unobserved_changes, [{ step: 'send', reason: 'The outbox is a local test folder that the next step reads.', changes: ['environment.mail'] }]);
+  assert.ok((await events(runDir)).some(e => e.event === 'effects.waived'));
+});
+
+test('a script judge receives earlier readings and whether this is the last one', async t => {
+  const judge = `import{readFileSync}from"node:fs";const a=JSON.parse(readFileSync(0,"utf8"));
+if(a.observations.length===0)console.log(JSON.stringify({verdict:"no_evidence",reason:"none",evidence:[]}));
+else if(a.observations[0].source==="dsn")console.log(JSON.stringify({verdict:"contradicted",reason:"dsn",evidence:[]}));
+else console.log(JSON.stringify({verdict:a.final&&a.previous.length>=1?"confirmed":"no_evidence",reason:"seen "+(a.previous.length+1)+" final "+a.final,evidence:[]}))`;
+  const observe = `console.log(JSON.stringify({observations:[{source:"delivered",ref:"r"}]}))`;
+  const { run } = await setup(t, method({ confirm: 'positive', schedule: { first: '0s', then: ['1s'], horizon: '2s' } }), { 'judge.mjs': judge, 'observe.mjs': observe },
+    { 'contradicted.json': fixtures['contradicted.json'], 'empty.json': fixtures['empty.json'], 'confirmed.json': { ...fixtures['confirmed.json'], previous: [{ observations: [] }], final: true } });
+  const { result, runDir } = await run({ to: 'ap@example.com' });
+  assert.equal(result.effects.confirmed, 1);
+  assert.deepEqual((await readLedger(runDir)).slice(1).map(e => e.reason), ['seen 1 final false', 'seen 2 final false', 'seen 3 final true']);
 });

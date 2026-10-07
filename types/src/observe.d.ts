@@ -33,9 +33,15 @@ export function observeRun(runDir: string, options?: {
         observations: string;
         observations_sha256: string;
         observer: {
+            builtin: any;
+            source: string;
+            observe?: undefined;
+            judge?: undefined;
+        } | {
             observe: any;
             judge: any;
             source: string;
+            builtin?: undefined;
         };
     }[];
     changed: boolean;

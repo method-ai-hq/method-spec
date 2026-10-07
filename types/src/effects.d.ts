@@ -35,9 +35,9 @@ export function nextObservation(effect: any, completedAt: any, after: any): stri
 export function verdictFor(judgment: any, final: any, effect: any): any;
 /**
  * Observe one effect once and return its ledger entry. With replay observations, only the judge runs.
- * @param {{effect: any, key: string, token: string, inputs: any, attempt: number, actionOutcome: string, completedAt: string, run: (exec: any, input: any, role: string) => Promise<{output: any}>, replay?: any[] | undefined, final?: boolean, runDir?: string, now?: Date}} options
+ * @param {{effect: any, key: string, token: string, inputs: any, attempt: number, actionOutcome: string, completedAt: string, run: (exec: any, input: any, role: string) => Promise<{output: any}>, replay?: any[] | undefined, final?: boolean, runDir?: string, now?: Date, previous?: any[]}} options
  */
-export function observeEffect({ effect, key, token, inputs, attempt, actionOutcome, completedAt, run, replay, final, runDir, now }: {
+export function observeEffect({ effect, key, token, inputs, attempt, actionOutcome, completedAt, run, replay, final, runDir, now, previous }: {
     effect: any;
     key: string;
     token: string;
@@ -52,6 +52,7 @@ export function observeEffect({ effect, key, token, inputs, attempt, actionOutco
     final?: boolean;
     runDir?: string;
     now?: Date;
+    previous?: any[];
 }): Promise<{
     final: boolean;
     completed_at: string;
@@ -73,11 +74,22 @@ export function observeEffect({ effect, key, token, inputs, attempt, actionOutco
     observations: string;
     observations_sha256: string;
     observer: {
+        builtin: any;
+        source: string;
+        observe?: undefined;
+        judge?: undefined;
+    } | {
         observe: any;
         judge: any;
         source: string;
+        builtin?: undefined;
     };
 }>;
+/** Earlier readings of one effect, oldest first. */
+export function previousObservations(runDir: any, key: any): Promise<{
+    observed_at: any;
+    observations: any;
+}[]>;
 export function readLedger(runDir: any): Promise<any[]>;
 /** The current entry of each effect is its last entry. */
 export function currentEffects(entries: any): any[];
@@ -109,6 +121,7 @@ export function statusWithEffects(base: any, summary: any): any;
 /** Wait until an ISO time, within a deadline. Returns false when the wait does not fit. */
 export function waitUntil(time: any, deadline: any, signal: any): Promise<boolean>;
 export function effectKey(step: any, iteration: any, name: any): string;
+export function isBuiltin(exec: any): boolean;
 export function effectEntries(method: any): {
     id: string;
     step: any;

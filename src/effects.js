@@ -1,5 +1,6 @@
 import { readFile, readdir, appendFile, mkdir } from 'node:fs/promises';
 import { resolve as pathResolve, posix } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { assertSchema, fail, safeData } from './validate.js';
 import { observationSchema, judgmentSchema } from './schema.js';
@@ -8,6 +9,8 @@ import { containedFile, executeProcess, hash, writeJSON } from './io.js';
 
 /** One effect of one accepted iteration. */
 export const effectKey = (step, iteration, name) => `${step}/${iteration}/${name}`;
+const builtinScript = fileURLToPath(new URL('./observers/builtin.mjs', import.meta.url));
+export const isBuiltin = exec => exec.kind !== 'run';
 export const effectEntries = method => Object.entries(method.steps).flatMap(([id, step]) => Object.entries(step.effects ?? {}).map(([name, effect]) => ({ id, step, name, effect })));
 /** Connections an action may see; observer credentials and endpoints go only to observers. */
 export function connectionsFor(method, environment = {}, role) {
@@ -19,6 +22,7 @@ export function connectionsFor(method, environment = {}, role) {
 export async function fixtureFiles(method, sourceRoot) {
   const files = [];
   for (const { effect } of effectEntries(method)) {
+    if (!effect.fixtures) continue;
     let names;
     try { names = await readdir(await containedFile(sourceRoot, effect.fixtures)); }
     catch (error) { fail(`Cannot read effect fixtures ${effect.fixtures}: ${error.message}`, 'preflight'); }
@@ -34,6 +38,7 @@ export async function fixtureFiles(method, sourceRoot) {
 export async function testFixtures(method, bundle, manifest, judge) {
   const results = [];
   for (const { id, name, effect } of effectEntries(method)) {
+    if (!effect.fixtures) continue;
     const files = Object.keys(manifest).filter(file => posix.dirname(file) === posix.normalize(effect.fixtures) && file.endsWith('.json'));
     const where = `${id}.effects.${name}`;
     const expected = new Set();
@@ -42,7 +47,7 @@ export async function testFixtures(method, bundle, manifest, judge) {
       safeData(fixture);
       if (!['confirmed', 'contradicted', 'no_evidence', 'unobservable'].includes(fixture.expect)) fail(`${file}: expect must be confirmed, contradicted, no_evidence or unobservable`, 'effect_fixture_failed');
       assertSchema(observationSchema, { observations: fixture.observations }, `${file} observations`);
-      const judgment = await judge(effect, { token: fixture.token ?? 'mop_fixture', intent: effect.intent, inputs: fixture.inputs ?? {}, observations: fixture.observations });
+      const judgment = await judge(effect, { token: fixture.token ?? 'mop_fixture', intent: effect.intent, inputs: fixture.inputs ?? {}, observations: fixture.observations, previous: fixture.previous ?? [], final: fixture.final ?? false });
       if (judgment.verdict !== fixture.expect) fail(`${where}: fixture ${file} expects ${fixture.expect}, but the judge returned ${judgment.verdict} (${judgment.reason})`, 'effect_fixture_failed');
       expected.add(fixture.observations.length ? fixture.expect : 'empty:' + fixture.expect);
       results.push({ effect: `${id}/${name}`, fixture: file, verdict: judgment.verdict });
@@ -58,18 +63,23 @@ export async function testFixtures(method, bundle, manifest, judge) {
 
 /** Run an observer script. Observers get observer connections and the token; judges get no connections. */
 export async function runObserverScript({ exec, input, role, token, bundle, runtimeInfo, connections, processPath, signal, maxBytes }) {
-  const profile = runtimeInfo[exec.runtime];
-  if (!profile) fail(`Unknown runtime: ${exec.runtime}`, 'preflight');
   const env = { PATH: processPath ?? process.env.PATH ?? '', LANG: 'C.UTF-8' };
-  if (role === 'fetch') {
-    env.METHOD_ENVIRONMENT = JSON.stringify(connections);
-    env.METHOD_EFFECT_TOKEN = token;
-    for (const key of profile.env ?? []) {
+  if (role === 'fetch') { env.METHOD_ENVIRONMENT = JSON.stringify(connections); env.METHOD_EFFECT_TOKEN = token; }
+  let command, args;
+  if (isBuiltin(exec)) {
+    // A built-in observer runs in its own Node process, like a script observer.
+    command = process.execPath; args = ['--no-warnings', builtinScript, role]; input = { ...input, spec: exec };
+    if (role === 'fetch' && process.env.METHOD_OBSERVER_TOKEN) env.METHOD_OBSERVER_TOKEN = process.env.METHOD_OBSERVER_TOKEN;
+  } else {
+    const profile = runtimeInfo[exec.runtime];
+    if (!profile) fail(`Unknown runtime: ${exec.runtime}`, 'preflight');
+    if (role === 'fetch') for (const key of profile.env ?? []) {
       if (!process.env[key]) fail(`Missing runtime environment variable: ${key}`, 'preflight');
       env[key] = process.env[key];
     }
+    command = profile.command; args = [...(profile.args ?? []), await containedFile(bundle, exec.entrypoint), ...(exec.args ?? [])];
   }
-  const result = await executeProcess({ command: profile.command, args: [...(profile.args ?? []), await containedFile(bundle, exec.entrypoint), ...(exec.args ?? [])], cwd: bundle, input, env, signal, maxBytes });
+  const result = await executeProcess({ command, args, cwd: bundle, input, env, signal, maxBytes });
   let output;
   try { output = JSON.parse(result.output); } catch { fail(`${exec.entrypoint} must return one JSON object`, 'invalid_output'); }
   safeData(output);
@@ -95,15 +105,16 @@ export const isFinal = entry => entry.final === true;
 
 /**
  * Observe one effect once and return its ledger entry. With replay observations, only the judge runs.
- * @param {{effect: any, key: string, token: string, inputs: any, attempt: number, actionOutcome: string, completedAt: string, run: (exec: any, input: any, role: string) => Promise<{output: any}>, replay?: any[] | undefined, final?: boolean, runDir?: string, now?: Date}} options
+ * @param {{effect: any, key: string, token: string, inputs: any, attempt: number, actionOutcome: string, completedAt: string, run: (exec: any, input: any, role: string) => Promise<{output: any}>, replay?: any[] | undefined, final?: boolean, runDir?: string, now?: Date, previous?: any[]}} options
  */
-export async function observeEffect({ effect, key, token, inputs, attempt, actionOutcome, completedAt, run, replay, final, runDir, now }) {
+export async function observeEffect({ effect, key, token, inputs, attempt, actionOutcome, completedAt, run, replay, final, runDir, now, previous = [] }) {
   const observedAt = (now ?? new Date()).toISOString();
   const atHorizon = final ?? Date.parse(observedAt) >= Date.parse(horizonAt(effect, completedAt));
   let observations, judgment, error;
   try {
     observations = replay ?? (await run(effect.observe, { token, intent: effect.intent, inputs, attempt, action_outcome: actionOutcome }, 'fetch')).output.observations;
-    judgment = (await run(effect.judge, { token, intent: effect.intent, inputs, observations }, 'judge')).output;
+    // The judge sees earlier readings too, so it can judge a trend such as continued production.
+    judgment = (await run(effect.judge ?? effect.observe, { token, intent: effect.intent, inputs, observations, previous, final: atHorizon }, 'judge')).output;
   } catch (failure) {
     error = { code: failure.code ?? 'observer_failed', message: failure.message };
     judgment = { verdict: 'unobservable', reason: failure.message, evidence: [] };
@@ -120,13 +131,22 @@ export async function observeEffect({ effect, key, token, inputs, attempt, actio
   return {
     effect: key, token, inputs, action_outcome: actionOutcome, attempt, observed_at: observedAt, verdict,
     reason: judgment.reason, evidence: judgment.evidence ?? [], observations: observationsFile, observations_sha256: observations ? hash(observations) : null,
-    observer: { observe: effect.observe.entrypoint, judge: effect.judge.entrypoint, source: replay ? 'replay' : 'live' },
+    observer: isBuiltin(effect.observe) ? { builtin: effect.observe.kind, source: replay ? 'replay' : 'live' } : { observe: effect.observe.entrypoint, judge: effect.judge.entrypoint, source: replay ? 'replay' : 'live' },
     ...(error ? { error } : {}),
     final: finalVerdict, completed_at: completedAt, horizon_at: horizonAt(effect, completedAt),
     next_observation_at: finalVerdict ? null : nextObservation(effect, completedAt, observedAt),
   };
 }
 
+/** Earlier readings of one effect, oldest first. */
+export async function previousObservations(runDir, key) {
+  const out = [];
+  for (const entry of (await readLedger(runDir)).filter(entry => entry.effect === key && entry.observations)) {
+    try { out.push({ observed_at: entry.observed_at, observations: JSON.parse(await readFile(pathResolve(runDir, entry.observations), 'utf8')).observations }); }
+    catch { /* A missing file leaves a gap; the judge sees the readings that remain. */ }
+  }
+  return out;
+}
 export async function readLedger(runDir) {
   let text;
   try { text = await readFile(pathResolve(runDir, 'effects.jsonl'), 'utf8'); }

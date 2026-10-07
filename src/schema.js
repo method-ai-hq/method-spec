@@ -15,12 +15,21 @@ const call = object({ kind: { const: 'call' }, model: name, prompt: text });
 const agent = object({ kind: { const: 'agent' }, model: name, prompt: text, tools: list(name), browser: ref }, ['kind', 'model', 'prompt']);
 const classify = object({ kind: { const: 'classify' }, question: text, options: { ...map(text), minProperties: 2, maxProperties: 255 } });
 const duration = { type: 'string', pattern: '^(0|[1-9][0-9]{0,6})(s|m|h|d)$' };
+const count = { type: 'integer', minimum: 0 };
+// Built-in observers need no script and no fixtures; the runtime's own tests cover their judgment.
+const fieldExpectation = { anyOf: [{ type: ['string', 'number', 'boolean', 'null'] }, object({ at_least: { type: 'number' }, at_most: { type: 'number' }, increases: { const: true } }, [])] };
+const builtin = [
+  object({ kind: { const: 'file' }, connection: name, path: text, expect: object({ exists: { type: 'boolean' }, contains: text, sha256: text }, []) }, ['kind', 'connection', 'path']),
+  object({ kind: { const: 'sqlite' }, connection: name, database: text, query: text, params: map({ type: ['string', 'number'] }), expect: object({ rows: count, min_rows: count, max_rows: count }, []) }, ['kind', 'connection', 'database', 'query', 'expect']),
+  object({ kind: { const: 'http' }, connection: name, path: text, method: { enum: ['GET', 'POST'] }, body: {},
+    expect: object({ status: { type: 'array', items: { type: 'integer' }, minItems: 1 }, fields: { type: 'object', propertyNames: { type: 'string', pattern: '^[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)*$' }, additionalProperties: fieldExpectation, minProperties: 1 } }, ['fields']) }, ['kind', 'connection', 'path', 'expect']),
+];
 // An effect contract: an observer reads the changed system and a judge decides what the observations show.
 const effect = object({
-  intent: text, in: map(ref), observe: run, judge: run, fixtures: path,
+  intent: text, in: map(ref), observe: { oneOf: [run, ...builtin] }, judge: run, fixtures: path,
   schedule: object({ first: duration, then: { type: 'array', items: duration, maxItems: 20 }, horizon: duration }, ['horizon']),
   confirm: { enum: ['positive', 'unrefuted_at_horizon'] }, retry: { enum: ['never', 'idempotent'] }, blocking: { type: 'boolean' },
-}, ['intent', 'observe', 'judge', 'fixtures', 'schedule', 'confirm']);
+}, ['intent', 'observe', 'schedule', 'confirm']);
 const exact = [
   object({ equals: object({ actual: ref, expected: ref }) }),
   object({ count: object({ value: ref, min: { type: 'integer', minimum: 0 }, max: { type: 'integer', minimum: 0 } }, ['value']) }),
@@ -49,7 +58,7 @@ export const methodSchema = {
         do: { $ref: '#/$defs/execution' }, ask: text, check: { $ref: '#/$defs/check' },
         each: { ...map(ref), minProperties: 1, maxProperties: 1 },
         repeat: object({ max_iterations: positive, until: ref }, ['max_iterations']), when: ref,
-        after: { anyOf: [name, list(name)] }, changes: list(ref), effects: { ...map(effect), minProperties: 1 },
+        after: { anyOf: [name, list(name)] }, changes: list(ref), effects: { ...map(effect), minProperties: 1 }, no_effect_reason: text,
         limits: object({ timeout_ms: positive, max_agent_turns: positive, max_model_requests: positive }, []),
       }, []),
       oneOf: [{ required: ['do'], not: { required: ['ask'] } }, { required: ['ask'], not: { required: ['do'] } }],
@@ -63,7 +72,7 @@ export const methodSchema = {
 export const configSchema = {
   $schema: 'http://json-schema.org/draft-07/schema#',
   ...object({
-    limits: object({ timeout_ms: positive, max_model_requests: { type: 'integer', minimum: 0 }, max_invocations: positive, max_tool_calls: { type: 'integer', minimum: 0 }, max_output_bytes: positive, max_request_bytes: positive }, []),
+    limits: object({ timeout_ms: positive, max_model_requests: { type: 'integer', minimum: 0 }, max_invocations: positive, max_tool_calls: { type: 'integer', minimum: 0 }, max_output_bytes: positive, max_request_bytes: positive, effect_wait_ms: { type: 'integer', minimum: 0 } }, []),
     step_defaults: object({ timeout_ms: positive, max_agent_turns: positive, max_model_requests: positive }, []),
     allow_local_processes: { type: 'boolean' },
     classification: object({ provider: {const: 'typesafe'}, model: text }),
@@ -75,5 +84,6 @@ export const configSchema = {
 };
 
 export const observationSchema = object({ observations: { type: 'array', maxItems: 1000, items: object({ source: text, ref: text, observed_at: text, data: {} }, ['source', 'ref']) } });
+export const builtinObserverKinds = ['file', 'sqlite', 'http'];
 export const judgmentSchema = object({ verdict: { enum: ['confirmed', 'contradicted', 'no_evidence', 'unobservable'] }, reason: { type: 'string' }, evidence: { type: 'array', items: { type: 'string' } } });
 export const checkResultSchema = object({ status: { enum: ['pass', 'fail', 'unknown'] }, reason: { type: 'string' }, evidence: { type: 'array', items: { type: 'string' } } });
