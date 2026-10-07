@@ -1,8 +1,8 @@
 # Method reference
 
-Implemented by `@withmethod/runtime` 0.9.1. The full Method SDK uses this runtime at a pinned Git revision. New methods use this format under the same Method product and command.
+Implemented by `@withmethod/runtime` 0.10.0. The full Method SDK uses this runtime at a pinned Git revision. New methods use this format under the same Method product and command.
 
-Use `format: method/3.2` for new documents. Existing `method/3.1` documents retain their validation rules. The machine-readable grammar is [method-3.schema.json](method-3.schema.json). Operator configuration uses [runtime-config.schema.json](runtime-config.schema.json). The validator also checks references, dependencies, data declarations, loop conditions, and effects; JSON Schema alone is insufficient.
+Use `format: method/3.3` for new documents. Existing `method/3.1` and `method/3.2` documents retain their validation rules. Method 3.3 adds effect contracts: an external change is confirmed by an observer, not by the action's receipt. The machine-readable grammar is [method-3.schema.json](method-3.schema.json). Operator configuration uses [runtime-config.schema.json](runtime-config.schema.json). The validator also checks references, dependencies, data declarations, loop conditions, and effects; JSON Schema alone is insufficient.
 
 ## Installation and commands
 
@@ -23,13 +23,15 @@ method validate example.method --config runtime.json
 method run example.method --config runtime.json --inputs inputs.json
 method schema method
 method schema config
+method observe RUN_DIR
+method test example.method
 ```
 
 The runtime package installs no command. Contributors can run `node src/cli.js` in this checkout. The contributor harness accepts `--agent codex|claude`; the SDK also supplies account commands, automatic setup, and background workers.
 
 `validate` checks the Method and, when supplied, the configuration grammar. `run` additionally resolves profiles, tools, capabilities, environment bindings, and bundle files. A validation pass alone does not establish executable setup or task correctness.
 
-`run` prints status, elapsed time, model request count, and the run directory. Read `result.json` in that directory for the result. Exit codes are 0 for completion, 1 for failure, and 2 for a human-input request. A new run needs a new directory. Use `--resume` to continue the same saved run.
+`run` prints status, elapsed time, model request count, and the run directory. Read `result.json` in that directory for the result. Exit codes are 0 for completion, 1 for failure, 2 for a human-input request, and 3 for an unconfirmed run: every step finished, but an observer could not confirm an external change by its horizon. A new run needs a new directory. Use `--resume` to continue the same saved run.
 
 ## Document and data
 
@@ -168,7 +170,113 @@ They return exactly:
 
 Status is `pass`, `fail`, or `unknown`. Evidence entries are string references, not automatic proofs. The incoming evidence list is empty in this release; observations can be bound as data or obtained through a trusted read tool. Script checks run as trusted local code and are not isolated from the action's filesystem.
 
-Output types are always checked. An omitted task check is recorded as `unchecked`, not `pass`. An external `changes: [environment.game]` declaration requires an explicit check in this release. A check of an action's completion does not establish that it was strategically useful.
+Output types are always checked. An omitted task check is recorded as `unchecked`, not `pass`. In `method/3.1` and `method/3.2`, an external `changes: [environment.game]` declaration requires an explicit check. In `method/3.3` it requires effects (next section); a check then covers only outputs and state. A check of an action's completion does not establish that it was strategically useful.
+
+## Effect contracts
+
+A success status, receipt, or returned ID shows only that a service accepted a request. In `method/3.3`, each step that changes an environment declares the external result it intends, and an observer reads the changed system to confirm it. The runtime, not the Method or the model, decides from those observations whether the run is complete.
+
+```yaml
+environment:
+  mail: {type: service, description: Outgoing mail.}
+  mailbox: {type: service, description: Delivery reports and bounces, read-only., role: observer}
+steps:
+  send_summary:
+    name: Send summary
+    purpose: Send the summary to the AP lead. Puts METHOD_OPERATION_ID in the Message-ID.
+    in: {to: inputs.ap_lead, summary: summary}
+    do: {kind: run, runtime: node, entrypoint: helpers/send.mjs}
+    out: {receipt: {type: text, description: Provider receipt.}}
+    changes: [environment.mail]
+    effects:
+      delivered:
+        intent: The AP lead's mail server accepts the summary and does not return it.
+        in: {to: inputs.ap_lead}
+        observe: {kind: run, runtime: node, entrypoint: observers/mail-fetch.mjs}
+        judge: {kind: run, runtime: node, entrypoint: observers/mail-judge.mjs}
+        fixtures: observers/fixtures/delivered
+        schedule: {first: 60s, then: [10m, 1h, 1d], horizon: 5d}
+        confirm: unrefuted_at_horizon
+        retry: never
+        blocking: false
+```
+
+Rules in `method/3.3`:
+
+- Every `run` and `agent` step states `changes`. Use `changes: []` for a step that changes nothing. This is a declaration: the runtime cannot see what a trusted local script does.
+- A step with an environment in `changes` has at least one effect, and a step with effects changes an environment.
+- An environment with `role: observer` is visible only to effect observers. Actions cannot bind it, change it, or see its configured value in `METHOD_ENVIRONMENT`. Give observers separate, read-only credentials through their runtime profile.
+- An effect's `in` cannot reference its own step's outputs. An observer never sees the receipt. It receives the **correlation token**: the action's `METHOD_OPERATION_ID`. Put the token where the changed system keeps a reference (a message header, an idempotency key, a note field). For an `agent` action with effects, the runtime adds the token to the prompt.
+- `schedule` offsets count from the action's completion and must increase. The last offset, `horizon`, is the time after which no new evidence is expected. Units are `s`, `m`, `h`, and `d`. `first` defaults to `0s`.
+
+**Observer and judge.** `observe` reads the changed system. It receives `{token, intent, inputs, attempt, action_outcome}`, the observer connections in `METHOD_ENVIRONMENT`, the token in `METHOD_EFFECT_TOKEN`, and its runtime profile's variables. It does not receive `METHOD_OUTPUT_DIR`. It returns `{"observations": [{"source", "ref", "observed_at"?, "data"?}]}`. `judge` receives `{token, intent, inputs, observations}` with no connections and no profile variables, and returns `{"verdict", "reason", "evidence"}`. The verdict is `confirmed` (positive evidence of the intended result), `contradicted` (evidence that it did not happen), `no_evidence`, or `unobservable`. Keep the judge a deterministic script: it is tested on fixtures.
+
+**Fixtures.** `fixtures` names a folder of JSON files: `{"observations": [...], "expect": "<verdict>", "inputs"?: {}, "token"?: "..."}`. The folder is part of the bundle. Before any step runs, the runtime runs every judge on every fixture. The run fails with `effect_fixture_failed` unless each fixture gives its expected verdict and the folder has a `contradicted` case and an empty case (`observations: []`) that gives `no_evidence`. With `confirm: positive`, it also needs a `confirmed` case. A judge that cannot report a failure proves nothing.
+
+**Verdicts.** The runtime maps each judgment to a verdict:
+
+| Verdict | Meaning | Final |
+|---|---|---|
+| `pending` | No evidence yet, before the horizon. | No |
+| `confirmed` | Positive evidence of the intended result. | Yes |
+| `contradicted` | Evidence that the intended result did not happen. | Yes |
+| `unrefuted` | The horizon passed with no evidence of failure, and `confirm: unrefuted_at_horizon`. Not proven. | Yes |
+| `unknown` | No observation was possible, or the horizon passed with no positive evidence and `confirm: positive`. | At the horizon |
+
+Absence of evidence never gives `confirmed`. For mail to other domains, positive evidence is usually not available; `unrefuted_at_horizon` with a horizon of about 5 days matches mail servers' retry periods.
+
+**Ledger and status.** The runtime writes `effects.jsonl` in the run directory: one entry per registration or observation, with the token, observer inputs, action outcome, attempt, time, verdict, reason, evidence references, the SHA-256 of the observations, the next observation time, and the horizon. Raw observations are saved under `effects/`. The current verdict of an effect is its last entry. The run's status follows the worst verdict:
+
+| Status | Condition | Exit code |
+|---|---|---|
+| `failed` (`effect_contradicted`) | An effect is contradicted. No `result.json` is written. | 1 |
+| `unconfirmed` (`effect_unconfirmed`) | No contradiction, and an effect is `unknown` at its horizon. `result.json` is written. | 3 |
+| `completed` | Every other case. `effects.pending` counts effects still before their horizon. | 0 |
+
+The summary and the run result carry an `effects` summary. Each effect gets its first observation before the run reports, when it fits in the run deadline. `method observe RUN_DIR` makes the later observations that are due; `method observe --pending ROOT` does this for each run under ROOT with open effects. Schedule it, for example hourly. It runs only observers and judges, appends to the ledger and to `events.jsonl`, and records `run.status_changed` when new evidence changes the status, for example from `completed` to `failed` after a late bounce.
+
+**Blocking and retry.** With `blocking: true`, the runtime waits for the first observation before later steps start. A contradiction then stops the run with `effect_contradicted`, and the step stays unaccepted, so resuming it needs `--retry STEP:ITERATION`. With `retry: idempotent` as well, the runtime first repeats the action once with the same `METHOD_OPERATION_ID` and observes again. Declare `idempotent` only when the service drops a repeated request with the same key. The runtime never repeats an action because an effect is `pending` or `unknown`.
+
+**Failed actions.** When an action with effects fails, for example by a timeout or a crash, the runtime observes each effect at once with `action_outcome: indeterminate`. The failure's recovery text lists the verdicts. A `confirmed` verdict means the change happened, and the action must not be retried.
+
+Limits: observers are trusted local processes, not an OS sandbox. A read can have side effects (an IMAP fetch can mark mail as read). The separation of actions and observers is least privilege, not proof.
+
+## Recorded cases
+
+A case is a recorded run plus an expectation about it. It turns a correction into a test that later versions must pass. Cases live in `cases/ID/` next to the Method file and belong to that file name.
+
+```sh
+method case new task.method --run runs/2026-10-07 --id bounce-reported --note "The AP lead's email bounced; the report did not say so." --expect expect.json
+method test task.method
+method test task.method --baseline task-before.method --new bounce-reported
+method case retire task.method old-rule --by new-rule --reason "Policy changed on 2026-10-01."
+```
+
+`case new` reads the run's events and saves `recording.json` (each accepted iteration's inputs and outputs, a key for each step, the run's inputs and initial state, and the run's effect observations), the declared files of its steps, and `case.json` (note, author, source run, expectations, `runs`, `min_pass`, retention date). `--observations FILE` adds observations by effect key (`STEP/ITERATION/NAME`). `--redact FILE` maps recorded text to replacement text everywhere in the recording and the note. Cases cannot be built from runs under `sensitive/`.
+
+Expectations (`--expect` is a JSON list):
+
+- `{"kind": "equals", "ref": "outputs.report", "value": ...}` compares a step output, or `result`.
+- `{"kind": "status", "in": ["failed"]}` checks the run status.
+- `{"kind": "effect", "effect": "send/0/delivered", "verdict": ["contradicted"]}` checks an effect verdict.
+- `{"kind": "predicate", "runtime": "node", "entrypoint": "check.mjs"}` runs a script on `{status, code, result, outputs, effects}` that returns `{"pass": true|false, "reason": "..."}`. The script is copied into the case.
+
+Each expectation can carry `text`, a plain-language statement for people. A case is refused if its expectations pass on an empty result: such a case cannot detect the error.
+
+**Replay.** `method test` runs the Method once per case run, with the recorded inputs. A step whose key (its definition, script files, model profiles, and tools; not its name, reading, purpose, or effects) and inputs match the recording returns the recorded outputs and records `step.replayed`. Other steps run. A step that changed, or whose inputs changed, and that asks a person or changes an environment, cannot run in a test: the case is `unverifiable`. Effects are judged on recorded observations only; observers never read the live system in a test. Without recorded observations, an effect is `not_replayed`. With them, an absence of evidence stays `pending`.
+
+**Results.** A case passes when at least `min_pass` of `runs` runs pass. Use more runs when a changed model step runs live. With `--baseline OLD`, each case also runs on the old version:
+
+| Verdict | Meaning | Blocks the gate |
+|---|---|---|
+| `pass` / `fixed` | Passes on the new version | No |
+| `already_failing` | Fails on both versions | No (listed) |
+| `regression` | Passed on the old version, fails on the new one | Yes |
+| `fail` | Fails, with no baseline | Yes |
+| `unverifiable` | Cannot be replayed on this version | Yes |
+| `not_red` / `not_fixed` | A `--new` case passed before the change, or still fails after it | Yes |
+
+`method test` exits 0 when no case blocks the gate. Retired cases stay on disk with their reason and the case that superseded them, and are not run. Cases past their retention date are listed as expired.
 
 ## Loops and stopping
 

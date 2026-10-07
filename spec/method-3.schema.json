@@ -6,7 +6,8 @@
     "format": {
       "enum": [
         "method/3.1",
-        "method/3.2"
+        "method/3.2",
+        "method/3.3"
       ]
     },
     "name": {
@@ -103,6 +104,9 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 16000
+          },
+          "role": {
+            "const": "observer"
           }
         },
         "required": [
@@ -868,6 +872,179 @@
             "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*|\\.[0-9]+)*$"
           },
           "uniqueItems": true
+        },
+        "effects": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "maxLength": 80,
+            "not": {
+              "enum": [
+                "constructor",
+                "prototype",
+                "__proto__"
+              ]
+            }
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "intent": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 16000
+              },
+              "in": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$",
+                  "maxLength": 80,
+                  "not": {
+                    "enum": [
+                      "constructor",
+                      "prototype",
+                      "__proto__"
+                    ]
+                  }
+                },
+                "additionalProperties": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*|\\.[0-9]+)*$"
+                }
+              },
+              "observe": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "run"
+                  },
+                  "runtime": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$",
+                    "maxLength": 80,
+                    "not": {
+                      "enum": [
+                        "constructor",
+                        "prototype",
+                        "__proto__"
+                      ]
+                    }
+                  },
+                  "entrypoint": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  },
+                  "args": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "kind",
+                  "runtime",
+                  "entrypoint"
+                ],
+                "additionalProperties": false
+              },
+              "judge": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "run"
+                  },
+                  "runtime": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$",
+                    "maxLength": 80,
+                    "not": {
+                      "enum": [
+                        "constructor",
+                        "prototype",
+                        "__proto__"
+                      ]
+                    }
+                  },
+                  "entrypoint": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  },
+                  "args": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "kind",
+                  "runtime",
+                  "entrypoint"
+                ],
+                "additionalProperties": false
+              },
+              "fixtures": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              },
+              "schedule": {
+                "type": "object",
+                "properties": {
+                  "first": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]{0,6})(s|m|h|d)$"
+                  },
+                  "then": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]{0,6})(s|m|h|d)$"
+                    },
+                    "maxItems": 20
+                  },
+                  "horizon": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]{0,6})(s|m|h|d)$"
+                  }
+                },
+                "required": [
+                  "horizon"
+                ],
+                "additionalProperties": false
+              },
+              "confirm": {
+                "enum": [
+                  "positive",
+                  "unrefuted_at_horizon"
+                ]
+              },
+              "retry": {
+                "enum": [
+                  "never",
+                  "idempotent"
+                ]
+              },
+              "blocking": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "intent",
+              "observe",
+              "judge",
+              "fixtures",
+              "schedule",
+              "confirm"
+            ],
+            "additionalProperties": false
+          },
+          "minProperties": 1
         },
         "limits": {
           "type": "object",

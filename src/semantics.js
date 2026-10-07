@@ -96,8 +96,44 @@ export function runLabelType(method) {
   if (!['text', 'number', 'boolean'].includes(def.type)) fail('run_label must select a text, number, or boolean value');
   return def.type;
 }
+const durationUnits = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+/** Milliseconds in a schedule duration such as 60s, 10m, 1h or 5d. */
+export function durationMs(value) { return Number(value.slice(0, -1)) * durationUnits[value.at(-1)]; }
+/** Observation offsets from the action's completion; the last offset is the finality horizon. */
+export function effectSchedule(effect) {
+  const { first = '0s', then = [], horizon } = effect.schedule;
+  return [first, ...then, horizon].map(durationMs);
+}
+const observers = method => new Set(Object.entries(method.environment ?? {}).filter(([, env]) => env.role === 'observer').map(([name]) => `environment.${name}`));
+function validateEffects(method, id, step, globalRef, outputs) {
+  const environmentChanges = (step.changes ?? []).filter(x => x.startsWith('environment.'));
+  if (!step.effects) {
+    if (environmentChanges.length) fail(`${id}: external changes require effects. Declare how an observer confirms each intended change.`);
+    return;
+  }
+  if (!environmentChanges.length) fail(`${id}: effects describe external changes; declare the changed connection in changes`);
+  const observed = observers(method);
+  for (const [name, effect] of Object.entries(step.effects)) {
+    const where = `${id}.effects.${name}`;
+    requiredText(effect.intent, `${where}.intent`, 'State the intended external result.');
+    for (const [alias, ref] of Object.entries(effect.in ?? {})) {
+      if (reserved.has(alias) || alias === 'token') fail(`${where}.in: reserved alias ${alias}`);
+      // An observer receives the correlation token, never the action's receipt.
+      if (own(outputs, ref.split('.')[0])) fail(`${where}.in: an observer cannot read this step's outputs (${ref}); it receives only the correlation token`);
+      if (!observed.has(ref) && ref.startsWith('environment.')) fail(`${where}.in: observers bind only observer connections`);
+      globalRef(ref);
+    }
+    const offsets = effectSchedule(effect);
+    for (let i = 1; i < offsets.length; i++) if (offsets[i] <= offsets[i - 1]) fail(`${where}.schedule: each observation must come after the one before it, and the horizon last`);
+  }
+}
 export function validateSemantics(method, assertData) {
   safeData(method);
+  const current = method.format === 'method/3.3';
+  if (!current) {
+    if (Object.values(method.steps).some(step => step.effects)) fail('effects require method/3.3');
+    if (Object.values(method.environment ?? {}).some(env => env.role)) fail('Environment roles require method/3.3');
+  }
 
   const validateDefs = (defs = {}) => { for (const def of Object.values(defs)) { dataSchema(def); if (own(def, 'default')) assertData(def, def.default); } };
   validateDefs(method.inputs); validateDefs(method.state);
@@ -111,7 +147,7 @@ export function validateSemantics(method, assertData) {
   for (const [id, step] of Object.entries(method.steps)) {
     if (reserved.has(id)) fail(`Reserved step name: ${id}`);
     const outputs = effectiveOutputs(step);
-    if (method.format === 'method/3.2') {
+    if (method.format !== 'method/3.1') {
       if (step.do?.kind === 'run') {
         requiredText(step.name, `${id}.name`, 'Give this script step a name.');
         requiredText(step.purpose, `${id}.purpose`, "Describe this script's rules, result, and external changes.");
@@ -120,7 +156,7 @@ export function validateSemantics(method, assertData) {
       if (step.check?.kind === 'run') requiredText(step.reading?.check, `${id}.reading.check`, 'Describe what this script checks.');
     }
     if (step.do?.kind === 'classify') {
-      if (method.format !== 'method/3.2') fail(`${id}: classify requires method/3.2`);
+      if (method.format === 'method/3.1') fail(`${id}: classify requires method/3.2 or later`);
       requiredText(step.name, `${id}.name`, 'Give this classification step a name.');
       requiredText(step.do.question, `${id}.do.question`, 'Write the classification question.');
       for (const [name, description] of Object.entries(step.do.options)) requiredText(description, `${id}.do.options.${name}`, 'Describe this option.');
@@ -167,7 +203,12 @@ export function validateSemantics(method, assertData) {
       const match = /^environment\.([a-z][a-z0-9_]*)$/.exec(exec.browser);
       if (!match || method.environment?.[match[1]]?.type !== 'browser') fail('Agent browser must refer to a browser environment');
     }
-    if (changes.some(x => x.startsWith('environment.')) && !step.check) fail('External changes require a check');
+    if (current) {
+      if (['run', 'agent'].includes(step.do?.kind) && !own(step, 'changes')) fail(`${id}: state the changes this step can make; use changes: [] when it changes nothing`);
+      const observed = observers(method);
+      for (const ref of [...Object.values(step.in ?? {}), ...Object.values(step.each ?? {}), ...changes]) if (observed.has(ref)) fail(`${id}: only effect observers can use ${ref}`);
+      validateEffects(method, id, step, globalRef, outputs);
+    } else if (changes.some(x => x.startsWith('environment.')) && !step.check) fail('External changes require a check');
     const validate = (prompt, definitions, location) => {
       try { validatePrompt(prompt, definitions, typeAt); }
       catch (error) { fail(`${id}.${location}: ${error.message}`, 'invalid_prompt'); }

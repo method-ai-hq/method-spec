@@ -1,0 +1,185 @@
+import { readFile, readdir, appendFile, mkdir } from 'node:fs/promises';
+import { resolve as pathResolve, posix } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
+import { assertSchema, fail, safeData } from './validate.js';
+import { observationSchema, judgmentSchema } from './schema.js';
+import { effectSchedule } from './semantics.js';
+import { containedFile, executeProcess, hash, writeJSON } from './io.js';
+
+/** One effect of one accepted iteration. */
+export const effectKey = (step, iteration, name) => `${step}/${iteration}/${name}`;
+export const effectEntries = method => Object.entries(method.steps).flatMap(([id, step]) => Object.entries(step.effects ?? {}).map(([name, effect]) => ({ id, step, name, effect })));
+/** Connections an action may see; observer credentials and endpoints go only to observers. */
+export function connectionsFor(method, environment = {}, role) {
+  const observer = name => method.environment?.[name]?.role === 'observer';
+  return Object.fromEntries(Object.entries(environment).filter(([name]) => role === 'observer' ? observer(name) : !observer(name)));
+}
+
+/** Fixture files are part of the bundle, so every run tests the judge that it will use. */
+export async function fixtureFiles(method, sourceRoot) {
+  const files = [];
+  for (const { effect } of effectEntries(method)) {
+    let names;
+    try { names = await readdir(await containedFile(sourceRoot, effect.fixtures)); }
+    catch (error) { fail(`Cannot read effect fixtures ${effect.fixtures}: ${error.message}`, 'preflight'); }
+    files.push(...names.filter(name => name.endsWith('.json')).sort().map(name => posix.join(effect.fixtures, name)));
+  }
+  return files;
+}
+
+/**
+ * Run each judge on its fixtures. A judge must give the expected verdict for each fixture, and must be able to
+ * report a contradiction and an absence of evidence. A judge that cannot fail proves nothing.
+ */
+export async function testFixtures(method, bundle, manifest, judge) {
+  const results = [];
+  for (const { id, name, effect } of effectEntries(method)) {
+    const files = Object.keys(manifest).filter(file => posix.dirname(file) === posix.normalize(effect.fixtures) && file.endsWith('.json'));
+    const where = `${id}.effects.${name}`;
+    const expected = new Set();
+    for (const file of files) {
+      const fixture = JSON.parse(await readFile(await containedFile(bundle, file), 'utf8'));
+      safeData(fixture);
+      if (!['confirmed', 'contradicted', 'no_evidence', 'unobservable'].includes(fixture.expect)) fail(`${file}: expect must be confirmed, contradicted, no_evidence or unobservable`, 'effect_fixture_failed');
+      assertSchema(observationSchema, { observations: fixture.observations }, `${file} observations`);
+      const judgment = await judge(effect, { token: fixture.token ?? 'mop_fixture', intent: effect.intent, inputs: fixture.inputs ?? {}, observations: fixture.observations });
+      if (judgment.verdict !== fixture.expect) fail(`${where}: fixture ${file} expects ${fixture.expect}, but the judge returned ${judgment.verdict} (${judgment.reason})`, 'effect_fixture_failed');
+      expected.add(fixture.observations.length ? fixture.expect : 'empty:' + fixture.expect);
+      results.push({ effect: `${id}/${name}`, fixture: file, verdict: judgment.verdict });
+    }
+    const missing = [];
+    if (!expected.has('contradicted')) missing.push('a contradicted case');
+    if (!expected.has('empty:no_evidence')) missing.push('an empty case (observations: []) that gives no_evidence');
+    if (effect.confirm === 'positive' && !expected.has('confirmed')) missing.push('a confirmed case');
+    if (missing.length) fail(`${where}: fixtures in ${effect.fixtures} need ${missing.join(', ')}`, 'effect_fixture_failed');
+  }
+  return results;
+}
+
+/** Run an observer script. Observers get observer connections and the token; judges get no connections. */
+export async function runObserverScript({ exec, input, role, token, bundle, runtimeInfo, connections, processPath, signal, maxBytes }) {
+  const profile = runtimeInfo[exec.runtime];
+  if (!profile) fail(`Unknown runtime: ${exec.runtime}`, 'preflight');
+  const env = { PATH: processPath ?? process.env.PATH ?? '', LANG: 'C.UTF-8' };
+  if (role === 'fetch') {
+    env.METHOD_ENVIRONMENT = JSON.stringify(connections);
+    env.METHOD_EFFECT_TOKEN = token;
+    for (const key of profile.env ?? []) {
+      if (!process.env[key]) fail(`Missing runtime environment variable: ${key}`, 'preflight');
+      env[key] = process.env[key];
+    }
+  }
+  const result = await executeProcess({ command: profile.command, args: [...(profile.args ?? []), await containedFile(bundle, exec.entrypoint), ...(exec.args ?? [])], cwd: bundle, input, env, signal, maxBytes });
+  let output;
+  try { output = JSON.parse(result.output); } catch { fail(`${exec.entrypoint} must return one JSON object`, 'invalid_output'); }
+  safeData(output);
+  assertSchema(role === 'fetch' ? observationSchema : judgmentSchema, output, role === 'fetch' ? 'Observer output' : 'Judge output');
+  return { output, diagnostics: result.diagnostics };
+}
+
+/** The next scheduled observation after `after`, or null when the horizon has passed. */
+export function nextObservation(effect, completedAt, after) {
+  const start = Date.parse(completedAt);
+  for (const offset of effectSchedule(effect)) if (start + offset > Date.parse(after)) return new Date(start + offset).toISOString();
+  return null;
+}
+export const horizonAt = (effect, completedAt) => new Date(Date.parse(completedAt) + effectSchedule(effect).at(-1)).toISOString();
+
+/** Map a judgment to a verdict. Absence of evidence never confirms an effect. */
+export function verdictFor(judgment, final, effect) {
+  if (judgment.verdict === 'confirmed' || judgment.verdict === 'contradicted') return judgment.verdict;
+  if (judgment.verdict === 'no_evidence') return final ? (effect.confirm === 'unrefuted_at_horizon' ? 'unrefuted' : 'unknown') : 'pending';
+  return 'unknown';
+}
+export const isFinal = entry => entry.final === true;
+
+/**
+ * Observe one effect once and return its ledger entry. With replay observations, only the judge runs.
+ * @param {{effect: any, key: string, token: string, inputs: any, attempt: number, actionOutcome: string, completedAt: string, run: (exec: any, input: any, role: string) => Promise<{output: any}>, replay?: any[] | undefined, final?: boolean, runDir?: string, now?: Date}} options
+ */
+export async function observeEffect({ effect, key, token, inputs, attempt, actionOutcome, completedAt, run, replay, final, runDir, now }) {
+  const observedAt = (now ?? new Date()).toISOString();
+  const atHorizon = final ?? Date.parse(observedAt) >= Date.parse(horizonAt(effect, completedAt));
+  let observations, judgment, error;
+  try {
+    observations = replay ?? (await run(effect.observe, { token, intent: effect.intent, inputs, attempt, action_outcome: actionOutcome }, 'fetch')).output.observations;
+    judgment = (await run(effect.judge, { token, intent: effect.intent, inputs, observations }, 'judge')).output;
+  } catch (failure) {
+    error = { code: failure.code ?? 'observer_failed', message: failure.message };
+    judgment = { verdict: 'unobservable', reason: failure.message, evidence: [] };
+  }
+  const verdict = verdictFor(judgment, atHorizon, effect);
+  const finalVerdict = ['confirmed', 'contradicted', 'unrefuted'].includes(verdict) || atHorizon;
+  let observationsFile = null;
+  if (observations && runDir) {
+    // Raw observations can hold message text; keep them beside the ledger, private to the run.
+    observationsFile = `effects/${key.replaceAll('/', '.')}.${attempt}.json`;
+    await mkdir(pathResolve(runDir, 'effects'), { recursive: true, mode: 0o700 });
+    await writeJSON(pathResolve(runDir, observationsFile), { observations });
+  }
+  return {
+    effect: key, token, inputs, action_outcome: actionOutcome, attempt, observed_at: observedAt, verdict,
+    reason: judgment.reason, evidence: judgment.evidence ?? [], observations: observationsFile, observations_sha256: observations ? hash(observations) : null,
+    observer: { observe: effect.observe.entrypoint, judge: effect.judge.entrypoint, source: replay ? 'replay' : 'live' },
+    ...(error ? { error } : {}),
+    final: finalVerdict, completed_at: completedAt, horizon_at: horizonAt(effect, completedAt),
+    next_observation_at: finalVerdict ? null : nextObservation(effect, completedAt, observedAt),
+  };
+}
+
+export async function readLedger(runDir) {
+  let text;
+  try { text = await readFile(pathResolve(runDir, 'effects.jsonl'), 'utf8'); }
+  catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  return text.split('\n').filter(Boolean).map(line => JSON.parse(line));
+}
+export const appendLedger = (runDir, entry) => appendFile(pathResolve(runDir, 'effects.jsonl'), JSON.stringify(entry) + '\n', { mode: 0o600 });
+/** The current entry of each effect is its last entry. */
+export function currentEffects(entries) {
+  const current = new Map();
+  for (const entry of entries) current.set(entry.effect, entry);
+  return [...current.values()];
+}
+
+/**
+ * The runtime, not the Method, decides what a finished run's effects establish.
+ * Worst verdict wins: contradicted > final unknown > pending > confirmed or unrefuted.
+ */
+export function effectSummary(entries) {
+  const current = currentEffects(entries);
+  const count = verdict => current.filter(entry => entry.verdict === verdict).length;
+  const unknown = current.filter(entry => entry.verdict === 'unknown' && entry.final).length;
+  const pending = current.filter(entry => !entry.final).length;
+  const due = current.map(entry => entry.next_observation_at).filter(Boolean).sort()[0] ?? null;
+  return {
+    total: current.length, confirmed: count('confirmed'), unrefuted: count('unrefuted'), contradicted: count('contradicted'), unknown, pending,
+    next_observation_at: due,
+    effects: current.map(({ effect, verdict, final, reason, observed_at, next_observation_at, horizon_at, action_outcome }) => ({ effect, verdict, final, reason, observed_at, next_observation_at, horizon_at, action_outcome })),
+  };
+}
+/** Apply the effect summary to a completed run's status. */
+export function statusWithEffects(base, summary) {
+  if (base.status !== 'completed' || !summary.total) return base;
+  if (summary.contradicted) {
+    const effects = summary.effects.filter(e => e.verdict === 'contradicted').map(e => `${e.effect} (${e.reason})`).join('; ');
+    const { result, ...rest } = base;
+    return { ...rest, status: 'failed', code: 'effect_contradicted', error: `An observer found evidence that an intended external change did not happen: ${effects}`,
+      recovery: 'Inspect effects.jsonl and the external system. The external action is not repeated automatically; correct it, then start a new run.', effects: summary };
+  }
+  if (summary.unknown) {
+    const { result, ...rest } = base;
+    return { ...rest, status: 'unconfirmed', code: 'effect_unconfirmed', result,
+      error: `No observer could confirm these external changes: ${summary.effects.filter(e => e.verdict === 'unknown' && e.final).map(e => e.effect).join(', ')}`,
+      recovery: 'Inspect effects.jsonl and the external system before relying on this result.', effects: summary };
+  }
+  return { ...base, effects: summary };
+}
+
+/** Wait until an ISO time, within a deadline. Returns false when the wait does not fit. */
+export async function waitUntil(time, deadline, signal) {
+  const ms = Date.parse(time) - Date.now();
+  if (ms <= 0) return true;
+  if (performance.now() + ms >= deadline) return false;
+  await delay(ms, undefined, { signal });
+  return true;
+}

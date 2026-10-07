@@ -6,7 +6,7 @@ import { resolveModels } from './agents.js';
 import { executorVersion, assertCheckpointExecutor } from './executor-version.js';
 import { executeClaude } from './claude.js';
 import { configuration } from './defaults.js';
-import { mkdir, readFile, appendFile, realpath, open, unlink }  from 'node:fs/promises';
+import { mkdir, readFile, appendFile, realpath, open, unlink, cp }  from 'node:fs/promises';
 import { resolve as pathResolve, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
@@ -19,6 +19,8 @@ import { renderPrompt } from './prompt.js';
 import { preflight } from './preflight.js';
 import { progressMessage } from './progress.js';
 import { readParentRun, planFork, copyForkFiles } from './fork.js';
+import { effectKey, connectionsFor, testFixtures, runObserverScript, observeEffect, readLedger, appendLedger, currentEffects, effectSummary, statusWithEffects, waitUntil, nextObservation, horizonAt } from './effects.js';
+import { replayedCandidate, unverifiable } from './replay.js';
 
 function initialValues(defs = {}, supplied = {}) {
   const result = {};
@@ -94,11 +96,12 @@ async function executeRun(file, config, options) {
   if (saved && !saved.models) fail('The checkpoint is missing its selected model profiles. Resume needs the original run records.', 'resume_mismatch');
   config.models = await resolveModels(method, config, { ...options, savedModels: saved?.models });
   const profiles = config.models, runtimeProfiles = config.runtimes ?? {}, tools = config.tools ?? {};
-  const { scripts, runtimeInfo } = await preflight(method, config, sourceRoot, { ...options, checkFiles: !saved });
+  const { runtimeInfo, files } = await preflight(method, config, sourceRoot, { ...options, checkFiles: !saved });
   const bundle = pathResolve(runDir, 'bundle');
   if (!saved) await mkdir(bundle, { mode: 0o700 });
   const artifacts = pathResolve(runDir, 'artifacts');
   if (!saved) await mkdir(artifacts, { mode: 0o700 });
+  if (!saved && options.replay?.artifacts) await cp(options.replay.artifacts, artifacts, { recursive: true });
   if (saved && hash(runtimeInfo) !== saved.runtime_sha256) fail('Runtime executable changed', 'resume_mismatch');
   let sequence = saved?.sequence ?? 0, invocations = saved?.invocations ?? 0, requests = saved?.requests ?? 0, toolCalls = saved?.toolCalls ?? 0, knownUsage = saved?.knownUsage ?? 0, inputTokens = saved?.inputTokens ?? 0, outputTokens = saved?.outputTokens ?? 0;
   let started = performance.now() - (saved?.elapsed_ms ?? 0), deadline = started + config.limits.timeout_ms;
@@ -152,7 +155,7 @@ async function executeRun(file, config, options) {
     usage: { responses_with_usage: knownUsage, responses_without_usage: requests - knownUsage, input_tokens: knownUsage ? inputTokens : null, output_tokens: knownUsage ? outputTokens : null, cost_usd: null, scope: 'executor-managed model requests only' } });
   let manifest;
   try {
-    manifest = saved ? JSON.parse(await readFile(pathResolve(runDir, 'manifest.json'), 'utf8')).files : await snapshotBundle(sourceRoot, [...(method.files ?? []), ...scripts.map(x => x.entrypoint)], bundle);
+    manifest = saved ? JSON.parse(await readFile(pathResolve(runDir, 'manifest.json'), 'utf8')).files : await snapshotBundle(sourceRoot, files, bundle);
     if (parent) {
       const fork = planFork({ parent, method, dependencies, steps: options.reuse, root, profiles, config, runtimeInfo, manifest });
       Object.assign(accepted, fork.accepted); skipped.push(...fork.skipped); Object.assign(collections, fork.collections);
@@ -182,7 +185,7 @@ async function executeRun(file, config, options) {
     await verifyBundle();
     if (saved) {
       const prior = JSON.parse(await readFile(pathResolve(runDir, 'summary.json'), 'utf8'));
-      if (prior.status === 'completed') {
+      if (['completed', 'unconfirmed'].includes(prior.status)) {
         for (const [id, iterations] of Object.entries(accepted)) for (const outputs of iterations) await checkFiles(effectiveOutputs(method.steps[id]), outputs);
         return prior;
       }
@@ -194,7 +197,7 @@ async function executeRun(file, config, options) {
     const executeScript = async (exec, input, signal, scopedRecord, operationId) => {
       await verifyBundle();
       const profile = runtimeInfo[exec.runtime];
-      const environment = { PATH: options.processPath ?? process.env.PATH ?? '', LANG: 'C.UTF-8', METHOD_OUTPUT_DIR: artifacts, METHOD_ENVIRONMENT: JSON.stringify(config.environment ?? {}) };
+      const environment = { PATH: options.processPath ?? process.env.PATH ?? '', LANG: 'C.UTF-8', METHOD_OUTPUT_DIR: artifacts, METHOD_ENVIRONMENT: JSON.stringify(connectionsFor(method, config.environment)) };
       if (operationId) environment.METHOD_OPERATION_ID = operationId;
       for (const key of profile.env ?? []) {
         if (!process.env[key]) fail(`Missing runtime environment variable: ${key}`, 'preflight');
@@ -217,6 +220,27 @@ async function executeRun(file, config, options) {
       safeData(output);
       return output;
     };
+    const observerScript = async (exec, input, role, token, signal) => {
+      await verifyBundle();
+      const { output, diagnostics } = await runObserverScript({ exec, input, role, token, bundle, runtimeInfo, connections: connectionsFor(method, config.environment, 'observer'), processPath: options.processPath, signal, maxBytes: config.limits.max_output_bytes });
+      return { output, diagnostics };
+    };
+    const fixtures = await testFixtures(method, bundle, manifest, async (effect, input) => (await observerScript(effect.judge, input, 'judge', input.token, options.signal ?? new AbortController().signal)).output);
+    if (fixtures.length) await record('effects.fixtures_passed', { fixtures });
+    // Observe one effect, write the ledger, and record the verdict in the run's events.
+    const observe = async (spec, data) => {
+      const signal = options.signal ?? new AbortController().signal;
+      const replay = options.replay ? options.replay.observations?.[data.key] : undefined;
+      // A replay never reads the live system. Without recorded observations the effect is not judged; with them, an
+      // absence of evidence stays pending, because the recording does not show that the horizon passed.
+      const entry = options.replay && !replay
+        ? { effect: data.key, token: data.token, inputs: data.inputs, action_outcome: data.actionOutcome, attempt: data.attempt, observed_at: new Date().toISOString(), verdict: 'not_replayed', reason: 'The case supplies no observations for this effect.', evidence: [], final: true, completed_at: data.completedAt, horizon_at: horizonAt(spec, data.completedAt), next_observation_at: null }
+        : await observeEffect({ ...data, effect: spec, runDir, replay, final: options.replay ? false : undefined, run: (exec, input, role) => observerScript(exec, input, role, data.token, signal) });
+      await appendLedger(runDir, entry);
+      await record('effect.observed', entry);
+      return entry;
+    };
+    const effectInputs = (step, scope) => Object.fromEntries(Object.entries(step ?? {}).map(([alias, ref]) => [alias, structuredClone(resolve(scope, ref))]));
     await verifyBundle();
     for (const id of order) {
       const step = method.steps[id];
@@ -302,6 +326,8 @@ async function executeRun(file, config, options) {
             return output;
           },
         };
+        const operationId = phase => 'mop_' + hash([executionId, id, iteration, phase]);
+        const token = operationId('action');
         const execute = async (exec, input, schema, phase) => {
           guard();
           if (['call', 'agent'].includes(exec.kind)) {
@@ -312,11 +338,13 @@ async function executeRun(file, config, options) {
             catch (error) { fail(`${id}.${phase}.prompt: ${error.message}`, 'invalid_prompt'); }
             if (Buffer.byteLength(rendered) + Buffer.byteLength(JSON.stringify(input)) > config.limits.max_request_bytes) fail('Expanded prompt exceeds request limit', 'input_limit');
             await scopedRecord('prompt.rendered', { phase, template, rendered });
+            // An agent action has no operation ID of its own; give it the token that its observers will search for.
+            if (phase === 'action' && exec.kind === 'agent' && step.effects) rendered += `\n\nCorrelation token for this action: ${token}. Put it where the changed system keeps a reference (for example a message header, an idempotency key, or a note field), so that an observer can find this change.`;
             exec = { ...exec, prompt: rendered };
           }
           const phaseContext = { ...context, record: (event, data) => scopedRecord(event, { phase, ...data }) };
           const result = exec.kind === 'classify' ? {[step.out]: await executeClassification(exec, input, config.classification, options.classification, phaseContext)}
-            : exec.kind === 'run' ? await executeScript(exec, input, bound.signal, phaseContext.record, 'mop_' + hash([executionId, id, iteration, phase]))
+            : exec.kind === 'run' ? await executeScript(exec, input, bound.signal, phaseContext.record, operationId(phase))
             : profiles[exec.model].backend === 'codex' ? await executeCodex(exec, input, schema, phaseContext)
             : profiles[exec.model].backend === 'claude' ? await executeClaude(exec, input, schema, phaseContext)
             : await executeModel(exec, input, schema, phaseContext);
@@ -328,7 +356,10 @@ async function executeRun(file, config, options) {
           active = `${id}:${iteration}`;
           await scopedRecord('step.started', { inputs: bindings, state_before: state, external_effects_possible: (step.changes ?? []).some(x => x.startsWith('environment.')) });
           const answer = options.human?.steps?.[active];
-          if (step.ask) {
+          // A replay serves recorded outputs for unchanged steps; a changed step that acts on the world cannot be replayed.
+          const replayed = options.replay ? replayedCandidate(options.replay, { id, step, iteration, bindings, manifest, profiles, tools }) : null;
+          if (options.replay && !replayed && (step.ask || (step.changes ?? []).some(x => x.startsWith('environment.')))) unverifiable(id, iteration, step);
+          if (step.ask && !replayed) {
             const prompt = renderPrompt(step.ask, bindings);
             if (Buffer.byteLength(prompt) + Buffer.byteLength(JSON.stringify(bindings)) > config.limits.max_request_bytes) fail('Expanded prompt exceeds request limit', 'input_limit');
             await scopedRecord('prompt.rendered', { phase: 'action', template: step.ask, rendered: prompt });
@@ -337,26 +368,68 @@ async function executeRun(file, config, options) {
               fail('Human input required; this runner does not auto-answer ask', 'needs_input');
             }
           }
-          const candidate = step.ask ? answer.outputs : await execute(step.do, bindings, schema, 'action');
-          assertSchema(schema, candidate, 'Action output');
-          await scopedRecord('step.candidate', { candidate });
-          const { state: updates, ...outputs } = candidate;
-          await checkFiles(outputDefs, candidate);
-          const nextState = { ...state, ...(updates ?? {}) };
-          let check = { status: 'unchecked', reason: 'No task check requested', evidence: [] };
-          if (step.check) {
-            const spec = step.check, scope = { ...bindings, ...outputs };
-            if (spec.kind) check = await execute(spec, { inputs: bindings, outputs, state_before: state, state_after: nextState, evidence: [] }, checkResultSchema, 'check');
-            else {
-              let pass;
-              if (spec.equals) pass = isDeepStrictEqual(resolve(scope, spec.equals.actual), resolve(scope, spec.equals.expected));
-              else if (spec.count) { const n = resolve(scope, spec.count.value).length; pass = n >= (spec.count.min ?? 0) && n <= (spec.count.max ?? Infinity); }
-              else if (spec.file) { const artifact = resolve(scope, spec.file); pass = hash(await readFile(await containedFile(artifacts, artifact.path))) === artifact.sha256; }
-              else { const value = resolve(scope, spec.present); pass = value !== null && value !== undefined; }
-              check = { status: pass ? 'pass' : 'fail', reason: `Exact ${Object.keys(spec)[0]} check`, evidence: [] };
+          const act = async () => {
+            if (replayed) { await scopedRecord('step.replayed', { candidate: replayed }); return replayed; }
+            try {
+              const value = step.ask ? answer.outputs : await execute(step.do, bindings, schema, 'action');
+              assertSchema(schema, value, 'Action output');
+              return value;
+            } catch (error) {
+              // The action may have changed the outside world before it failed. Look before anyone retries it.
+              if (step.effects && !options.signal?.aborted) {
+                error.effects = [];
+                for (const [name, spec] of Object.entries(step.effects)) error.effects.push(await observe(spec, { key: effectKey(id, iteration, name), token, inputs: effectInputs(spec.in, root), attempt: 1, actionOutcome: 'indeterminate', completedAt: new Date().toISOString() }));
+              }
+              throw error;
             }
-            await scopedRecord('check.completed', { check });
-            if (check.status !== 'pass') fail(`Declared check returned ${check.status}`, 'check_failed');
+          };
+          let candidate, outputs, nextState, check;
+          const accept = async (value, retry) => {
+            candidate = value;
+            await scopedRecord('step.candidate', { candidate, ...(retry ? { retry: true } : {}) });
+            const { state: updates, ...rest } = candidate;
+            outputs = rest;
+            await checkFiles(outputDefs, candidate);
+            nextState = { ...state, ...(updates ?? {}) };
+            check = { status: 'unchecked', reason: 'No task check requested', evidence: [] };
+            if (step.check && !replayed) {
+              const spec = step.check, scope = { ...bindings, ...outputs };
+              if (spec.kind) check = await execute(spec, { inputs: bindings, outputs, state_before: state, state_after: nextState, evidence: [] }, checkResultSchema, 'check');
+              else {
+                let pass;
+                if (spec.equals) pass = isDeepStrictEqual(resolve(scope, spec.equals.actual), resolve(scope, spec.equals.expected));
+                else if (spec.count) { const n = resolve(scope, spec.count.value).length; pass = n >= (spec.count.min ?? 0) && n <= (spec.count.max ?? Infinity); }
+                else if (spec.file) { const artifact = resolve(scope, spec.file); pass = hash(await readFile(await containedFile(artifacts, artifact.path))) === artifact.sha256; }
+                else { const value = resolve(scope, spec.present); pass = value !== null && value !== undefined; }
+                check = { status: pass ? 'pass' : 'fail', reason: `Exact ${Object.keys(spec)[0]} check`, evidence: [] };
+              }
+              await scopedRecord('check.completed', { check });
+              if (check.status !== 'pass') fail(`Declared check returned ${check.status}`, 'check_failed');
+            }
+          };
+          await accept(await act());
+          // Blocking effects are observed before later steps start. Other effects are observed when the run ends.
+          const completedAt = new Date().toISOString();
+          const registered = [];
+          for (const [name, spec] of Object.entries(step.effects ?? {})) {
+            const data = { key: effectKey(id, iteration, name), token, inputs: effectInputs(spec.in, root), attempt: 1, actionOutcome: 'ok', completedAt };
+            if (!spec.blocking) { registered.push({ data, spec }); continue; }
+            if (!options.replay && !await waitUntil(nextObservation(spec, completedAt, new Date(0).toISOString()), deadline, bound.signal)) throw timeoutError();
+            let entry = await observe(spec, data);
+            if (entry.verdict === 'contradicted' && spec.retry === 'idempotent' && !options.replay) {
+              // The same operation ID lets the service drop a duplicate if the first attempt did succeed.
+              await scopedRecord('effect.retry', { effect: data.key, token });
+              await accept(await act(), true);
+              const again = { ...data, attempt: 2, completedAt: new Date().toISOString() };
+              if (!await waitUntil(nextObservation(spec, again.completedAt, new Date(0).toISOString()), deadline, bound.signal)) throw timeoutError();
+              entry = await observe(spec, again);
+            }
+            if (entry.verdict === 'contradicted') fail(`Effect ${data.key} was contradicted: ${entry.reason}`, 'effect_contradicted');
+          }
+          for (const { data, spec } of registered) {
+            const entry = { effect: data.key, token, inputs: data.inputs, action_outcome: 'ok', attempt: 0, registered_at: completedAt, verdict: 'pending', reason: 'Not yet observed.', final: false,
+              completed_at: completedAt, horizon_at: horizonAt(spec, completedAt), next_observation_at: nextObservation(spec, completedAt, new Date(0).toISOString()) };
+            await appendLedger(runDir, entry);
           }
           guard();
           await writeJSON(pathResolve(runDir, 'state.json'), nextState);
@@ -374,9 +447,17 @@ async function executeRun(file, config, options) {
     }
     if (performance.now() >= deadline) throw timeoutError();
     const result = typeof method.result === 'string' ? resolve(root, method.result) : Object.fromEntries(Object.entries(method.result).map(([k, ref]) => [k, resolve(root, ref)]));
-    const completed = { ...summary(), status: 'completed', result };
-    await record('run.completed', completed);
-    await writeJSON(pathResolve(runDir, 'result.json'), redact(result));
+    // Each effect gets its first observation before the run reports. Later ones come from method observe.
+    const unobserved = currentEffects(await readLedger(runDir)).filter(entry => entry.attempt === 0).sort((a, b) => a.next_observation_at.localeCompare(b.next_observation_at));
+    for (const entry of unobserved) {
+      const [stepId, , name] = entry.effect.split('/');
+      const spec = method.steps[stepId].effects[name];
+      if (!options.replay && !await waitUntil(entry.next_observation_at, deadline, options.signal)) continue;
+      await observe(spec, { key: entry.effect, token: entry.token, inputs: entry.inputs, attempt: 1, actionOutcome: 'ok', completedAt: entry.completed_at });
+    }
+    const completed = statusWithEffects({ ...summary(), status: 'completed', result }, effectSummary(await readLedger(runDir)));
+    await record(completed.status === 'failed' ? 'run.failed' : 'run.completed', completed);
+    if (completed.status !== 'failed') await writeJSON(pathResolve(runDir, 'result.json'), redact(result));
     await writeJSON(pathResolve(runDir, 'summary.json'), redact(completed));
     return completed;
   } catch (error) {
@@ -384,7 +465,11 @@ async function executeRun(file, config, options) {
     const reusable = order.filter(id => skipped.includes(id) || (accepted[id]?.length && id !== unfinished));
     // Resume keeps the run's bundle, so a code fix needs a fork that reuses the accepted steps.
     const fork = reusable.length ? ` To fix a step that was not accepted, edit it, then start a new run with --from-run ${runDir} --reuse ${reusable.join(',')}. The fork refuses a listed step that changed.` : '';
-    const failed = { ...summary(), status: error.code === 'needs_input' ? 'needs_input' : 'failed', code: error.code ?? 'execution_failed', error: error.message, recovery: 'Resume with --run-dir and --resume. Inspect unfinished actions before authorizing --retry STEP:ITERATION. Accepted iterations are not repeated.' + fork };
+    // Observations after a failed action tell the operator whether a retry could repeat a change that did happen.
+    const observed = error.effects?.length ? ' Observed after the failed action: ' + error.effects.map(e => `${e.effect} ${e.verdict}${e.verdict === 'confirmed' ? ' (the change happened; do not retry it)' : ''}`).join('; ') + '.' : '';
+    const ledger = await readLedger(runDir).catch(() => []);
+    const failed = { ...summary(), status: error.code === 'needs_input' ? 'needs_input' : 'failed', code: error.code ?? 'execution_failed', error: error.message, recovery: 'Resume with --run-dir and --resume. Inspect unfinished actions before authorizing --retry STEP:ITERATION. Accepted iterations are not repeated.' + observed + fork,
+      ...(ledger.length ? { effects: effectSummary(ledger) } : {}) };
     await record('run.failed', failed);
     await writeJSON(pathResolve(runDir, 'summary.json'), redact(failed));
     return failed;

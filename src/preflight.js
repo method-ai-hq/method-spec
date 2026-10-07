@@ -4,6 +4,7 @@ import { configuration } from './defaults.js';
 import { readFile, stat } from 'node:fs/promises';
 import { validateMethod, validateConfig, own, fail } from './validate.js';
 import { executable, hash, relativeFile, containedFile } from './io.js';
+import { fixtureFiles } from './effects.js';
 
 /** Check local dependencies without executing a script or model. Shared by validate and run. */
 export async function preflight(method, config, sourceRoot, options = {}) {
@@ -37,7 +38,7 @@ export async function preflight(method, config, sourceRoot, options = {}) {
       if (exec.kind === 'agent') for (const name of executionTools(exec, tools)) {
         if (!own(tools, name)) fail(`Unknown tool: ${name}`, 'preflight');
         const tool = tools[name]; usedTools.add(name);
-        if (method.format === 'method/3.2' && tool.run && !tool.description.trim()) fail(`Tool ${name}: describe its operation and effects.`);
+        if (method.format !== 'method/3.1' && tool.run && !tool.description.trim()) fail(`Tool ${name}: describe its operation and effects.`);
         if (tool.connection && !options.connections?.[tool.connection]) {
           if(options.allowMissingSetup) missingSetup.push(`Connect tool: ${name}`);
           else fail(`Missing tool connection: ${tool.connection}`, 'needs_input');
@@ -51,6 +52,7 @@ export async function preflight(method, config, sourceRoot, options = {}) {
     }
   }
   for (const name of usedTools) if(tools[name].run) executions.push(tools[name].run);
+  for (const step of Object.values(method.steps)) for (const effect of Object.values(step.effects ?? {})) executions.push(effect.observe, effect.judge);
   const scripts = executions.filter(x => x.kind === 'run');
   if (scripts.length && config.allow_local_processes !== true) fail('This method requires allow_local_processes in operator configuration', 'preflight');
   const runtimeInfo = {};
@@ -67,7 +69,7 @@ export async function preflight(method, config, sourceRoot, options = {}) {
   for (const name of Object.keys(method.environment ?? {})) {
     if (!own(config.environment, name)) { if(options.allowMissingSetup)missingSetup.push(`Bind input: ${name}`); else fail(`Missing environment binding: ${name}`, 'preflight'); }
   }
-  const files = [...new Set([...(method.files ?? []), ...scripts.map(x => x.entrypoint)])];
+  const files = [...new Set([...(method.files ?? []), ...scripts.map(x => x.entrypoint), ...(options.checkFiles === false ? [] : await fixtureFiles(method, sourceRoot))])];
   for (const name of options.checkFiles === false ? [] : files) {
     relativeFile(name);
     let file;

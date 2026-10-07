@@ -8,9 +8,11 @@ export function object(properties: any, required?: string[]): {
 export const methodSchema: Record<string, any>;
 /** @type {Record<string, any>} */
 export const configSchema: Record<string, any>;
-export namespace checkResultSchema {
+export namespace observationSchema {
     export let type: string;
     export { properties };
     export { required };
     export let additionalProperties: boolean;
 }
+export namespace judgmentSchema { }
+export namespace checkResultSchema { }

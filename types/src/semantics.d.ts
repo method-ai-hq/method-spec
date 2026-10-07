@@ -9,6 +9,10 @@ export function resolve(root: any, reference: any): any;
 export function typeAt(root: any, reference: any): any;
 /** A label selects one scalar input or one non-repeated step's saved output. */
 export function runLabelType(method: any): any;
+/** Milliseconds in a schedule duration such as 60s, 10m, 1h or 5d. */
+export function durationMs(value: any): number;
+/** Observation offsets from the action's completion; the last offset is the finality horizon. */
+export function effectSchedule(effect: any): number[];
 export function validateSemantics(method: any, assertData: any): {
     method: any;
     order: string[];

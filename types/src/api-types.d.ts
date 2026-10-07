@@ -123,6 +123,12 @@ export interface RunOptions {
         state: Record<string, Json>;
         runDir: string;
     }) => void | Promise<void>) | undefined;
+    /** Replay a recorded case: unchanged steps return recorded outputs and effects are judged on recorded observations. */
+    replay?: {
+        recording: any;
+        observations?: Record<string, any[]>;
+        artifacts?: string | undefined;
+    } | undefined;
     /** Test/provider adapter for Responses requests. */
     transport?: ((...args: any[]) => Promise<any>) | undefined;
 }
@@ -154,9 +160,39 @@ export interface RunSummary {
     usage: Record<string, Json>;
     forked_from?: ForkProvenance;
 }
-export type RunResult = RunSummary & ({
+export type EffectVerdict = 'pending' | 'confirmed' | 'unrefuted' | 'contradicted' | 'unknown' | 'not_replayed';
+export interface EffectSummary {
+    total: number;
+    confirmed: number;
+    unrefuted: number;
+    contradicted: number;
+    unknown: number;
+    pending: number;
+    next_observation_at: string | null;
+    effects: Array<{
+        effect: string;
+        verdict: EffectVerdict;
+        final: boolean;
+        reason: string;
+        observed_at?: string;
+        next_observation_at: string | null;
+        horizon_at: string;
+        action_outcome: 'ok' | 'indeterminate';
+    }>;
+}
+/** completed: every step was accepted and no effect is contradicted or unconfirmed (effects.pending can be above zero).
+ * unconfirmed: every step was accepted, but an observer could not confirm an external change by its horizon. */
+export type RunResult = RunSummary & {
+    effects?: EffectSummary;
+} & ({
     status: 'completed';
     result: Json;
+} | {
+    status: 'unconfirmed';
+    result: Json;
+    code: string;
+    error: string;
+    recovery: string;
 } | {
     status: 'failed' | 'needs_input';
     code: string;

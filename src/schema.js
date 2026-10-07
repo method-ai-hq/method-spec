@@ -14,6 +14,13 @@ const run = object({ kind: { const: 'run' }, runtime: name, entrypoint: path, ar
 const call = object({ kind: { const: 'call' }, model: name, prompt: text });
 const agent = object({ kind: { const: 'agent' }, model: name, prompt: text, tools: list(name), browser: ref }, ['kind', 'model', 'prompt']);
 const classify = object({ kind: { const: 'classify' }, question: text, options: { ...map(text), minProperties: 2, maxProperties: 255 } });
+const duration = { type: 'string', pattern: '^(0|[1-9][0-9]{0,6})(s|m|h|d)$' };
+// An effect contract: an observer reads the changed system and a judge decides what the observations show.
+const effect = object({
+  intent: text, in: map(ref), observe: run, judge: run, fixtures: path,
+  schedule: object({ first: duration, then: { type: 'array', items: duration, maxItems: 20 }, horizon: duration }, ['horizon']),
+  confirm: { enum: ['positive', 'unrefuted_at_horizon'] }, retry: { enum: ['never', 'idempotent'] }, blocking: { type: 'boolean' },
+}, ['intent', 'observe', 'judge', 'fixtures', 'schedule', 'confirm']);
 const exact = [
   object({ equals: object({ actual: ref, expected: ref }) }),
   object({ count: object({ value: ref, min: { type: 'integer', minimum: 0 }, max: { type: 'integer', minimum: 0 } }, ['value']) }),
@@ -24,9 +31,9 @@ export const methodSchema = {
   $schema: 'http://json-schema.org/draft-07/schema#',
   $id: 'https://github.com/method-ai-hq/method-spec/raw/main/spec/method-3.schema.json',
   ...object({
-    format: { enum: ['method/3.1', 'method/3.2'] }, name: text, goal: text, run_prompt: text, run_label: ref,
+    format: { enum: ['method/3.1', 'method/3.2', 'method/3.3'] }, name: text, goal: text, run_prompt: text, run_label: ref,
     files: list(path), inputs: map({ $ref: '#/$defs/input' }), state: map({ $ref: '#/$defs/input' }),
-    environment: map(object({ type: { enum: ['browser', 'service', 'desktop', 'files', 'tool'] }, description: text })),
+    environment: map(object({ type: { enum: ['browser', 'service', 'desktop', 'files', 'tool'] }, description: text, role: { const: 'observer' } }, ['type', 'description'])),
     steps: { ...map({ $ref: '#/$defs/step' }), minProperties: 1 },
     result: { anyOf: [ref, map(ref)] },
   }, ['format', 'name', 'goal', 'steps', 'result']),
@@ -42,7 +49,7 @@ export const methodSchema = {
         do: { $ref: '#/$defs/execution' }, ask: text, check: { $ref: '#/$defs/check' },
         each: { ...map(ref), minProperties: 1, maxProperties: 1 },
         repeat: object({ max_iterations: positive, until: ref }, ['max_iterations']), when: ref,
-        after: { anyOf: [name, list(name)] }, changes: list(ref),
+        after: { anyOf: [name, list(name)] }, changes: list(ref), effects: { ...map(effect), minProperties: 1 },
         limits: object({ timeout_ms: positive, max_agent_turns: positive, max_model_requests: positive }, []),
       }, []),
       oneOf: [{ required: ['do'], not: { required: ['ask'] } }, { required: ['ask'], not: { required: ['do'] } }],
@@ -67,4 +74,6 @@ export const configSchema = {
   }, []),
 };
 
+export const observationSchema = object({ observations: { type: 'array', maxItems: 1000, items: object({ source: text, ref: text, observed_at: text, data: {} }, ['source', 'ref']) } });
+export const judgmentSchema = object({ verdict: { enum: ['confirmed', 'contradicted', 'no_evidence', 'unobservable'] }, reason: { type: 'string' }, evidence: { type: 'array', items: { type: 'string' } } });
 export const checkResultSchema = object({ status: { enum: ['pass', 'fail', 'unknown'] }, reason: { type: 'string' }, evidence: { type: 'array', items: { type: 'string' } } });
