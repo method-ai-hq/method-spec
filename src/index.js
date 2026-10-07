@@ -1,7 +1,8 @@
 export { parsePrompt, validatePrompt, renderPrompt } from './prompt.js';
 export { runMethod } from './runner.js';
 export { observeRun, pendingRuns } from './observe.js';
-export { createCase, retireCase, listCases, testCase, testSuite, casesDigest, defaultCasesDir } from './cases.js';
+export { createCase, retireCase, listCases, testCase, testSuite, outcomeOfRun, defaultCasesDir } from './cases.js';
+export { judgeRubric } from './rubric.js';
 export { recordRun, stepKey } from './replay.js';
 export { effectSummary, readLedger } from './effects.js';
 export { validateMethod, validateConfig, dataSchema, outputSchema } from './validate.js';

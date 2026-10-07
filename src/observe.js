@@ -2,7 +2,8 @@ import { readFile, open, unlink, readdir, stat, appendFile } from 'node:fs/promi
 import { resolve as pathResolve, join } from 'node:path';
 import { fail } from './validate.js';
 import { hash, containedFile, writeJSON } from './io.js';
-import { connectionsFor, observeEffect, readLedger, appendLedger, currentEffects, effectSummary, statusWithEffects, runObserverScript, previousObservations } from './effects.js';
+import { observerConnection } from './semantics.js';
+import { isBuiltin, connectionsFor, observeEffect, readLedger, appendLedger, currentEffects, effectSummary, statusWithEffects, runObserverScript, previousObservations } from './effects.js';
 
 async function lockRun(runDir) {
   const path = pathResolve(runDir, '.lock');
@@ -44,11 +45,14 @@ export async function observeRun(runDir, options = {}) {
     const observed = [];
     for (const last of due) {
       const [stepId, , name] = last.effect.split('/');
-      const spec = method.steps[stepId]?.effects?.[name];
-      if (!spec) continue;
+      const declared = method.steps[stepId]?.effects?.[name];
+      if (!declared) continue;
+      const connection = isBuiltin(declared.observe) ? observerConnection(declared, method.steps[stepId]) : null;
+      const spec = connection ? { ...declared, observe: { ...declared.observe, connection } } : declared;
+      const connections = { ...connectionsFor(method, config.environment, 'observer'), ...(connection ? { [connection]: config.environment?.[connection] } : {}) };
       const entry = await observeEffect({
         effect: spec, key: last.effect, token: last.token, inputs: last.inputs ?? {}, attempt: last.attempt + 1, actionOutcome: last.action_outcome, completedAt: last.completed_at, runDir, now, previous: await previousObservations(runDir, last.effect),
-        run: async (exec, input, role) => { if (exec.kind === 'run') await verify(exec.entrypoint); return runObserverScript({ exec, input, role, token: last.token, bundle, runtimeInfo: manifest.runtime_profiles, connections: connectionsFor(method, config.environment, 'observer'), processPath: options.processPath, signal, maxBytes: config.limits?.max_output_bytes ?? 16_777_216 }); },
+        run: async (exec, input, role) => { if (exec.kind === 'run') await verify(exec.entrypoint); return runObserverScript({ exec, input, role, token: last.token, bundle, runtimeInfo: manifest.runtime_profiles, connections, processPath: options.processPath, signal, maxBytes: config.limits?.max_output_bytes ?? 16_777_216 }); },
       });
       await appendLedger(runDir, entry);
       await record('effect.observed', entry);

@@ -19,17 +19,17 @@ const count = { type: 'integer', minimum: 0 };
 // Built-in observers need no script and no fixtures; the runtime's own tests cover their judgment.
 const fieldExpectation = { anyOf: [{ type: ['string', 'number', 'boolean', 'null'] }, object({ at_least: { type: 'number' }, at_most: { type: 'number' }, increases: { const: true } }, [])] };
 const builtin = [
-  object({ kind: { const: 'file' }, connection: name, path: text, expect: object({ exists: { type: 'boolean' }, contains: text, sha256: text }, []) }, ['kind', 'connection', 'path']),
-  object({ kind: { const: 'sqlite' }, connection: name, database: text, query: text, params: map({ type: ['string', 'number'] }), expect: object({ rows: count, min_rows: count, max_rows: count }, []) }, ['kind', 'connection', 'database', 'query', 'expect']),
+  object({ kind: { const: 'file' }, connection: name, path: text, expect: object({ exists: { type: 'boolean' }, contains: text, sha256: text }, []) }, ['kind', 'path']),
+  object({ kind: { const: 'sqlite' }, connection: name, database: text, query: text, params: map({ type: ['string', 'number'] }), expect: object({ rows: count, min_rows: count, max_rows: count }, []) }, ['kind', 'database', 'query', 'expect']),
   object({ kind: { const: 'http' }, connection: name, path: text, method: { enum: ['GET', 'POST'] }, body: {},
-    expect: object({ status: { type: 'array', items: { type: 'integer' }, minItems: 1 }, fields: { type: 'object', propertyNames: { type: 'string', pattern: '^[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)*$' }, additionalProperties: fieldExpectation, minProperties: 1 } }, ['fields']) }, ['kind', 'connection', 'path', 'expect']),
+    expect: object({ status: { type: 'array', items: { type: 'integer' }, minItems: 1 }, fields: { type: 'object', propertyNames: { type: 'string', pattern: '^[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)*$' }, additionalProperties: fieldExpectation, minProperties: 1 } }, ['fields']) }, ['kind', 'path', 'expect']),
 ];
 // An effect contract: an observer reads the changed system and a judge decides what the observations show.
 const effect = object({
   intent: text, in: map(ref), observe: { oneOf: [run, ...builtin] }, judge: run, fixtures: path,
   schedule: object({ first: duration, then: { type: 'array', items: duration, maxItems: 20 }, horizon: duration }, ['horizon']),
   confirm: { enum: ['positive', 'unrefuted_at_horizon'] }, retry: { enum: ['never', 'idempotent'] }, blocking: { type: 'boolean' },
-}, ['intent', 'observe', 'schedule', 'confirm']);
+}, ['intent', 'observe']);
 const exact = [
   object({ equals: object({ actual: ref, expected: ref }) }),
   object({ count: object({ value: ref, min: { type: 'integer', minimum: 0 }, max: { type: 'integer', minimum: 0 } }, ['value']) }),
@@ -80,6 +80,7 @@ export const configSchema = {
     models: map({ oneOf: [object({ backend: { const: 'openai-responses' }, model: text, api_key_env: { type: 'string', pattern: '^[A-Z_][A-Z0-9_]*$' }, max_output_tokens: positive, reasoning_effort: { enum: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] } }, ['backend', 'model', 'api_key_env', 'max_output_tokens']), object({ backend: { enum: ['codex', 'claude'] }, command: text, model: text, reasoning_effort: text }, ['backend'])] }),
     tools: map({oneOf: [object({ description: text, in: map({ $ref: `${methodSchema.$id}#/$defs/data` }), out: map({ $ref: `${methodSchema.$id}#/$defs/data` }), run, effects: list(name) }), object({description: text, connection: name, tool: text, parameters: {type:'object'}, effects: list(name)})]}),
     environment: map({ type: 'string' }),
+    rubric: object({ judge_runs: { type: 'integer', minimum: 1, maximum: 9 }, classify_threshold: { type: 'number', minimum: 0.5, maximum: 1 }, max_value_bytes: positive }, []),
   }, []),
 };
 

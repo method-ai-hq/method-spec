@@ -1,10 +1,10 @@
-import { readFile, readdir, appendFile, mkdir } from 'node:fs/promises';
-import { resolve as pathResolve, posix } from 'node:path';
+import { readFile, readdir, appendFile, mkdir, stat } from 'node:fs/promises';
+import { resolve as pathResolve, posix, relative, isAbsolute, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { assertSchema, fail, safeData } from './validate.js';
 import { observationSchema, judgmentSchema } from './schema.js';
-import { effectSchedule } from './semantics.js';
+import { effectSchedule, effectConfirm } from './semantics.js';
 import { containedFile, executeProcess, hash, writeJSON } from './io.js';
 
 /** One effect of one accepted iteration. */
@@ -55,7 +55,7 @@ export async function testFixtures(method, bundle, manifest, judge) {
     const missing = [];
     if (!expected.has('contradicted')) missing.push('a contradicted case');
     if (!expected.has('empty:no_evidence')) missing.push('an empty case (observations: []) that gives no_evidence');
-    if (effect.confirm === 'positive' && !expected.has('confirmed')) missing.push('a confirmed case');
+    if (effectConfirm(effect) === 'positive' && !expected.has('confirmed')) missing.push('a confirmed case');
     if (missing.length) fail(`${where}: fixtures in ${effect.fixtures} need ${missing.join(', ')}`, 'effect_fixture_failed');
   }
   return results;
@@ -138,6 +138,62 @@ export async function observeEffect({ effect, key, token, inputs, attempt, actio
   };
 }
 
+// Automatic observation of files connections: the runtime reads the folder itself, before and after the step.
+const skippedFolders = new Set(['.git', 'node_modules', '.venv', '__pycache__', 'sensitive', '.method-runs']);
+const folderLimit = 50_000;
+/** Size and modification time of every file under a folder, or null when the folder is too large to observe. */
+export async function listFolder(root, exclude = []) {
+  const files = {};
+  let count = 0;
+  async function visit(dir) {
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
+    for (const entry of entries) {
+      const path = pathResolve(dir, entry.name);
+      if (exclude.includes(path)) continue;
+      if (entry.isDirectory()) { if (!skippedFolders.has(entry.name)) await visit(path); continue; }
+      if (!entry.isFile()) continue;
+      if (++count > folderLimit) throw Object.assign(new Error('too many files'), { code: 'folder_limit' });
+      const info = await stat(path);
+      files[relative(root, path).split(sep).join('/')] = `${info.size}:${info.mtimeMs}`;
+    }
+  }
+  let info;
+  try { info = await stat(root); } catch (error) { if (error.code === 'ENOENT') return files; throw error; }
+  // A files connection can also name one file, such as a ledger.
+  if (info.isFile()) return { '.': `${info.size}:${info.mtimeMs}` };
+  try { await visit(root); } catch (error) { if (error.code === 'folder_limit') return null; throw error; }
+  return files;
+}
+/**
+ * Compare a folder before and after a step. A path that the step returns inside the folder must have changed:
+ * "it said it saved the report, but the report did not change" is a contradiction. No change at all is allowed.
+ */
+export function observeFiles({ key, connection, root, before, after, outputs, completedAt }) {
+  const base = { effect: key, automatic: true, connection, action_outcome: 'ok', attempt: 1, observed_at: new Date().toISOString(), final: true, completed_at: completedAt, horizon_at: completedAt, next_observation_at: null, evidence: [] };
+  if (!before || !after) return { ...base, verdict: 'unobserved', reason: `${connection} has more than ${folderLimit} files; it was not observed.` };
+  const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort()
+    .filter(file => before[file] !== after[file]).map(file => ({ path: file, change: !before[file] ? 'added' : !after[file] ? 'removed' : 'modified' }));
+  const touched = new Set(changed.filter(c => c.change !== 'removed').map(c => c.path));
+  const claimed = [];
+  for (const value of Object.values(outputs ?? {})) {
+    if (typeof value !== 'string' || !value || value.length > 1024 || value.includes('\n')) continue;
+    // An absolute path is a claim. A relative value counts only when it looks like a path: no spaces, and a / or an extension.
+    if (!isAbsolute(value) && (/\s/.test(value) || !(/[\/]/.test(value) || /\.[A-Za-z][A-Za-z0-9]{0,9}$/.test(value)))) continue;
+    for (const candidate of isAbsolute(value) ? [value] : [pathResolve(value), pathResolve(root, value)]) {
+      const rel = relative(root, candidate);
+      if (rel && !rel.startsWith('..') && !isAbsolute(rel)) { claimed.push(rel.split(sep).join('/')); break; }
+    }
+  }
+  const missing = [...new Set(claimed)].filter(file => !touched.has(file));
+  const list = changed.slice(0, 50);
+  if (missing.length) return { ...base, verdict: 'contradicted', changed: list, evidence: missing,
+    reason: `The step returned ${missing.join(', ')}, but ${missing.length === 1 ? 'that file' : 'those files'} did not change in ${connection}.` };
+  if (!changed.length) return { ...base, verdict: 'unchanged', changed: [], reason: `No file in ${connection} changed.` };
+  return { ...base, verdict: 'confirmed', changed: list, evidence: list.map(c => c.path),
+    reason: `${changed.length} file${changed.length === 1 ? '' : 's'} changed in ${connection}: ${list.slice(0, 5).map(c => `${c.path} (${c.change})`).join(', ')}${changed.length > 5 ? ', …' : ''}.` };
+}
+
 /** Earlier readings of one effect, oldest first. */
 export async function previousObservations(runDir, key) {
   const out = [];
@@ -172,7 +228,7 @@ export function effectSummary(entries) {
   const pending = current.filter(entry => !entry.final).length;
   const due = current.map(entry => entry.next_observation_at).filter(Boolean).sort()[0] ?? null;
   return {
-    total: current.length, confirmed: count('confirmed'), unrefuted: count('unrefuted'), contradicted: count('contradicted'), unknown, pending,
+    total: current.length, confirmed: count('confirmed'), unrefuted: count('unrefuted'), contradicted: count('contradicted'), unknown, pending, unchanged: count('unchanged'),
     next_observation_at: due,
     effects: current.map(({ effect, verdict, final, reason, observed_at, next_observation_at, horizon_at, action_outcome }) => ({ effect, verdict, final, reason, observed_at, next_observation_at, horizon_at, action_outcome })),
   };

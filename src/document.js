@@ -35,11 +35,28 @@ export function shapeErrors(definition, value, label = 'value') {
   return [...Object.entries(def.fields).flatMap(([key, child]) => shapeErrors(child, value[key], `${label}.${key}`)),
     ...Object.keys(value).filter(key => !Object.hasOwn(def.fields, key)).map(key => `${label}.${key}: unexpected field.`)];
 }
+/**
+ * Turn schema errors into a few readable lines. Alternatives that the document did not choose (oneOf branches) are
+ * noise; an unknown key that contains a space is almost always a YAML value with a comma inside { }.
+ */
+export function readableShapeErrors(errors) {
+  const where = path => path ? path.slice(1).replaceAll('/', '.') : 'the document';
+  const comma = errors.find(e => e.keyword === 'additionalProperties' && /\s/.test(e.params?.additionalProperty ?? ''));
+  if (comma) return `${where(comma.instancePath)}: the text "${comma.params.additionalProperty}" became a separate field. A value inside { } that contains a comma must be quoted, for example description: "First part, second part."`;
+  const useful = errors.filter(e => !['oneOf', 'anyOf', 'if', 'else', 'not'].includes(e.keyword) && !(e.keyword === 'const' && e.instancePath.endsWith('/kind')));
+  const deepest = Math.max(...useful.map(e => e.instancePath.split('/').length));
+  const lines = [...new Set(useful.filter(e => e.instancePath.split('/').length === deepest).map(e =>
+    e.keyword === 'additionalProperties' ? `${where(e.instancePath)}: unknown field "${e.params.additionalProperty}"`
+      : e.keyword === 'required' ? `${where(e.instancePath)}: missing field "${e.params.missingProperty}"`
+      : e.keyword === 'enum' ? `${where(e.instancePath)}: use one of ${e.params.allowedValues.join(', ')}`
+      : `${where(e.instancePath)}: ${e.message}`))];
+  return (lines.length > 4 ? [...lines.slice(0, 4), `(${lines.length - 4} more; method schema step shows the fields)`] : lines).join('; ');
+}
 export function validateMethod(value) {
   try {
     const method = parseDocumentValue(value);
     if (!['method/3.1', 'method/3.2', 'method/3.3'].includes(method?.format)) throw new MethodValidationError('UNSUPPORTED_FORMAT: use a method/3.1, method/3.2, or method/3.3 document.', 'unsupported_format');
-    if (!methodShape(method)) throw Error('Method: ' + methodShape.errors.map(error => `${error.instancePath}: ${error.message}`).join('; '));
+    if (!methodShape(method)) throw Error('Method: ' + readableShapeErrors(methodShape.errors));
     return validateSemantics(method, (def, value) => {
       const errors = shapeErrors(def, value, 'Default');
       if (errors.length) throw Error(errors.join('\n'));

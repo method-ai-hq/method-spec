@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runMethod, createCase, retireCase, listCases, testSuite, casesDigest } from '../src/index.js';
+import { runMethod, createCase, retireCase, listCases, testSuite } from '../src/index.js';
 
 const text = { type: 'text', description: 'A test value.' };
 const number = { type: 'number', description: 'A test number.' };
@@ -49,93 +49,178 @@ async function setup(t) {
   const source = await runMethod(current, cfg, { runDir: join(dir, 'run'), inputs: { amounts: [4, 6], to: 'ap@example.com' } });
   assert.equal(source.status, 'completed'); assert.equal(source.result, 'Paid 10; summary sent');
   const make = (id, expect, extra = {}) => createCase({ methodFile: current, runDir: join(dir, 'run'), id, note: 'The report must say that delivery is not yet confirmed.', expect, config: cfg, ...extra });
-  return { dir, cfg, current, write, make };
+  // A case from a run that was right pins behaviour that must stay.
+  const pin = (id, expect, extra = {}) => createCase({ methodFile: current, passingRun: join(dir, 'run'), id, note: 'Keep this right.', expect, config: cfg, ...extra });
+  return { dir, cfg, current, write, make, pin };
 }
 
-test('a case proves red on the current version without running any step', async t => {
+
+test('a case must fail on the run that went wrong; it then fails on the current version without running a step', async t => {
   const { cfg, current, make } = await setup(t);
-  await make('delivery-pending', [{ kind: 'equals', ref: 'outputs.report', value: 'Paid 10; summary sent, delivery not yet confirmed', text: 'The report says delivery is not yet confirmed.' }]);
+  await assert.rejects(make('already-right', [{ kind: 'equals', ref: 'outputs.total', value: 10 }]), /already meets this case/);
+  const created = await make('delivery-pending', [{ kind: 'equals', ref: 'outputs.report', value: 'Paid 10; summary sent, delivery not yet confirmed' }]);
+  assert.equal(created.on_failing_run[0].status, 'fail');
   const report = await testSuite(current, cfg);
-  assert.equal(report.passed, false);
-  assert.equal(report.cases[0].verdict, 'fail');
+  assert.equal(report.passed, false); assert.equal(report.cases[0].verdict, 'fail');
   assert.deepEqual(report.cases[0].candidate.attempts[0].live_steps, []);
 });
 
-test('a repair is accepted when the new case turns green and earlier cases still pass', async t => {
-  const { cfg, current, write, make } = await setup(t);
-  await make('total', [{ kind: 'equals', ref: 'outputs.total', value: 10 }]);
+test('a fix turns the new case green, and pinned cases must keep passing', async t => {
+  const { cfg, current, write, make, pin } = await setup(t);
+  await pin('total', [{ kind: 'equals', ref: 'outputs.total', value: 10 }]);
   await make('delivery-pending', [{ kind: 'predicate', runtime: 'node', entrypoint: 'mentions-delivery.mjs' }]);
-  const unrepaired = await testSuite(current, cfg, { baseline: current, newIds: ['delivery-pending'] });
-  assert.equal(unrepaired.cases.find(c => c.id === 'delivery-pending').verdict, 'not_fixed');
-  await writeFile(current, JSON.stringify(version({ report: 'report-v2.mjs' })));
   const baseline = await write('invoices-before.method', version());
+  await writeFile(current, JSON.stringify(version({ report: 'report-v2.mjs' })));
   const gate = await testSuite(current, cfg, { baseline, newIds: ['delivery-pending'] });
   assert.equal(gate.passed, true, JSON.stringify(gate.counts));
+  // Cases that touch the changed step run first.
   assert.deepEqual(gate.cases.map(c => [c.id, c.verdict]), [['delivery-pending', 'fixed'], ['total', 'pass']]);
   assert.deepEqual(gate.cases[0].candidate.attempts[0].live_steps, ['report']);
+  assert.ok(gate.cases.every(c => Number.isInteger(c.duration_ms)));
 });
 
-test('a change that breaks an earlier case is a regression', async t => {
-  const { cfg, current, write, make } = await setup(t);
-  await make('report-text', [{ kind: 'equals', ref: 'outputs.report', value: 'Paid 10; summary sent' }]);
+test('every approved case must pass: a failing one blocks, and a regression is named as one', async t => {
+  const { cfg, current, write, pin } = await setup(t);
+  await pin('report-text', [{ kind: 'equals', ref: 'outputs.report', value: 'Paid 10; summary sent' }]);
   const baseline = await write('invoices-before.method', version());
   await writeFile(current, JSON.stringify(version({ report: 'report-v2.mjs' })));
+  assert.equal((await testSuite(current, cfg)).cases[0].verdict, 'fail');
   const gate = await testSuite(current, cfg, { baseline });
   assert.equal(gate.passed, false); assert.equal(gate.counts.regression, 1);
-  // A changed input to a step that acts on the world cannot be replayed: the recording does not show what it would do.
-  await writeFile(current, JSON.stringify(version({ compute: 'compute-bad.mjs' })));
-  assert.equal((await testSuite(current, cfg, { baseline })).cases[0].verdict, 'unverifiable');
 });
 
-test('a changed step that acts on an external system makes the case unverifiable', async t => {
-  const { cfg, current, make } = await setup(t);
-  await make('total', [{ kind: 'equals', ref: 'outputs.total', value: 10 }]);
+test('a case runs only the steps it needs, so a change elsewhere does not block it', async t => {
+  const { cfg, current, pin } = await setup(t);
+  await pin('total', [{ kind: 'equals', ref: 'outputs.total', value: 10 }]);
+  await pin('report-text', [{ kind: 'equals', ref: 'outputs.report', value: 'Paid 10; summary sent' }]);
+  // The send step changes. The total case does not need it; the report case does, and send acts on a service.
   await writeFile(current, JSON.stringify(version({ send: 'send-v2.mjs' })));
-  const gate = await testSuite(current, cfg);
-  assert.equal(gate.cases[0].verdict, 'unverifiable'); assert.equal(gate.passed, false);
-  assert.match(gate.cases[0].candidate.attempts[0].reason, /Cannot replay send:0/);
+  const report = await testSuite(current, cfg);
+  assert.deepEqual(report.cases.map(c => [c.id, c.verdict]).sort(), [['report-text', 'unverifiable'], ['total', 'pass']]);
+  assert.match(report.cases.find(c => c.id === 'report-text').candidate.attempts[0].reason, /Cannot replay send:0/);
+});
+
+test('a changed step that writes files runs in a scratch folder during a replay', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'method-scratch-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const out = join(dir, 'reports'); await mkdir(out);
+  const save = v => `import{readFileSync,writeFileSync}from"node:fs";const a=JSON.parse(readFileSync(0,"utf8"));const o=JSON.parse(process.env.METHOD_ENVIRONMENT).reports;writeFileSync(o+"/report.md",a.text+"${v}");console.log(JSON.stringify({saved:"Saved "+(a.text.length+${v.length})+" characters."}))`;
+  await writeFile(join(dir, 'make.mjs'), 'console.log(JSON.stringify({text:"Total 10"}))');
+  await writeFile(join(dir, 'save.mjs'), save(''));
+  const doc = { format: 'method/3.3', name: 'Save', goal: 'Save a report.', environment: { reports: { type: 'files', description: 'Reports.' } },
+    steps: { make: { name: 'Make', purpose: 'Make text.', do: script('make.mjs'), out: { text } },
+      save: { name: 'Save', purpose: 'Save the report.', in: { text: 'text' }, do: script('save.mjs'), out: { saved: text }, changes: ['environment.reports'] } }, result: 'saved' };
+  const file = join(dir, 's.method'); await writeFile(file, JSON.stringify(doc));
+  const cfg = config({ reports: out });
+  assert.equal((await runMethod(file, cfg, { runDir: join(dir, 'run') })).status, 'completed');
+  await createCase({ methodFile: file, runDir: join(dir, 'run'), id: 'mentions-eur', note: 'Say the currency.', expect: [{ kind: 'equals', ref: 'outputs.saved', value: 'Saved 12 characters.' }], config: cfg });
+  await writeFile(join(dir, 'save.mjs'), save(' EUR'));
+  const report = await testSuite(file, cfg);
+  assert.equal(report.cases[0].verdict, 'pass', JSON.stringify(report.cases[0].candidate.attempts));
+  assert.deepEqual(report.cases[0].candidate.attempts[0].live_steps, ['save']);
+  // The real folder was not touched by the replay.
+  assert.equal(await readFile(join(out, 'report.md'), 'utf8'), 'Total 10');
 });
 
 test('recorded observations replay the bounce, and the run then fails', async t => {
   const { cfg, current, make } = await setup(t);
   await make('bounce', [{ kind: 'effect', effect: 'send/0/delivered', verdict: ['contradicted'] }, { kind: 'status', in: ['failed'] }],
     { observations: { 'send/0/delivered': [{ source: 'dsn', ref: 'dsn-1', data: { status: '5.1.1' } }] } });
-  await make('no-observations', [{ kind: 'effect', effect: 'send/0/delivered', verdict: ['contradicted'] }]);
   const report = await testSuite(current, cfg);
-  assert.deepEqual(report.cases.map(c => [c.id, c.verdict]), [['bounce', 'pass'], ['no-observations', 'fail']]);
-  // The source run observed no bounce yet. In a replay that stays pending; it does not become unrefuted.
-  assert.match(report.cases[1].candidate.attempts[0].results[0].reason, /send\/0\/delivered pending/);
+  assert.deepEqual(report.cases.map(c => [c.id, c.verdict]), [['bounce', 'pass']]);
 });
 
 test('vacuous expectations, sensitive runs and duplicate IDs are refused', async t => {
-  const { dir, current, make, cfg } = await setup(t);
-  await assert.rejects(make('vacuous', [{ kind: 'status', in: ['completed'] }]), /passes on an empty result/);
+  const { dir, current, pin, cfg } = await setup(t);
+  await assert.rejects(pin('vacuous', [{ kind: 'status', in: ['completed'] }]), /passes on an empty result/);
   await assert.rejects(createCase({ methodFile: current, runDir: join(dir, 'sensitive', 'run'), id: 'x', note: 'n', expect: [{ kind: 'equals', ref: 'outputs.total', value: 1 }], config: cfg }), /sensitive/);
-  await make('total', [{ kind: 'equals', ref: 'outputs.total', value: 10 }]);
-  await assert.rejects(make('total', [{ kind: 'equals', ref: 'outputs.total', value: 10 }]), /already exists/);
+  await pin('total', [{ kind: 'equals', ref: 'outputs.total', value: 10 }]);
+  await assert.rejects(pin('total', [{ kind: 'equals', ref: 'outputs.total', value: 10 }]), /already exists/);
   assert.deepEqual((await listCases(current)).map(c => c.id), ['total']);
 });
 
-test('superseding a case retires it with its reason, and the digest shows any change', async t => {
-  const { dir, cfg, current, make } = await setup(t);
-  await make('old-rule', [{ kind: 'equals', ref: 'outputs.total', value: 10 }]);
-  const before = await casesDigest(join(dir, 'cases'));
-  await make('new-rule', [{ kind: 'equals', ref: 'outputs.total', value: 10 }], { supersedes: ['old-rule'] });
+test('superseding a case retires it with its reason', async t => {
+  const { cfg, current, pin } = await setup(t);
+  await pin('old-rule', [{ kind: 'equals', ref: 'outputs.total', value: 10 }]);
+  await pin('new-rule', [{ kind: 'equals', ref: 'outputs.total', value: 10 }], { supersedes: ['old-rule'] });
   const cases = await listCases(current);
   assert.equal(cases.find(c => c.id === 'old-rule').status, 'retired');
   assert.equal(cases.find(c => c.id === 'old-rule').superseded_by, 'new-rule');
   const report = await testSuite(current, cfg);
   assert.deepEqual(report.cases.map(c => c.id), ['new-rule']); assert.equal(report.retired, 1);
-  assert.notEqual((await casesDigest(join(dir, 'cases'))).sha256, before.sha256);
   await assert.rejects(retireCase(current, 'old-rule', { reason: 'again' }), /already retired/);
 });
 
 test('redaction replaces recorded values everywhere, and the case still replays', async t => {
-  const { dir, cfg, current, make } = await setup(t);
-  await make('total', [{ kind: 'equals', ref: 'outputs.total', value: 10 }], { redact: { 'ap@example.com': 'person@example.test' } });
+  const { dir, cfg, current, pin } = await setup(t);
+  await pin('total', [{ kind: 'equals', ref: 'outputs.total', value: 10 }], { redact: { 'ap@example.com': 'person@example.test' } });
   const recording = await readFile(join(dir, 'cases/total/recording.json'), 'utf8');
   assert.ok(!recording.includes('ap@example.com')); assert.ok(recording.includes('person@example.test'));
   const report = await testSuite(current, cfg);
   assert.equal(report.cases[0].verdict, 'pass');
   assert.deepEqual(report.cases[0].candidate.attempts[0].live_steps, []);
+});
+
+// A fake judge model: a criterion about delivery passes when the text says "delivery"; it can also invent a quote.
+function judge(options = {}) {
+  let calls = 0;
+  const transport = async body => {
+    calls++;
+    const prompt = JSON.stringify(body);
+    const text = prompt.slice(prompt.indexOf('Text:')).replace(/\\n/g, '\n');
+    const pass = text.includes('delivery');
+    const verdicts = [{ id: 'c1', pass, quote: options.invent ? 'delivery was confirmed by the courier' : pass ? 'delivery not yet confirmed' : '', reason: pass ? 'It says so.' : 'It does not mention delivery.' }];
+    return { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ verdicts }) }] }], usage: { input_tokens: 1, output_tokens: 1 } };
+  };
+  return { transport, calls: () => calls };
+}
+const withJudge = cfg => ({ ...cfg, limits: { ...cfg.limits, max_model_requests: 20 }, models: { judge: { backend: 'openai-responses', model: 'judge-test', api_key_env: 'METHOD_TEST_UNUSED_KEY', max_output_tokens: 100 } } });
+
+test('a rubric case: plain sentences, judged with quotes, calibrated on the bad and the accepted runs', async t => {
+  const { dir, cfg, current, write } = await setup(t);
+  const judged = withJudge(cfg), fake = judge(), cacheDir = join(dir, 'cache');
+  const options = { runOptions: { transport: fake.transport }, cacheDir };
+  // The run that went wrong, and the run the person accepted after the fix.
+  await writeFile(current, JSON.stringify(version({ report: 'report-v2.mjs' })));
+  assert.equal((await runMethod(current, cfg, { runDir: join(dir, 'fixed'), inputs: { amounts: [4, 6], to: 'ap@example.com' } })).status, 'completed');
+  const created = await createCase({ methodFile: current, runDir: join(dir, 'run'), passingRun: join(dir, 'fixed'), id: 'delivery-stated', note: 'Say whether delivery is confirmed.',
+    rubric: ['The report says whether delivery of the summary is confirmed.'], config: judged, options });
+  assert.equal(created.expect[0].kind, 'rubric'); assert.equal(created.expect[0].ref, 'outputs.report');
+  assert.equal(created.on_failing_run[0].criteria[0].pass, false); assert.equal(created.on_passing_run[0].criteria[0].pass, true);
+  assert.equal(JSON.parse(await readFile(join(dir, 'cases/delivery-stated/examples.json'), 'utf8')).length, 2);
+  const calls = fake.calls();
+  const report = await testSuite(current, judged, { runOptions: { transport: fake.transport, cacheDir } });
+  assert.equal(report.cases[0].verdict, 'pass');
+  // The accepted output was judged before, so the cache answers.
+  assert.equal(fake.calls(), calls);
+  // An invented quote fails the criterion, whatever the judge decided.
+  const liar = judge({ invent: true });
+  const bad = await testSuite(current, judged, { runOptions: { transport: liar.transport, cacheDir: join(dir, 'cache-2') } });
+  assert.equal(bad.cases[0].verdict, 'fail'); assert.match(bad.cases[0].candidate.attempts[0].results[0].reason, /quote is not in the text/);
+  // A rubric that the bad run already meets is refused.
+  await assert.rejects(createCase({ methodFile: current, runDir: join(dir, 'fixed'), id: 'x', note: 'n', rubric: ['The report says whether delivery of the summary is confirmed.'], config: judged, options }), /already meets this case/);
+});
+
+test('the fast judge is used for a criterion only when it agrees with the examples', async t => {
+  const { dir, cfg, current } = await setup(t);
+  await writeFile(current, JSON.stringify(version({ report: 'report-v2.mjs' })));
+  await runMethod(current, cfg, { runDir: join(dir, 'fixed'), inputs: { amounts: [4, 6], to: 'ap@example.com' } });
+  const fake = judge();
+  const identity = { provider: 'typesafe', model: 'jev-test' };
+  const classifier = good => ({ resolve: async () => identity, evaluate: async request => {
+    const pass = good ? JSON.stringify(request.inputs).includes('delivery') : true;
+    return { ...identity, choice: pass ? 'pass' : 'fail', probabilities: { pass: pass ? 0.97 : 0.03, fail: pass ? 0.03 : 0.97 }, confidence: 0.9, usage: null };
+  } });
+  const judged = { ...withJudge(cfg), classification: identity };
+  const make = (id, good) => createCase({ methodFile: current, runDir: join(dir, 'run'), passingRun: join(dir, 'fixed'), id, note: 'Say whether delivery is confirmed.',
+    rubric: ['The report says whether delivery of the summary is confirmed.'], config: judged, options: { runOptions: { transport: fake.transport }, classification: classifier(good), cacheDir: join(dir, 'cache') } });
+  assert.deepEqual((await make('agrees', true)).expect[0].judges, { c1: 'classify' });
+  assert.equal((await make('disagrees', false)).expect[0].judges, undefined);
+});
+
+test('a strict case stops at its first failed run', async t => {
+  const { cfg, current, make } = await setup(t);
+  await make('delivery-pending', [{ kind: 'equals', ref: 'outputs.report', value: 'Paid 10; summary sent, delivery not yet confirmed' }], { runs: 3 });
+  const report = await testSuite(current, cfg);
+  assert.equal(report.cases[0].candidate.attempts.length, 1);
 });

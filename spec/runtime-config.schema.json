@@ -418,6 +418,28 @@
       "additionalProperties": {
         "type": "string"
       }
+    },
+    "rubric": {
+      "type": "object",
+      "properties": {
+        "judge_runs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9
+        },
+        "classify_threshold": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 1
+        },
+        "max_value_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        }
+      },
+      "required": [],
+      "additionalProperties": false
     }
   },
   "required": [],

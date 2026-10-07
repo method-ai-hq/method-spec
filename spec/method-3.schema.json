@@ -999,7 +999,6 @@
                     },
                     "required": [
                       "kind",
-                      "connection",
                       "path"
                     ],
                     "additionalProperties": false
@@ -1075,7 +1074,6 @@
                     },
                     "required": [
                       "kind",
-                      "connection",
                       "database",
                       "query",
                       "expect"
@@ -1167,7 +1165,6 @@
                     },
                     "required": [
                       "kind",
-                      "connection",
                       "path",
                       "expect"
                     ],
@@ -1260,9 +1257,7 @@
             },
             "required": [
               "intent",
-              "observe",
-              "schedule",
-              "confirm"
+              "observe"
             ],
             "additionalProperties": false
           },

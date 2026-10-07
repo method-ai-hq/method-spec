@@ -11,7 +11,7 @@ node src/cli.js run METHOD [--config CONFIG] [--inputs JSON] [--state JSON] [--r
 node src/cli.js schema [method|config]
 node src/cli.js observe RUN_DIR... [--pending ROOT] [--config CONFIG]
 node src/cli.js test METHOD [--config CONFIG] [--case ID]... [--baseline OLD_METHOD] [--new ID]... [--cases DIR]
-node src/cli.js case new METHOD --run RUN_DIR --id ID --note TEXT --expect FILE [--observations FILE] [--redact FILE] [--runs N] [--min-pass N] [--supersedes ID]... [--author TEXT]
+node src/cli.js case new METHOD --id ID --note TEXT [--run BAD_RUN] [--passing-run GOOD_RUN] [--rubric SENTENCE]... [--ref outputs.NAME] [--expect FILE] [--observations FILE] [--redact FILE] [--runs N] [--min-pass N] [--supersedes ID]... [--author TEXT]
 node src/cli.js case retire METHOD ID --reason TEXT [--by ID]
 node src/cli.js case list METHOD
 
@@ -30,7 +30,7 @@ try {
     'run-dir': { type: 'string' }, 'from-run': { type: 'string' }, reuse: { type: 'string', multiple: true },
     pending: { type: 'string', multiple: true }, case: { type: 'string', multiple: true }, baseline: { type: 'string' }, new: { type: 'string', multiple: true }, cases: { type: 'string' },
     run: { type: 'string' }, id: { type: 'string' }, note: { type: 'string' }, expect: { type: 'string' }, observations: { type: 'string' }, redact: { type: 'string' },
-    runs: { type: 'string' }, 'min-pass': { type: 'string' }, supersedes: { type: 'string', multiple: true }, author: { type: 'string' }, reason: { type: 'string' }, by: { type: 'string' },
+    runs: { type: 'string' }, 'min-pass': { type: 'string' }, rubric: { type: 'string', multiple: true }, ref: { type: 'string' }, 'passing-run': { type: 'string' }, supersedes: { type: 'string', multiple: true }, author: { type: 'string' }, reason: { type: 'string' }, by: { type: 'string' },
   } });
   const [command, file, ...extra] = positionals;
   if (extra.length && !['observe', 'case'].includes(command)) throw new Error('Unexpected positional arguments');
@@ -72,7 +72,7 @@ try {
     if (!target) throw new Error('Use case new|retire|list METHOD');
     if (action === 'new') {
       const integer = (value, name) => { if (value === undefined) return undefined; const n = Number(value); if (!Number.isSafeInteger(n)) throw new Error(`${name} must be an integer`); return n; };
-      const created = await createCase({ methodFile: target, runDir: values.run, id: values.id, note: values.note, author: values.author, expect: await json(values.expect),
+      const created = await createCase({ methodFile: target, runDir: values.run, passingRun: values['passing-run'], rubric: values.rubric ?? [], ref: values.ref, id: values.id, note: values.note, author: values.author, expect: (await json(values.expect)) ?? [],
         observations: await json(values.observations), redact: await json(values.redact), runs: integer(values.runs, '--runs'), minPass: integer(values['min-pass'], '--min-pass'),
         supersedes: values.supersedes ?? [], casesDir: values.cases, config: await runConfig(target) });
       console.log(JSON.stringify(created, null, 2));

@@ -13,9 +13,12 @@ export function runLabelType(method: any): any;
 export function durationMs(value: any): number;
 /** Observation offsets from the action's completion; the last offset is the finality horizon. */
 export function effectSchedule(effect: any): number[];
+/** A built-in observer reads its own connection, or by default the one connection the step changes. */
+export function observerConnection(effect: any, step: any): any;
 export function validateSemantics(method: any, assertData: any): {
     method: any;
     order: string[];
     dependencies: {};
 };
 export function own(obj: any, key: any): boolean;
+export function effectConfirm(effect: any): any;

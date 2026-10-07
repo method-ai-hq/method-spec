@@ -174,7 +174,25 @@ Output types are always checked. An omitted task check is recorded as `unchecked
 
 ## Effect contracts
 
-A success status, receipt, or returned ID shows only that a service accepted a request. In `method/3.3`, each step that changes an environment declares the external result it intends, and an observer reads the changed system to confirm it. The runtime, not the Method or the model, decides from those observations whether the run is complete.
+A success status, receipt, or returned ID shows only that a service accepted a request. In `method/3.3`, the runtime confirms external changes by reading the changed system, and decides from those observations whether the run is complete.
+
+**Local files need nothing.** For each `files` connection in a step's `changes`, the runtime lists the folder (or the one file) before and after the step: size and modification time, skipping `.git`, `node_modules`, `.venv`, `__pycache__`, `sensitive` and `.method-runs`, up to 50,000 files. It records the changed files in the ledger (`STEP/ITERATION/files:NAME`). When a text output of the step is a path inside the folder (an absolute path, or a relative value with no spaces that has a `/` or a file extension), that file must have been added or changed: "the step returned `out/weekly.md`, but that file did not change" fails the run with `effect_contradicted` before later steps start. A step that changes nothing, and claims no file, is recorded as `unchanged` and does not fail. A folder above the limit is recorded as `unobserved`.
+
+**Other connections** (a service, a browser, a desktop) need an effect or a waiver. A short service effect, with defaults:
+
+```yaml
+steps:
+  save_contact:
+    do: {kind: run, runtime: node, entrypoint: save-contact.mjs}
+    changes: [environment.crm]
+    effects:
+      saved:
+        intent: The CRM has one contact with this email address.
+        in: {email: inputs.email}
+        observe: {kind: http, path: "/contacts?email={inputs.email}", expect: {fields: {count: 1}}}
+```
+
+A longer one, with a script observer and a 5-day schedule for mail:
 
 ```yaml
 environment:
@@ -203,13 +221,14 @@ steps:
 
 Rules in `method/3.3`:
 
-- Every `run` and `agent` step states `changes`. Use `changes: []` for a step that changes nothing. This is a declaration: the runtime cannot see what a trusted local script does.
-- A step with an environment in `changes` has at least one effect, or a `no_effect_reason`: a plain sentence that says why no observer confirms the change, for example "Reads pages only; submits and posts nothing." for a browser step, or "Writes a private draft that the next step reads." The run records each waiver (`effects.waived` event and `unobserved_changes` in the result), so a reader sees which external changes nobody observed. A step with effects changes an environment. Use one of the two, not both.
+- `changes` defaults to none. It is a declaration: the runtime cannot see what a trusted local script does.
+- A step that changes a connection other than `files` has at least one effect, or a `no_effect_reason`: a plain sentence that says why no observer confirms the change, for example "Reads pages only; submits and posts nothing." for a browser step. The run records each waiver (`effects.waived` event and `unobserved_changes` in the result), so a reader sees which external changes nobody observed. Use one of the two, not both. A waiver for a step that changes only files connections is refused, because those are observed automatically.
+- Defaults: `schedule` is one reading at once with a 1-minute horizon; `confirm` is `positive`; a built-in observer reads the connection that the step changes (read-only), or must name one when the step changes several.
 - An environment with `role: observer` is visible only to effect observers. Actions cannot bind it, change it, or see its configured value in `METHOD_ENVIRONMENT`. Give observers separate, read-only credentials through their runtime profile.
 - An effect's `in` cannot reference its own step's outputs. An observer never sees the receipt. It receives the **correlation token**: the action's `METHOD_OPERATION_ID`. Put the token where the changed system keeps a reference (a message header, an idempotency key, a note field). For an `agent` action with effects, the runtime adds the token to the prompt.
 - `schedule` offsets count from the action's completion and must increase. The last offset, `horizon`, is the time after which no new evidence is expected. Units are `s`, `m`, `h`, and `d`. `first` defaults to `0s`.
 
-**Built-in observers.** For the common cases, `observe` names a built-in kind and needs no script, judge, or fixtures; the runtime's own tests cover their judgment. Each reads through an observer connection (`connection`), in its own process. Templates insert `{token}` and `{inputs.ALIAS}` from the effect's `in`.
+**Built-in observers.** For the common cases, `observe` names a built-in kind and needs no script, judge, or fixtures; the runtime's own tests cover their judgment. Each runs in its own process and reads `connection`: by default the connection that the step changes, opened read-only, or an environment with `role: observer` when the observer needs separate, read-only credentials. Templates insert `{token}` and `{inputs.ALIAS}` from the effect's `in`.
 
 ```yaml
 # A local file or folder (files connection): the report exists and holds the intended text.
@@ -260,14 +279,15 @@ Limits: observers are trusted local processes, not an OS sandbox. A read can hav
 
 ## Recorded cases
 
-A case is a recorded run plus an expectation about it. It turns a correction into a test that later versions must pass. Cases live in `cases/ID/` next to the Method file and belong to that file name.
+A case is a recorded run plus an expectation about it. It turns a correction into a test that every later version must pass. Cases live in `cases/ID/` next to the Method file and belong to that file name.
 
 ```sh
-method case new task.method --run runs/2026-10-07 --id bounce-reported --note "The AP lead's email bounced; the report did not say so." --expect expect.json
+method case new task.method --id sources-named --run runs/bad --passing-run runs/fixed --note "The report doesn't say which source backs each point." --rubric "Every point names the source file that supports it." --rubric "The report is under 300 words."
 method test task.method
-method test task.method --baseline task-before.method --new bounce-reported
 method case retire task.method old-rule --by new-rule --reason "Policy changed on 2026-10-01."
 ```
+
+`--run` is the run that went wrong. The case must **fail** on it; otherwise the case does not capture the problem, or the note does not match what the run did, and `case new` refuses it (`case_not_red`). `--passing-run` is the run that the person accepted after the fix; the case must **pass** on it (`case_not_green`). A case with only `--passing-run` pins behaviour that is already right.
 
 `case new` reads the run's events and saves `recording.json` (each accepted iteration's inputs and outputs, a key for each step, the run's inputs and initial state, and the run's effect observations), the declared files of its steps, and `case.json` (note, author, source run, expectations, `runs`, `min_pass`, retention date). `--observations FILE` adds observations by effect key (`STEP/ITERATION/NAME`). `--redact FILE` maps recorded text to replacement text everywhere in the recording and the note. Cases cannot be built from runs under `sensitive/`.
 
@@ -277,19 +297,21 @@ Expectations (`--expect` is a JSON list):
 - `{"kind": "status", "in": ["failed"]}` checks the run status.
 - `{"kind": "effect", "effect": "send/0/delivered", "verdict": ["contradicted"]}` checks an effect verdict.
 - `{"kind": "predicate", "runtime": "node", "entrypoint": "check.mjs"}` runs a script on `{status, code, result, outputs, effects}` that returns `{"pass": true|false, "reason": "..."}`. The script is copied into the case.
+- `{"kind": "rubric", "ref": "outputs.report", "criteria": [{"id": "c1", "text": "..."}]}` judges text, a record (as JSON), or a text file output against plain sentences. `--rubric SENTENCE` (repeatable) makes one; `--ref` defaults to the Method's result.
 
-Each expectation can carry `text`, a plain-language statement for people. A case is refused if its expectations pass on an empty result: such a case cannot detect the error.
+Each expectation can carry `text`, a plain-language statement for people. A case is refused if its non-rubric expectations pass on an empty result: such a case cannot detect the error.
 
-**Replay.** `method test` runs the Method once per case run, with the recorded inputs. A step whose key (its definition, script files, model profiles, and tools; not its name, reading, purpose, or effects) and inputs match the recording returns the recorded outputs and records `step.replayed`. Other steps run. A step that changed, or whose inputs changed, and that asks a person or changes an environment, cannot run in a test: the case is `unverifiable`. Effects are judged on recorded observations only; observers never read the live system in a test. Without recorded observations, an effect is `not_replayed`. With them, an absence of evidence stays `pending`.
+**Rubric judge.** A model judges each criterion and quotes the words that decide it, or gives an empty quote when no single passage decides it (for example, when something must be absent). A quote that is not in the value fails the criterion. By default the judge runs 3 times and a criterion passes only when every vote passes. The judge uses the model profile `judge` when the configuration has one, otherwise the default agent. Operator configuration can change `rubric: {judge_runs, classify_threshold, max_value_bytes}`. Judgments are cached by value, criteria, and judge profile under `~/.cache/method/judgments` (or `METHOD_CACHE_DIR`). At `case new`, the judge's verdicts on the run that went wrong and the pass on the accepted run are saved as `examples.json`. When a classification provider is configured, the faster classification judge is used for a criterion only when it agrees with those examples, including at least one pass and one fail; otherwise the model judge stays.
 
-**Results.** A case passes when at least `min_pass` of `runs` runs pass. Use more runs when a changed model step runs live. With `--baseline OLD`, each case also runs on the old version:
+**Replay.** `method test` runs the Method once per case run, with the recorded inputs. A step whose key (its definition, script files, model profiles, and tools; not its name, reading, purpose, or effects) and inputs match the recording returns the recorded outputs and records `step.replayed`. Other steps run. Each `files` connection is bound to a fresh scratch folder, so a changed step that writes files runs safely. When every expectation refers to `outputs.NAME`, only the steps that produce those outputs, and the steps they depend on, run. A changed step that asks a person or changes another kind of connection cannot run in a test: the case is `unverifiable`. Effects are judged on recorded observations only; observers never read the live system in a test. Without recorded observations, an effect is `not_replayed`. With them, an absence of evidence stays `pending`.
+
+**Results.** Every active case must pass. A case passes when at least `min_pass` of `runs` runs pass, and a case stops as soon as its result is decided. Cases run 4 at a time; cases whose recorded steps differ from this version run first. Each case reports `duration_ms`. With `--baseline OLD`, each case also runs on the old version, to show what the change fixed or broke:
 
 | Verdict | Meaning | Blocks the gate |
 |---|---|---|
 | `pass` / `fixed` | Passes on the new version | No |
-| `already_failing` | Fails on both versions | No (listed) |
 | `regression` | Passed on the old version, fails on the new one | Yes |
-| `fail` | Fails, with no baseline | Yes |
+| `fail` | Fails | Yes |
 | `unverifiable` | Cannot be replayed on this version | Yes |
 | `not_red` / `not_fixed` | A `--new` case passed before the change, or still fails after it | Yes |
 

@@ -85,6 +85,68 @@ export function observeEffect({ effect, key, token, inputs, attempt, actionOutco
         builtin?: undefined;
     };
 }>;
+/** Size and modification time of every file under a folder, or null when the folder is too large to observe. */
+export function listFolder(root: any, exclude?: any[]): Promise<{}>;
+/**
+ * Compare a folder before and after a step. A path that the step returns inside the folder must have changed:
+ * "it said it saved the report, but the report did not change" is a contradiction. No change at all is allowed.
+ */
+export function observeFiles({ key, connection, root, before, after, outputs, completedAt }: {
+    key: any;
+    connection: any;
+    root: any;
+    before: any;
+    after: any;
+    outputs: any;
+    completedAt: any;
+}): {
+    verdict: string;
+    reason: string;
+    effect: any;
+    automatic: boolean;
+    connection: any;
+    action_outcome: string;
+    attempt: number;
+    observed_at: string;
+    final: boolean;
+    completed_at: any;
+    horizon_at: any;
+    next_observation_at: any;
+    evidence: any[];
+} | {
+    verdict: string;
+    changed: {
+        path: string;
+        change: string;
+    }[];
+    evidence: string[];
+    reason: string;
+    effect: any;
+    automatic: boolean;
+    connection: any;
+    action_outcome: string;
+    attempt: number;
+    observed_at: string;
+    final: boolean;
+    completed_at: any;
+    horizon_at: any;
+    next_observation_at: any;
+} | {
+    verdict: string;
+    changed: any[];
+    reason: string;
+    effect: any;
+    automatic: boolean;
+    connection: any;
+    action_outcome: string;
+    attempt: number;
+    observed_at: string;
+    final: boolean;
+    completed_at: any;
+    horizon_at: any;
+    next_observation_at: any;
+    evidence: any[];
+};
 /** Earlier readings of one effect, oldest first. */
 export function previousObservations(runDir: any, key: any): Promise<{
     observed_at: any;
@@ -104,6 +166,7 @@ export function effectSummary(entries: any): {
     contradicted: number;
     unknown: number;
     pending: number;
+    unchanged: number;
     next_observation_at: any;
     effects: {
         effect: any;

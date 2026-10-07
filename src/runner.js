@@ -19,7 +19,8 @@ import { renderPrompt } from './prompt.js';
 import { preflight } from './preflight.js';
 import { progressMessage } from './progress.js';
 import { readParentRun, planFork, copyForkFiles } from './fork.js';
-import { effectKey, connectionsFor, testFixtures, runObserverScript, observeEffect, readLedger, appendLedger, currentEffects, effectSummary, statusWithEffects, waitUntil, nextObservation, horizonAt, previousObservations } from './effects.js';
+import { effectKey, connectionsFor, testFixtures, runObserverScript, observeEffect, readLedger, appendLedger, currentEffects, effectSummary, statusWithEffects, waitUntil, nextObservation, horizonAt, previousObservations, listFolder, observeFiles, isBuiltin } from './effects.js';
+import { observerConnection } from './semantics.js';
 import { replayedCandidate, unverifiable } from './replay.js';
 
 function initialValues(defs = {}, supplied = {}) {
@@ -222,17 +223,20 @@ async function executeRun(file, config, options) {
     };
     const observerScript = async (exec, input, role, token, signal) => {
       await verifyBundle();
-      const { output, diagnostics } = await runObserverScript({ exec, input, role, token, bundle, runtimeInfo, connections: connectionsFor(method, config.environment, 'observer'), processPath: options.processPath, signal, maxBytes: config.limits.max_output_bytes });
+      // A built-in observer may read the connection that its step changed; it opens it read-only.
+      const connections = { ...connectionsFor(method, config.environment, 'observer'), ...(isBuiltin(exec) && exec.connection ? { [exec.connection]: config.environment?.[exec.connection] } : {}) };
+      const { output, diagnostics } = await runObserverScript({ exec, input, role, token, bundle, runtimeInfo, connections, processPath: options.processPath, signal, maxBytes: config.limits.max_output_bytes });
       return { output, diagnostics };
     };
     const fixtures = await testFixtures(method, bundle, manifest, async (effect, input) => (await observerScript(effect.judge, input, 'judge', input.token, options.signal ?? new AbortController().signal)).output);
     if (fixtures.length) await record('effects.fixtures_passed', { fixtures });
     // Declared waivers are part of the record, so a reader sees which external changes nobody observes.
-    const waived = Object.entries(method.steps).filter(([, step]) => step.no_effect_reason !== undefined).map(([step, { no_effect_reason, changes }]) => ({ step, reason: no_effect_reason, changes: changes.filter(c => c.startsWith('environment.')) }));
+    const waived = Object.entries(method.steps).filter(([, step]) => step.no_effect_reason !== undefined).map(([step, { no_effect_reason, changes = [] }]) => ({ step, reason: no_effect_reason, changes: changes.filter(c => c.startsWith('environment.')) }));
     if (waived.length && !saved) await record('effects.waived', { waived });
     // Observe one effect, write the ledger, and record the verdict in the run's events.
-    const observe = async (spec, data) => {
+    const observe = async (effect, data) => {
       const signal = options.signal ?? new AbortController().signal;
+      const spec = isBuiltin(effect.observe) ? { ...effect, observe: { ...effect.observe, connection: observerConnection(effect, method.steps[data.key.split('/')[0]]) } } : effect;
       const replay = options.replay ? options.replay.observations?.[data.key] : undefined;
       // A replay never reads the live system. Without recorded observations the effect is not judged; with them, an
       // absence of evidence stays pending, because the recording does not show that the horizon passed.
@@ -243,9 +247,16 @@ async function executeRun(file, config, options) {
       await record('effect.observed', entry);
       return entry;
     };
+    // A wait for an effect reading is visible, so a quiet run does not look stuck.
+    const announceWait = async (at, key, write) => {
+      const seconds = Math.round((Date.parse(at) - Date.now()) / 1000);
+      if (seconds >= 2) await write('progress', { message: `Waiting ${seconds} s to check ${key}.` });
+    };
     const effectInputs = (step, scope) => Object.fromEntries(Object.entries(step ?? {}).map(([alias, ref]) => [alias, structuredClone(resolve(scope, ref))]));
     await verifyBundle();
     for (const id of order) {
+      // A replay for a case runs only the steps that its expectations need.
+      if (options.replay?.only && !options.replay.only.includes(id)) continue;
       const step = method.steps[id];
       const stepOutputs = effectiveOutputs(step);
     const limits = { ...config.step_defaults, ...step.limits };
@@ -361,7 +372,11 @@ async function executeRun(file, config, options) {
           const answer = options.human?.steps?.[active];
           // A replay serves recorded outputs for unchanged steps; a changed step that acts on the world cannot be replayed.
           const replayed = options.replay ? replayedCandidate(options.replay, { id, step, iteration, bindings, manifest, profiles, tools }) : null;
-          if (options.replay && !replayed && (step.ask || (step.changes ?? []).some(x => x.startsWith('environment.')))) unverifiable(id, iteration, step);
+          // In a replay, files connections are scratch folders, so a changed step that writes files can run.
+          if (options.replay && !replayed && (step.ask || (step.changes ?? []).some(x => x.startsWith('environment.') && method.environment?.[x.slice(12)]?.type !== 'files'))) unverifiable(id, iteration, step);
+          const folders = (step.changes ?? []).filter(x => x.startsWith('environment.') && method.environment?.[x.slice(12)]?.type === 'files').map(x => x.slice(12));
+          const before = {};
+          for (const name of folders) before[name] = await listFolder(pathResolve(config.environment[name]), [runDir]);
           if (step.ask && !replayed) {
             const prompt = renderPrompt(step.ask, bindings);
             if (Buffer.byteLength(prompt) + Buffer.byteLength(JSON.stringify(bindings)) > config.limits.max_request_bytes) fail('Expanded prompt exceeds request limit', 'input_limit');
@@ -411,12 +426,21 @@ async function executeRun(file, config, options) {
             }
           };
           await accept(await act());
+          // The runtime reads each changed folder itself; a file that the step claims to have written must have changed.
+          for (const name of folders) {
+            const entry = observeFiles({ key: effectKey(id, iteration, `files:${name}`), connection: name, root: pathResolve(config.environment[name]), before: before[name],
+              after: await listFolder(pathResolve(config.environment[name]), [runDir]), outputs, completedAt: new Date().toISOString() });
+            await appendLedger(runDir, entry);
+            await record('effect.observed', entry);
+            if (entry.verdict === 'contradicted') fail(`Effect ${entry.effect} was contradicted: ${entry.reason}`, 'effect_contradicted');
+          }
           // Blocking effects are observed before later steps start. Other effects are observed when the run ends.
           const completedAt = new Date().toISOString();
           const registered = [];
           for (const [name, spec] of Object.entries(step.effects ?? {})) {
             const data = { key: effectKey(id, iteration, name), token, inputs: effectInputs(spec.in, root), attempt: 1, actionOutcome: 'ok', completedAt };
             if (!spec.blocking) { registered.push({ data, spec }); continue; }
+            if (!options.replay) await announceWait(nextObservation(spec, completedAt, new Date(0).toISOString()), data.key, scopedRecord);
             if (!options.replay && !await waitUntil(nextObservation(spec, completedAt, new Date(0).toISOString()), deadline, bound.signal)) throw timeoutError();
             let entry = await observe(spec, data);
             if (entry.verdict === 'contradicted' && spec.retry === 'idempotent' && !options.replay) {
@@ -449,7 +473,9 @@ async function executeRun(file, config, options) {
       if (step.repeat?.until && !untilReached) fail(`Repeat condition not reached: ${id}`, 'iteration_limit');
     }
     if (performance.now() >= deadline) throw timeoutError();
-    const result = typeof method.result === 'string' ? resolve(root, method.result) : Object.fromEntries(Object.entries(method.result).map(([k, ref]) => [k, resolve(root, ref)]));
+    const resultOf = () => typeof method.result === 'string' ? resolve(root, method.result) : Object.fromEntries(Object.entries(method.result).map(([k, ref]) => [k, resolve(root, ref)]));
+    let result;
+    try { result = resultOf(); } catch (error) { if (!options.replay?.only) throw error; result = null; }
     // Before the run reports, it makes the observations that are due within effect_wait_ms (and the run deadline).
     // Later ones come from method observe. A replay judges each effect once, on its recorded observations.
     const until = Math.min(deadline, performance.now() + config.limits.effect_wait_ms);
@@ -460,7 +486,10 @@ async function executeRun(file, config, options) {
     } else for (;;) {
       const next = currentEffects(await readLedger(runDir)).filter(entry => !entry.final && entry.next_observation_at)
         .sort((a, b) => a.next_observation_at.localeCompare(b.next_observation_at))[0];
-      if (!next || !await waitUntil(next.next_observation_at, until, options.signal)) break;
+      if (!next) break;
+      if (Date.parse(next.next_observation_at) - Date.now() > until - performance.now()) break;
+      await announceWait(next.next_observation_at, next.effect, record);
+      if (!await waitUntil(next.next_observation_at, until, options.signal)) break;
       await observe(specOf(next.effect), { key: next.effect, token: next.token, inputs: next.inputs, attempt: next.attempt + 1, actionOutcome: next.action_outcome, completedAt: next.completed_at });
     }
     const completed = statusWithEffects({ ...summary(), status: 'completed', result }, effectSummary(await readLedger(runDir)));

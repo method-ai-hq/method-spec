@@ -26,3 +26,12 @@ test('contributor harness reports package version and accepts agent choice', () 
   assert.match(execFileSync(process.execPath,['src/cli.js','--version'],{encoding:'utf8'}),new RegExp(info.version.replaceAll('.','\\.')));
   assert.match(execFileSync(process.execPath,['src/cli.js','--agent','claude','--help'],{encoding:'utf8'}),/--agent/);
 });
+
+test('schema errors name the field and give a hint for a comma in a flow map', () => {
+  const comma = { format: 'method/3.3', name: 'x', goal: 'y', steps: { read: { name: 'R', purpose: 'p', do: { kind: 'run', runtime: 'node', entrypoint: 'r.mjs' }, out: { material: { type: 'text', description: 'All source texts', 'each headed by its file name.': null } } } }, result: 'material' };
+  assert.throws(() => validateMethod(comma), /steps\.read\.out\.material: the text "each headed by its file name\." became a separate field\. A value inside \{ \} that contains a comma must be quoted/);
+  const wrong = { format: 'method/3.3', name: 'x', goal: 'y', environment: { web: { type: 'service', description: 'd' } }, steps: { send: { name: 'S', purpose: 'p', do: { kind: 'run', runtime: 'node', entrypoint: 's.mjs' }, out: { r: { type: 'text', description: 'd' } }, changes: ['environment.web'], effects: { e: { intent: 'i', observe: { kind: 'http', path: '/x', expect: { fieldz: { a: 1 } } } } } } }, result: 'r' };
+  assert.throws(() => validateMethod(wrong), error => error.message === 'Method: steps.send.effects.e.observe.expect: unknown field "fieldz"; steps.send.effects.e.observe.expect: missing field "fields"');
+  const alias = { format: 'method/3.3', name: 'x', goal: 'y', inputs: { notes: { type: 'text' } }, steps: { read: { name: 'R', purpose: 'p', in: { notes: 'inputs.notes' }, do: { kind: 'run', runtime: 'node', entrypoint: 'r.mjs' }, out: { notes: { type: 'text', description: 'd' } } } }, result: 'notes' };
+  assert.throws(() => validateMethod(alias), /read\.in\.notes: this step also has an output named notes/);
+});

@@ -1,13 +1,15 @@
 import { readFile, readdir, mkdir, mkdtemp, rm, writeFile, stat } from 'node:fs/promises';
-import { resolve as pathResolve, dirname, basename, join, relative } from 'node:path';
+import { resolve as pathResolve, dirname, basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { isDeepStrictEqual } from 'node:util';
-import { recordRun } from './replay.js';
+import { recordRun, stepKey } from './replay.js';
 import { runMethod } from './runner.js';
 import { copyForkFiles } from './fork.js';
 import { configuration } from './defaults.js';
-import { fail, own, safeData } from './validate.js';
-import { executable, executeProcess, hash, writeJSON, containedFile } from './io.js';
+import { fail, own, safeData, validateMethod, effectiveOutputs } from './validate.js';
+import { executable, executeProcess, hash, writeJSON, containedFile, readDocument } from './io.js';
+import { readLedger, effectSummary } from './effects.js';
+import { judgeRubric, chooseJudges, valueText } from './rubric.js';
 
 const caseId = /^[a-z0-9][a-z0-9-]{0,79}$/;
 const reservedRoots = new Set(['inputs', 'state', 'environment', 'run']);
@@ -15,22 +17,6 @@ export const defaultCasesDir = methodFile => pathResolve(dirname(pathResolve(met
 
 async function readJSON(file) { return JSON.parse(await readFile(file, 'utf8')); }
 async function exists(path) { try { await stat(path); return true; } catch { return false; } }
-
-/** A digest of every file under the cases directory. The learn gate compares it before and after a repair. */
-export async function casesDigest(casesDir) {
-  const files = [];
-  async function visit(dir) {
-    let entries;
-    try { entries = await readdir(dir, { withFileTypes: true }); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
-    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-      const path = join(dir, entry.name);
-      if (entry.isDirectory()) await visit(path);
-      else files.push([relative(casesDir, path), hash(await readFile(path))]);
-    }
-  }
-  await visit(casesDir);
-  return { sha256: hash(files), files: files.length };
-}
 
 /**
  * Cases recorded from runs of this Method file.
@@ -62,34 +48,51 @@ const applyRedaction = (value, redact) => {
 };
 
 function validateExpectations(expect) {
-  if (!Array.isArray(expect) || !expect.length) fail('A case needs at least one expectation', 'case_invalid');
+  if (!Array.isArray(expect) || !expect.length) fail('A case needs at least one expectation (for example --rubric "sentence")', 'case_invalid');
   for (const item of expect) {
     if (item.kind === 'status') { if (!Array.isArray(item.in) || !item.in.length) fail('A status expectation lists the allowed statuses in "in"', 'case_invalid'); }
     else if (item.kind === 'equals') { if (typeof item.ref !== 'string' || !own(item, 'value')) fail('An equals expectation needs ref and value', 'case_invalid'); }
     else if (item.kind === 'effect') { if (typeof item.effect !== 'string' || !Array.isArray(item.verdict)) fail('An effect expectation needs effect and a verdict list', 'case_invalid'); }
     else if (item.kind === 'predicate') { if (typeof item.runtime !== 'string' || typeof item.entrypoint !== 'string') fail('A predicate expectation needs runtime and entrypoint', 'case_invalid'); }
-    else fail(`Unknown expectation kind: ${item.kind}`, 'case_invalid');
+    else if (item.kind === 'rubric') {
+      if (typeof item.ref !== 'string') fail('A rubric expectation needs ref, the output to judge, such as outputs.report', 'case_invalid');
+      if (!Array.isArray(item.criteria) || !item.criteria.length || item.criteria.some(c => typeof c?.text !== 'string' || !c.text.trim() || typeof c.id !== 'string')) fail('A rubric lists criteria as plain sentences', 'case_invalid');
+    } else fail(`Unknown expectation kind: ${item.kind}`, 'case_invalid');
   }
 }
+/** Turn plain sentences into rubric criteria with stable IDs. */
+export const rubricCriteria = sentences => sentences.map((text, i) => typeof text === 'string' ? { id: `c${i + 1}`, text } : text);
 
 const lookup = (root, ref) => {
   let value = root;
   for (const key of ref.split('.')) { if (!own(value, key)) return { missing: true }; value = value[key]; }
   return { value };
 };
+/** A file output is judged by its contents. */
+async function judgedValue(value, artifacts) {
+  if (value && typeof value === 'object' && typeof value.path === 'string' && typeof value.sha256 === 'string' && artifacts) {
+    try { return await readFile(await containedFile(artifacts, value.path), 'utf8'); } catch { return value; }
+  }
+  return value;
+}
 /**
  * Evaluate the expectations against one outcome. A missing value or an effect that was not replayed makes the
  * result unverifiable: the case cannot say whether the version is right.
  */
-export async function evaluate(expect, outcome, { caseDir, config }) {
+export async function evaluate(expect, outcome, { caseDir, config, options = {} }) {
   const results = [];
   for (const item of expect) {
-    let status, reason;
+    let status, reason, detail;
     if (item.kind === 'status') { status = item.in.includes(outcome.status) ? 'pass' : 'fail'; reason = `run status ${outcome.status}`; }
-    else if (item.kind === 'equals') {
+    else if (item.kind === 'equals' || item.kind === 'rubric') {
       const found = lookup(outcome, item.ref);
-      if (found.missing) { status = outcome.status === 'failed' ? 'fail' : 'unverifiable'; reason = `${item.ref} is missing`; }
-      else { status = isDeepStrictEqual(found.value, item.value) ? 'pass' : 'fail'; reason = `${item.ref} = ${JSON.stringify(found.value)}`; }
+      if (found.missing || found.value === null) { status = outcome.status === 'failed' ? 'fail' : 'unverifiable'; reason = `${item.ref} is missing${outcome.error ? ` (the run ${outcome.status}: ${outcome.error})` : ''}`; }
+      else if (item.kind === 'equals') { status = isDeepStrictEqual(found.value, item.value) ? 'pass' : 'fail'; reason = `${item.ref} = ${JSON.stringify(found.value)}`; }
+      else {
+        detail = await judgeRubric({ value: await judgedValue(found.value, outcome.artifacts), criteria: item.criteria, judges: item.judges ?? {}, config, options });
+        status = detail.status;
+        reason = detail.criteria.filter(c => !c.pass).map(c => `${c.text} — ${c.reason}`).join('; ') || `all ${detail.criteria.length} criteria pass`;
+      }
     } else if (item.kind === 'effect') {
       const effect = outcome.effects.find(e => e.effect === item.effect);
       if (!effect) { status = outcome.status === 'failed' ? 'fail' : 'unverifiable'; reason = `effect ${item.effect} was not observed`; }
@@ -99,29 +102,51 @@ export async function evaluate(expect, outcome, { caseDir, config }) {
       const profile = configuration(config).runtimes?.[item.runtime];
       if (!profile) fail(`Unknown runtime for predicate: ${item.runtime}`, 'preflight');
       try {
+        const { artifacts, ...visible } = outcome;
         const result = await executeProcess({ command: await executable(profile.command), args: [...(profile.args ?? []), await containedFile(caseDir, item.entrypoint)], cwd: caseDir,
-          input: outcome, env: { PATH: process.env.PATH ?? '', LANG: 'C.UTF-8' }, signal: AbortSignal.timeout(60_000), maxBytes: 1_000_000 });
+          input: visible, env: { PATH: process.env.PATH ?? '', LANG: 'C.UTF-8' }, signal: AbortSignal.timeout(60_000), maxBytes: 1_000_000 });
         const value = JSON.parse(result.output);
         status = value.pass === true ? 'pass' : 'fail'; reason = String(value.reason ?? '');
       } catch (error) { status = 'fail'; reason = `predicate failed: ${error.message}`; }
     }
-    results.push({ ...(item.text ? { text: item.text } : {}), kind: item.kind, status, reason });
+    results.push({ ...(item.text ? { text: item.text } : {}), kind: item.kind, status, reason, ...(detail ? { criteria: detail.criteria } : {}) });
   }
   const status = results.some(r => r.status === 'fail') ? 'fail' : results.some(r => r.status === 'unverifiable') ? 'unverifiable' : 'pass';
   return { status, results };
 }
 
+const outputsFrom = checkpoint => Object.fromEntries(Object.entries(checkpoint?.root ?? {}).filter(([key]) => !reservedRoots.has(key)));
+/** What a finished run produced, as a case sees it. */
+export async function outcomeOfRun(runDir) {
+  const summary = await readJSON(join(runDir, 'summary.json'));
+  const checkpoint = await readJSON(join(runDir, 'checkpoint.json')).catch(() => null);
+  const result = await readJSON(join(runDir, 'result.json')).catch(() => null);
+  const ledger = await readLedger(runDir);
+  return { status: summary.status, code: summary.code ?? null, ...(summary.error ? { error: summary.error } : {}), result,
+    outputs: outputsFrom(checkpoint), effects: ledger.length ? effectSummary(ledger).effects : [], artifacts: join(runDir, 'artifacts') };
+}
+
 /**
- * Record a case from a finished run. The expectation must not pass on an empty outcome; a case that cannot fail
- * tests nothing.
- * @param {{methodFile: string, runDir: string, id: string, note: string, author?: string | null | undefined, expect: any[], observations?: Record<string, any[]> | undefined,
- *   redact?: Record<string, string> | undefined, runs?: number | undefined, minPass?: number | undefined, retentionDays?: number | undefined, locate?: any,
- *   supersedes?: string[] | undefined, casesDir?: string | undefined, config?: any}} options
+ * Record a case from a run that went wrong. The case must fail on that run: otherwise it does not capture the
+ * problem, or the note does not match the run. With a passing run (the output the person accepted after the fix),
+ * the case must pass on it. A case from a passing run alone pins behaviour that is already right. A rubric's judge
+ * is calibrated on the runs it has.
+ * @param {{methodFile: string, runDir?: string | undefined, id: string, note: string, author?: string | null | undefined, expect?: any[] | undefined, rubric?: string[] | undefined,
+ *   ref?: string | undefined, passingRun?: string | undefined, observations?: Record<string, any[]> | undefined, redact?: Record<string, string> | undefined,
+ *   runs?: number | undefined, minPass?: number | undefined, retentionDays?: number | undefined, supersedes?: string[] | undefined, casesDir?: string | undefined,
+ *   config?: any, options?: any}} input
  */
-export async function createCase({ methodFile, runDir, id, note, author, expect, observations = {}, redact, runs = 1, minPass, retentionDays = 365, locate, supersedes = [], casesDir = defaultCasesDir(methodFile), config = {} }) {
+export async function createCase({ methodFile, runDir, id, note, author, expect = [], rubric = [], ref, passingRun, observations = {}, redact, runs = 1, minPass, retentionDays = 365, supersedes = [], casesDir = defaultCasesDir(methodFile), config = {}, options = {} }) {
   if (!caseId.test(id ?? '')) fail('Case IDs use lowercase letters, digits and hyphens', 'case_invalid');
-  if (typeof note !== 'string' || !note.trim()) fail('A case records the correction note', 'case_invalid');
-  if (pathResolve(runDir).split(/[\\/]/).includes('sensitive')) fail('Do not build cases from runs under sensitive/. Use a redacted run.', 'case_invalid');
+  if (typeof note !== 'string' || !note.trim()) fail('A case records the correction note: --note "the person\'s words"', 'case_invalid');
+  if (!runDir && !passingRun) fail('Give the run that went wrong (--run), the run that was right (--passing-run), or both', 'case_invalid');
+  for (const dir of [runDir, passingRun].filter(Boolean)) if (pathResolve(dir).split(/[\\/]/).includes('sensitive')) fail('Do not build cases from runs under sensitive/. Use a redacted run.', 'case_invalid');
+  const method = await readDocument(methodFile);
+  if (rubric.length) {
+    ref ??= typeof method.result === 'string' ? `outputs.${method.result.split('.')[0]}` : undefined;
+    if (!ref) fail('Name the output to judge with --ref outputs.NAME; the Method result has several values', 'case_invalid');
+    expect = [...expect, { kind: 'rubric', ref, criteria: rubricCriteria(rubric) }];
+  }
   validateExpectations(expect);
   if (!Number.isSafeInteger(runs) || runs < 1 || runs > 20) fail('runs must be between 1 and 20', 'case_invalid');
   minPass ??= runs;
@@ -129,31 +154,53 @@ export async function createCase({ methodFile, runDir, id, note, author, expect,
   const dir = join(casesDir, id);
   if (await exists(dir)) fail(`Case already exists: ${id}`, 'case_exists');
   safeData(observations);
-  const recorded = await recordRun(runDir);
+  const recorded = await recordRun(runDir ?? passingRun);
   const recording = applyRedaction({ ...recorded, observations: { ...recorded.observations, ...observations } }, redact);
-  // A vacuous expectation passes even when the Method returns nothing.
-  const empty = { status: 'completed', code: null, result: null, outputs: {}, effects: [] };
   await mkdir(dir, { recursive: true, mode: 0o700 });
   try {
     for (const item of expect) if (item.kind === 'predicate' && !await exists(join(dir, item.entrypoint))) {
       const source = pathResolve(dirname(pathResolve(methodFile)), item.entrypoint);
       await writeFile(join(dir, item.entrypoint), await readFile(source), { mode: 0o600 });
     }
-    if ((await evaluate(expect, empty, { caseDir: dir, config })).status === 'pass') fail('The expectation passes on an empty result, so it cannot detect the error. Make it specific.', 'case_vacuous');
+    const plain = expect.filter(item => item.kind !== 'rubric');
+    // A vacuous expectation passes even when the Method returns nothing.
+    if (plain.length && (await evaluate(plain, { status: 'completed', code: null, result: null, outputs: {}, effects: [] }, { caseDir: dir, config, options })).status === 'pass') fail('The expectation passes on an empty result, so it cannot detect the error. Make it specific.', 'case_vacuous');
+    const bad = runDir ? await evaluate(expect, await outcomeOfRun(runDir), { caseDir: dir, config, options }) : null;
+    if (bad?.status === 'pass') fail('The run that went wrong already meets this case, so the case does not capture the problem. Make the rule more specific, or check that the note matches what this run did.', 'case_not_red');
+    if (bad?.status === 'unverifiable') fail(`The case cannot be checked on the run that went wrong: ${bad.results.map(r => r.reason).join('; ')}`, 'case_invalid');
+    const examples = [];
+    const rubricResult = bad?.results.find(r => r.kind === 'rubric');
+    if (rubricResult) {
+      const item = expect.find(e => e.kind === 'rubric');
+      examples.push({ run: 'failing', labels: Object.fromEntries(rubricResult.criteria.map(c => [c.id, c.pass])), value: valueText(lookup(await outcomeOfRun(runDir), item.ref).value) });
+    }
+    let good = null;
+    if (passingRun) {
+      good = await evaluate(expect, await outcomeOfRun(passingRun), { caseDir: dir, config, options });
+      if (good.status !== 'pass') fail(`The passing run does not meet this case: ${good.results.filter(r => r.status !== 'pass').map(r => r.reason).join('; ')}`, 'case_not_green');
+      const item = expect.find(e => e.kind === 'rubric');
+      if (item) examples.push({ run: 'passing', labels: Object.fromEntries(item.criteria.map(c => [c.id, true])), value: valueText(lookup(await outcomeOfRun(passingRun), item.ref).value) });
+    }
+    // The fast judge is used for a criterion only when it agrees with these examples.
+    for (const item of expect.filter(e => e.kind === 'rubric')) {
+      const judges = await chooseJudges({ criteria: item.criteria, examples, config, options });
+      if (Object.keys(judges).length) item.judges = judges;
+    }
     const accepted = Object.fromEntries(Object.entries(recorded.iterations).map(([step, list]) => [step, list.filter(Boolean).map(entry => entry.candidate)]));
     await mkdir(join(dir, 'artifacts'), { recursive: true, mode: 0o700 });
-    await copyForkFiles({ dir: runDir }, recorded.method, accepted, join(dir, 'artifacts'));
+    await copyForkFiles({ dir: runDir ?? passingRun }, recorded.method, accepted, join(dir, 'artifacts'));
     const created = new Date();
     const value = {
       format: 'method-case/1', id, status: 'active', method_file: basename(methodFile), note: applyRedaction(note, redact), author: author ?? null,
-      created: created.toISOString(), source: { run_dir: pathResolve(runDir), execution_id: recorded.execution_id, method_sha256: recorded.method_sha256 },
-      ...(locate ? { locate } : {}), expect, runs, min_pass: minPass, supersedes, superseded_by: null,
+      created: created.toISOString(), source: { run_dir: pathResolve(runDir ?? passingRun), execution_id: recorded.execution_id, method_sha256: recorded.method_sha256, ...(passingRun ? { passing_run_dir: pathResolve(passingRun) } : {}) },
+      expect, runs, min_pass: minPass, supersedes, superseded_by: null,
       retention_until: new Date(created.getTime() + retentionDays * 86_400_000).toISOString().slice(0, 10), redacted: !!(redact && Object.keys(redact).length),
     };
     await writeJSON(join(dir, 'recording.json'), recording);
+    if (examples.length) await writeJSON(join(dir, 'examples.json'), applyRedaction(examples, redact));
     await writeJSON(join(dir, 'case.json'), value);
     for (const old of supersedes) await retireCase(methodFile, old, { by: id, reason: `Superseded by ${id}: ${value.note}`, casesDir });
-    return { ...value, dir };
+    return { ...value, dir, ...(bad ? { on_failing_run: bad.results } : {}), ...(good ? { on_passing_run: good.results } : {}) };
   } catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
 }
 
@@ -172,75 +219,124 @@ export async function retireCase(methodFile, id, { by = null, reason, casesDir =
   await writeJSON(file, { ...value, status: 'retired', superseded_by: by, retired_at: new Date().toISOString(), retired_reason: reason });
 }
 
-function outputsFrom(checkpoint) {
-  return Object.fromEntries(Object.entries(checkpoint?.root ?? {}).filter(([key]) => !reservedRoots.has(key)));
+/** The steps that the case's expectations need, or null when the whole Method must run. */
+function neededSteps(method, expect) {
+  const producers = {};
+  for (const [id, step] of Object.entries(method.steps)) for (const name of Object.keys(effectiveOutputs(step))) producers[name] = id;
+  const roots = [];
+  for (const item of expect) {
+    if (!['equals', 'rubric'].includes(item.kind) || !item.ref.startsWith('outputs.')) return null;
+    const producer = producers[item.ref.split('.')[1]];
+    if (!producer) return null;
+    roots.push(producer);
+  }
+  const { dependencies } = validateMethod(method);
+  const needed = new Set();
+  const add = id => { if (needed.has(id)) return; needed.add(id); for (const dep of dependencies[id] ?? []) add(dep); };
+  roots.forEach(add);
+  return [...needed];
 }
+
 /**
- * Replay one case against a Method file `runs` times.
+ * Replay one case against a Method file. Files connections are bound to fresh scratch folders, so a changed step
+ * that writes files can run safely. Only the steps the expectations need run. A strict case stops at its first
+ * failed run.
  * @param {string} methodFile
  * @param {any} config
  * @param {any} testCaseValue
  * @param {any} [runOptions]
  */
 export async function testCase(methodFile, config, testCaseValue, runOptions = {}) {
+  const started = performance.now();
   const recording = await readJSON(join(testCaseValue.dir, 'recording.json'));
   const artifacts = join(testCaseValue.dir, 'artifacts');
+  const method = await readDocument(methodFile);
+  const only = neededSteps(method, testCaseValue.expect);
   const attempts = [];
   const parent = await mkdtemp(join(tmpdir(), 'method-case-'));
   try {
     for (let n = 0; n < testCaseValue.runs; n++) {
       const runDir = join(parent, `run-${n + 1}`);
+      const environment = { ...config.environment };
+      for (const [name, env] of Object.entries(method.environment ?? {})) if (env.type === 'files') {
+        environment[name] = join(parent, `scratch-${n + 1}`, name);
+        await mkdir(environment[name], { recursive: true });
+      }
       let result;
       try {
-        result = await runMethod(methodFile, config, { ...runOptions, runDir, inputs: recording.inputs, state: recording.initial_state,
-          replay: { recording, observations: recording.observations ?? {}, artifacts: await exists(artifacts) ? artifacts : undefined } });
-      } catch (error) { attempts.push({ status: 'unverifiable', reason: error.message }); continue; }
-      if (result.status === 'failed' && result.code === 'unverifiable') { attempts.push({ status: 'unverifiable', reason: result.error }); continue; }
-      const checkpoint = await readJSON(join(runDir, 'checkpoint.json')).catch(() => null);
+        result = await runMethod(methodFile, { ...config, environment }, { ...runOptions, runDir, inputs: recording.inputs, state: recording.initial_state,
+          replay: { recording, observations: recording.observations ?? {}, artifacts: await exists(artifacts) ? artifacts : undefined, ...(only ? { only } : {}) } });
+      } catch (error) { attempts.push({ status: 'unverifiable', reason: error.message }); break; }
+      if (result.status === 'failed' && result.code === 'unverifiable') { attempts.push({ status: 'unverifiable', reason: result.error }); break; }
       const events = (await readFile(join(runDir, 'events.jsonl'), 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line));
       const replayed = new Set(events.filter(e => e.event === 'step.replayed').map(e => `${e.step}:${e.iteration}`));
       const live = [...new Set(events.filter(e => e.event === 'step.candidate' && !replayed.has(`${e.step}:${e.iteration}`)).map(e => e.step))];
-      const outcome = { status: result.status, code: result.code ?? null, result: result.result ?? null, outputs: outputsFrom(checkpoint), effects: result.effects?.effects ?? [] };
-      if (result.status === 'failed' && !['effect_contradicted', 'check_failed'].includes(result.code)) outcome.error = result.error;
-      const evaluation = await evaluate(testCaseValue.expect, outcome, { caseDir: testCaseValue.dir, config });
-      attempts.push({ ...evaluation, run_status: result.status, ...(result.code ? { code: result.code } : {}), live_steps: live });
+      const outcome = await outcomeOfRun(runDir);
+      const evaluation = await evaluate(testCaseValue.expect, outcome, { caseDir: testCaseValue.dir, config, options: { runOptions, classification: runOptions.classification, cacheDir: runOptions.cacheDir } });
+      attempts.push({ ...evaluation, run_status: result.status, ...(result.code ? { code: result.code } : {}), ...(result.status === 'failed' ? { error: result.error } : {}), live_steps: live });
+      const passes = attempts.filter(a => a.status === 'pass').length, failures = attempts.length - passes;
+      // Stop as soon as the result is decided.
+      if (passes >= testCaseValue.min_pass || failures > testCaseValue.runs - testCaseValue.min_pass) break;
     }
   } finally { await rm(parent, { recursive: true, force: true }); }
   const passes = attempts.filter(a => a.status === 'pass').length;
   const status = attempts.some(a => a.status === 'unverifiable') ? 'unverifiable' : passes >= testCaseValue.min_pass ? 'pass' : 'fail';
-  return { id: testCaseValue.id, status, passes, runs: testCaseValue.runs, min_pass: testCaseValue.min_pass, attempts };
+  return { id: testCaseValue.id, status, passes, runs: attempts.length, min_pass: testCaseValue.min_pass, attempts, duration_ms: Math.round(performance.now() - started) };
+}
+
+async function parallel(items, limit, work) {
+  const results = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) { const i = next++; results[i] = await work(items[i]); }
+  }));
+  return results;
+}
+/** Cases whose recorded steps differ from this version run first, because they answer fastest whether a change works. */
+async function changedFirst(methodFile, config, cases) {
+  const method = await readDocument(methodFile), root = dirname(pathResolve(methodFile));
+  const files = {};
+  for (const step of Object.values(method.steps)) for (const exec of [step.do, step.check]) if (exec?.kind === 'run') {
+    try { files[exec.entrypoint] = hash(await readFile(join(root, exec.entrypoint))); } catch { /* the run reports a missing file */ }
+  }
+  const keys = Object.fromEntries(Object.entries(method.steps).map(([id, step]) => [id, stepKey(step, { files, profiles: config.models ?? {}, tools: config.tools ?? {} })]));
+  const touched = [];
+  for (const item of cases) {
+    const recorded = (await readJSON(join(item.dir, 'recording.json'))).keys;
+    touched.push(Object.entries(keys).some(([id, key]) => recorded[id] !== key) ? 0 : 1);
+  }
+  return cases.map((item, i) => [touched[i], i, item]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(([, , item]) => item);
 }
 
 /**
- * Test a Method version against its active cases. With a baseline (the version before a change), each case is
- * compared on both versions. A case that fails on both is already failing, not a regression. New cases must fail on
- * the baseline and pass on the candidate.
+ * Test a Method version against its active cases. Every active case must pass. With a baseline (the version
+ * before a change), each case also runs on the old version, to show what the change fixed or broke. New cases
+ * must fail on the baseline and pass on the candidate.
  * @param {string} methodFile
  * @param {any} config
- * @param {{casesDir?: string | undefined, ids?: string[] | undefined, baseline?: string | undefined, newIds?: string[] | undefined, runOptions?: any}} [options]
+ * @param {{casesDir?: string | undefined, ids?: string[] | undefined, baseline?: string | undefined, newIds?: string[] | undefined, runOptions?: any, concurrency?: number | undefined}} [options]
  */
-export async function testSuite(methodFile, config, { casesDir = defaultCasesDir(methodFile), ids, baseline, newIds = [], runOptions = {} } = {}) {
+export async function testSuite(methodFile, config, { casesDir = defaultCasesDir(methodFile), ids, baseline, newIds = [], runOptions = {}, concurrency = 4 } = {}) {
   const today = new Date().toISOString().slice(0, 10);
   const all = await listCases(methodFile, casesDir);
   for (const id of [...(ids ?? []), ...newIds]) if (!all.some(c => c.id === id)) fail(`No case ${id} for ${basename(methodFile)}`, 'case_invalid');
-  const selected = all.filter(c => c.status === 'active' && (!ids || ids.includes(c.id) || newIds.includes(c.id)));
-  const report = [];
-  for (const item of selected) {
+  const selected = await changedFirst(methodFile, config, all.filter(c => c.status === 'active' && (!ids || ids.includes(c.id) || newIds.includes(c.id))));
+  const report = await parallel(selected, concurrency, async item => {
     const candidate = await testCase(methodFile, config, item, runOptions);
     const before = baseline ? await testCase(baseline, config, item, runOptions) : null;
     let verdict;
     if (newIds.includes(item.id)) verdict = before?.status === 'pass' ? 'not_red' : candidate.status === 'pass' ? 'fixed' : candidate.status === 'unverifiable' ? 'unverifiable' : 'not_fixed';
     else if (candidate.status === 'unverifiable') verdict = 'unverifiable';
     else if (candidate.status === 'pass') verdict = before && before.status !== 'pass' ? 'fixed' : 'pass';
-    else verdict = !before ? 'fail' : before.status === 'pass' ? 'regression' : 'already_failing';
-    report.push({ id: item.id, verdict, note: item.note, ...(item.retention_until < today ? { expired: item.retention_until } : {}), candidate, ...(before ? { baseline: before } : {}) });
-  }
+    else verdict = before?.status === 'pass' ? 'regression' : 'fail';
+    return { id: item.id, verdict, note: item.note, ...(item.retention_until < today ? { expired: item.retention_until } : {}), duration_ms: candidate.duration_ms, candidate, ...(before ? { baseline: before } : {}) };
+  });
   const blocking = new Set(['fail', 'regression', 'unverifiable', 'not_fixed', 'not_red']);
   const count = verdict => report.filter(r => r.verdict === verdict).length;
   return {
     passed: !report.some(r => blocking.has(r.verdict)),
     method: pathResolve(methodFile), ...(baseline ? { baseline: pathResolve(baseline) } : {}),
-    counts: Object.fromEntries(['pass', 'fixed', 'already_failing', 'regression', 'fail', 'unverifiable', 'not_fixed', 'not_red'].map(v => [v, count(v)])),
+    counts: Object.fromEntries(['pass', 'fixed', 'regression', 'fail', 'unverifiable', 'not_fixed', 'not_red'].map(v => [v, count(v)])),
     retired: all.filter(c => c.status === 'retired').length,
     expired: report.filter(r => r.expired).map(r => r.id),
     cases: report,

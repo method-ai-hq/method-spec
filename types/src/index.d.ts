@@ -1,4 +1,5 @@
 export { runMethod } from "./runner.js";
+export { judgeRubric } from "./rubric.js";
 export { readDocument } from "./io.js";
 export { effectiveOutputs } from "./semantics.js";
 export type RuntimeConfig = import("./api-types.js").RuntimeConfig;
@@ -7,7 +8,7 @@ export type RunResult = import("./api-types.js").RunResult;
 export type ClassificationProvider = import("./api-types.js").ClassificationProvider;
 export { parsePrompt, validatePrompt, renderPrompt } from "./prompt.js";
 export { observeRun, pendingRuns } from "./observe.js";
-export { createCase, retireCase, listCases, testCase, testSuite, casesDigest, defaultCasesDir } from "./cases.js";
+export { createCase, retireCase, listCases, testCase, testSuite, outcomeOfRun, defaultCasesDir } from "./cases.js";
 export { recordRun, stepKey } from "./replay.js";
 export { effectSummary, readLedger } from "./effects.js";
 export { validateMethod, validateConfig, dataSchema, outputSchema } from "./validate.js";
