@@ -32,7 +32,12 @@ export async function casesDigest(casesDir) {
   return { sha256: hash(files), files: files.length };
 }
 
-/** Cases recorded from runs of this Method file. */
+/**
+ * Cases recorded from runs of this Method file.
+ * @param {string} methodFile
+ * @param {string | undefined} [casesDir]
+ * @returns {Promise<any[]>}
+ */
 export async function listCases(methodFile, casesDir = defaultCasesDir(methodFile)) {
   let names;
   try { names = await readdir(casesDir); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
@@ -109,6 +114,9 @@ export async function evaluate(expect, outcome, { caseDir, config }) {
 /**
  * Record a case from a finished run. The expectation must not pass on an empty outcome; a case that cannot fail
  * tests nothing.
+ * @param {{methodFile: string, runDir: string, id: string, note: string, author?: string | null | undefined, expect: any[], observations?: Record<string, any[]> | undefined,
+ *   redact?: Record<string, string> | undefined, runs?: number | undefined, minPass?: number | undefined, retentionDays?: number | undefined, locate?: any,
+ *   supersedes?: string[] | undefined, casesDir?: string | undefined, config?: any}} options
  */
 export async function createCase({ methodFile, runDir, id, note, author, expect, observations = {}, redact, runs = 1, minPass, retentionDays = 365, locate, supersedes = [], casesDir = defaultCasesDir(methodFile), config = {} }) {
   if (!caseId.test(id ?? '')) fail('Case IDs use lowercase letters, digits and hyphens', 'case_invalid');
@@ -149,7 +157,12 @@ export async function createCase({ methodFile, runDir, id, note, author, expect,
   } catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
 }
 
-/** Retire a case whose rule is obsolete. The case stays on disk with its reason, so the history is kept. */
+/**
+ * Retire a case whose rule is obsolete. The case stays on disk with its reason, so the history is kept.
+ * @param {string} methodFile
+ * @param {string} id
+ * @param {{by?: string | null | undefined, reason: string, casesDir?: string | undefined}} options
+ */
 export async function retireCase(methodFile, id, { by = null, reason, casesDir = defaultCasesDir(methodFile) }) {
   if (typeof reason !== 'string' || !reason.trim()) fail('Give the reason the case no longer applies', 'case_invalid');
   const file = join(casesDir, id, 'case.json');
@@ -162,7 +175,13 @@ export async function retireCase(methodFile, id, { by = null, reason, casesDir =
 function outputsFrom(checkpoint) {
   return Object.fromEntries(Object.entries(checkpoint?.root ?? {}).filter(([key]) => !reservedRoots.has(key)));
 }
-/** Replay one case against a Method file `runs` times. */
+/**
+ * Replay one case against a Method file `runs` times.
+ * @param {string} methodFile
+ * @param {any} config
+ * @param {any} testCaseValue
+ * @param {any} [runOptions]
+ */
 export async function testCase(methodFile, config, testCaseValue, runOptions = {}) {
   const recording = await readJSON(join(testCaseValue.dir, 'recording.json'));
   const artifacts = join(testCaseValue.dir, 'artifacts');
@@ -196,6 +215,9 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
  * Test a Method version against its active cases. With a baseline (the version before a change), each case is
  * compared on both versions. A case that fails on both is already failing, not a regression. New cases must fail on
  * the baseline and pass on the candidate.
+ * @param {string} methodFile
+ * @param {any} config
+ * @param {{casesDir?: string | undefined, ids?: string[] | undefined, baseline?: string | undefined, newIds?: string[] | undefined, runOptions?: any}} [options]
  */
 export async function testSuite(methodFile, config, { casesDir = defaultCasesDir(methodFile), ids, baseline, newIds = [], runOptions = {} } = {}) {
   const today = new Date().toISOString().slice(0, 10);
