@@ -204,7 +204,7 @@ steps:
 Rules in `method/3.3`:
 
 - Every `run` and `agent` step states `changes`. Use `changes: []` for a step that changes nothing. This is a declaration: the runtime cannot see what a trusted local script does.
-- A step with an environment in `changes` has at least one effect, and a step with effects changes an environment.
+- A step with an environment in `changes` has at least one effect, and a step with effects changes an environment. A `browser` environment is the exception: its controls must be declared in `changes` also for reading, so its effects are optional. Declare an effect when a browser step submits, posts, or sends.
 - An environment with `role: observer` is visible only to effect observers. Actions cannot bind it, change it, or see its configured value in `METHOD_ENVIRONMENT`. Give observers separate, read-only credentials through their runtime profile.
 - An effect's `in` cannot reference its own step's outputs. An observer never sees the receipt. It receives the **correlation token**: the action's `METHOD_OPERATION_ID`. Put the token where the changed system keeps a reference (a message header, an idempotency key, a note field). For an `agent` action with effects, the runtime adds the token to the prompt.
 - `schedule` offsets count from the action's completion and must increase. The last offset, `horizon`, is the time after which no new evidence is expected. Units are `s`, `m`, `h`, and `d`. `first` defaults to `0s`.

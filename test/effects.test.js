@@ -83,6 +83,10 @@ test('method/3.3 requires effects for external changes and keeps observers apart
   for (const [edit, pattern] of invalid) { const m = method(); edit(m); assert.throws(() => validateMethod(m), pattern); }
   const ok = method(); ok.steps.later = { name: 'Later', purpose: 'Compute.', do: script('later.mjs'), out: { done: text }, changes: [] };
   assert.doesNotThrow(() => validateMethod(ok));
+  // Reading with a browser needs its controls but changes nothing to observe.
+  const reading = method(); reading.environment.web = { type: 'browser', description: 'Browser.' };
+  reading.steps.read = { name: 'Read', do: { kind: 'agent', model: 'default', prompt: 'Read.', browser: 'environment.web' }, out: { notes: text }, changes: ['environment.web'] };
+  assert.doesNotThrow(() => validateMethod(reading));
 });
 
 test('a judge that cannot report a contradiction fails before any action runs', async t => {

@@ -107,8 +107,10 @@ export function effectSchedule(effect) {
 const observers = method => new Set(Object.entries(method.environment ?? {}).filter(([, env]) => env.role === 'observer').map(([name]) => `environment.${name}`));
 function validateEffects(method, id, step, globalRef, outputs) {
   const environmentChanges = (step.changes ?? []).filter(x => x.startsWith('environment.'));
+  // A browser connection must be declared to use its controls, also for reading, so its effects are optional.
+  const observable = environmentChanges.filter(x => method.environment?.[x.slice(12)]?.type !== 'browser');
   if (!step.effects) {
-    if (environmentChanges.length) fail(`${id}: external changes require effects. Declare how an observer confirms each intended change.`);
+    if (observable.length) fail(`${id}: external changes require effects. Declare how an observer confirms each intended change.`);
     return;
   }
   if (!environmentChanges.length) fail(`${id}: effects describe external changes; declare the changed connection in changes`);
