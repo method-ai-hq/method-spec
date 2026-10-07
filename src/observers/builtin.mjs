@@ -12,7 +12,9 @@ const fill = template => template.replace(/\{(token|inputs\.[a-z][a-z0-9_]*(?:\.
   if (value === undefined || value === null || typeof value === 'object') throw Error(`No text or number for {${key}}`);
   return String(value);
 });
-const fillAll = value => typeof value === 'string' ? fill(value) : Array.isArray(value) ? value.map(fillAll)
+// A value that is one whole placeholder keeps its type, so a number stays a number in a query.
+const whole = /^\{(token|inputs\.[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)*)\}$/;
+const fillAll = value => typeof value === 'string' ? (whole.test(value) && value !== '{token}' ? (() => { const v = value.slice(8, -1).split('.').reduce((x, k) => x?.[k], inputs); if (v === undefined || v === null || typeof v === 'object') throw Error(`No text or number for ${value}`); return v; })() : fill(value)) : Array.isArray(value) ? value.map(fillAll)
   : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, fillAll(v)])) : value;
 const at = (value, path) => path.split('.').reduce((v, k) => v === null || v === undefined ? undefined : v[k], value);
 const print = value => process.stdout.write(JSON.stringify(value) + '\n');

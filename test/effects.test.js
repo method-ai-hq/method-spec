@@ -290,3 +290,16 @@ else console.log(JSON.stringify({verdict:a.final&&a.previous.length>=1?"confirme
   assert.equal(result.effects.confirmed, 1);
   assert.deepEqual((await readLedger(runDir)).slice(1).map(e => e.reason), ['seen 1 final false', 'seen 2 final false', 'seen 3 final true']);
 });
+
+test('a whole-placeholder query parameter keeps its number type', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'method-param-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const db = new DatabaseSync(join(dir, 'm.sqlite'));
+  db.exec('create table memory(id integer primary key, recommendation_id integer, note text)'); db.prepare('insert into memory(recommendation_id, note) values (?, ?)').run(92, 'loved it');
+  db.close();
+  const { execFileSync } = await import('node:child_process');
+  const script = new URL('../src/observers/builtin.mjs', import.meta.url).pathname;
+  const spec = { kind: 'sqlite', connection: 'r', database: 'm.sqlite', query: 'SELECT id FROM memory WHERE recommendation_id = :rid AND note = :note', params: { rid: '{inputs.rid}', note: '{inputs.note}' }, expect: { rows: 1 } };
+  const out = JSON.parse(execFileSync(process.execPath, ['--no-warnings', script, 'fetch'], { input: JSON.stringify({ spec, token: 'mop_x', inputs: { rid: 92, note: 'loved it' } }), env: { PATH: process.env.PATH, METHOD_ENVIRONMENT: JSON.stringify({ r: dir }) } }).toString());
+  assert.equal(out.observations[0].data.count, 1);
+});
