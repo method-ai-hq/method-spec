@@ -85,7 +85,10 @@ export function observeEffect({ effect, key, token, inputs, attempt, actionOutco
         builtin?: undefined;
     };
 }>;
-/** Size and modification time of every file under a folder, or null when the folder is too large to observe. */
+/**
+ * Size and modification time of every file under a folder (synchronous reads are about ten times faster than one
+ * awaited stat per file), or null when the folder is larger than the limit or the listing takes longer than the budget.
+ */
 export function listFolder(root: any, exclude?: any[]): Promise<{}>;
 /**
  * Compare a folder before and after a step. A path that the step returns inside the folder must have changed:
@@ -193,4 +196,8 @@ export function effectEntries(method: any): {
 }[];
 export function horizonAt(effect: any, completedAt: any): string;
 export function isFinal(entry: any): boolean;
+export namespace folderLimit {
+    let files: number;
+    let ms: number;
+}
 export function appendLedger(runDir: any, entry: any): Promise<void>;

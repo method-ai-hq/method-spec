@@ -33,6 +33,7 @@ export function evaluate(expect: any, outcome: any, { caseDir, config, options }
             reason: any;
             probability?: undefined;
         })[];
+        judge_calls?: number;
         kind: any;
         status: string;
         reason: string;
@@ -111,6 +112,7 @@ export function createCase({ methodFile, runDir, id, note, author, expect, rubri
             reason: any;
             probability?: undefined;
         })[];
+        judge_calls?: number;
         kind: any;
         status: string;
         reason: string;
@@ -134,6 +136,7 @@ export function createCase({ methodFile, runDir, id, note, author, expect, rubri
             reason: any;
             probability?: undefined;
         })[];
+        judge_calls?: number;
         kind: any;
         status: string;
         reason: string;
@@ -184,13 +187,10 @@ export function retireCase(methodFile: string, id: string, { by, reason, casesDi
  * @param {any} [runOptions]
  */
 export function testCase(methodFile: string, config: any, testCaseValue: any, runOptions?: any): Promise<{
-    id: any;
-    status: string;
-    passes: number;
-    runs: number;
-    min_pass: any;
     attempts: ({
         live_steps: any[];
+        live_model_steps: any[];
+        judge_calls: number;
         error?: string;
         code?: any;
         run_status: "needs_input" | "completed" | "failed" | "unconfirmed";
@@ -213,6 +213,7 @@ export function testCase(methodFile: string, config: any, testCaseValue: any, ru
                 reason: any;
                 probability?: undefined;
             })[];
+            judge_calls?: number;
             kind: any;
             status: string;
             reason: string;
@@ -224,6 +225,12 @@ export function testCase(methodFile: string, config: any, testCaseValue: any, ru
         reason: any;
     })[];
     duration_ms: number;
+    unreliable?: string;
+    id: any;
+    status: string;
+    passes: number;
+    runs: number;
+    min_pass: any;
 }>;
 /**
  * Test a Method version against its active cases. Every active case must pass. With a baseline (the version
@@ -249,6 +256,11 @@ export function testSuite(methodFile: string, config: any, { casesDir, ids, base
     cases: any[];
     baseline?: string;
     passed: boolean;
+    totals: {
+        duration_ms: number;
+        live_model_steps: any;
+        judge_calls: any;
+    };
     method: string;
 }>;
 export function defaultCasesDir(methodFile: any): string;

@@ -268,3 +268,24 @@ test('a rubric reads context, such as the sources, without judging it', async t 
   const report = await testSuite(current, withJudge(cfg), { runOptions: { transport, cacheDir: join(dir, 'cache') } });
   assert.equal(report.cases[0].verdict, 'pass');
 });
+
+test('a case with a live model step runs three times, and a rule kept only sometimes is unreliable', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'method-runs-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const doc = prompt => ({ format: 'method/3.3', name: 'Model', goal: 'Write a line.', steps: { write: { name: 'Write', do: { kind: 'call', model: 'model', prompt }, out: { line: { type: 'text' } } } }, result: 'line' });
+  const file = join(dir, 'm.method');
+  const cfg = { ...config({}), models: { model: { backend: 'openai-responses', model: 'test-model', api_key_env: 'METHOD_TEST_UNUSED_KEY', max_output_tokens: 100 } } };
+  const answer = line => ({ status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ line }) }] }], usage: { input_tokens: 1, output_tokens: 1 } });
+  await writeFile(file, JSON.stringify(doc('Say hello.')));
+  await runMethod(file, cfg, { runDir: join(dir, 'run'), transport: async () => answer('hello') });
+  await createCase({ methodFile: file, passingRun: join(dir, 'run'), id: 'says-hello', note: 'Keep the greeting.', expect: [{ kind: 'equals', ref: 'outputs.line', value: 'hello' }], config: cfg });
+  // The prompt changes, so the model step runs live in the test.
+  await writeFile(file, JSON.stringify(doc('Say hello, please.')));
+  const steady = await testSuite(file, cfg, { runOptions: { transport: async () => answer('hello') } });
+  assert.equal(steady.cases[0].candidate.runs, 3); assert.equal(steady.cases[0].verdict, 'pass');
+  assert.equal(steady.totals.live_model_steps, 3);
+  let n = 0;
+  const flaky = await testSuite(file, cfg, { runOptions: { transport: async () => answer(++n === 2 ? 'hi' : 'hello') } });
+  assert.equal(flaky.cases[0].verdict, 'fail');
+  assert.match(flaky.cases[0].candidate.unreliable, /passed 1 of 2 runs/);
+});

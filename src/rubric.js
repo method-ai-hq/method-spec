@@ -84,10 +84,13 @@ export async function judgeRubric({ value, criteria, context, judges = {}, confi
   const text = valueText(value ?? '');
   if (Buffer.byteLength(text) > settings.max_value_bytes) fail(`The judged value exceeds ${settings.max_value_bytes} bytes`, 'judge_failed');
   const modelCriteria = criteria.filter(c => judges[c.id] !== 'classify');
-  const profile = config?.models?.judge ?? null;
+  // The agent that resolves the default judge is part of the key, so a different judge does not reuse old answers.
+  const profile = config?.models?.judge ?? { agent: options.runOptions?.agent ?? config?.models?.default ?? null };
   const contextText = context === undefined || context === null ? '' : valueText(context);
   const key = hash(['rubric/2', text, contextText, modelCriteria, profile, settings.judge_runs]);
+  let calls = 0;
   const votes = modelCriteria.length ? await cached(key, async () => {
+    calls = settings.judge_runs;
     const all = await Promise.all(Array.from({ length: settings.judge_runs }, () => modelVote(text, modelCriteria, config, options, contextText)));
     return modelCriteria.map((c, i) => all.map(run => run[i]));
   }, options.cacheDir) : [];
@@ -104,7 +107,7 @@ export async function judgeRubric({ value, criteria, context, judges = {}, confi
         reason: failed ? failed.reason : `${own.length} of ${own.length} votes pass${own.find(v => v.quote) ? `: "${own.find(v => v.quote).quote.slice(0, 120)}"` : ''}.` });
     }
   }
-  return { status: results.every(r => r.pass) ? 'pass' : 'fail', criteria: results };
+  return { status: results.every(r => r.pass) ? 'pass' : 'fail', criteria: results, judge_calls: calls };
 }
 
 /**

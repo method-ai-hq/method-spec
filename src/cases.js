@@ -119,7 +119,7 @@ export async function evaluate(expect, outcome, { caseDir, config, options = {} 
         status = value.pass === true ? 'pass' : 'fail'; reason = String(value.reason ?? '');
       } catch (error) { status = 'fail'; reason = `predicate failed: ${error.message}`; }
     }
-    results.push({ ...(item.text ? { text: item.text } : {}), kind: item.kind, status, reason, ...(detail ? { criteria: detail.criteria } : {}) });
+    results.push({ ...(item.text ? { text: item.text } : {}), kind: item.kind, status, reason, ...(detail ? { criteria: detail.criteria, judge_calls: detail.judge_calls } : {}) });
   }
   const status = results.some(r => r.status === 'fail') ? 'fail' : results.some(r => r.status === 'unverifiable') ? 'unverifiable' : 'pass';
   return { status, results };
@@ -149,7 +149,7 @@ export async function outcomeOfRun(runDir) {
  *   runs?: number | undefined, minPass?: number | undefined, retentionDays?: number | undefined, supersedes?: string[] | undefined, casesDir?: string | undefined,
  *   config?: any, options?: any}} input
  */
-export async function createCase({ methodFile, runDir, id, note, author, expect = [], rubric = [], ref, context = [], passingRun, observations = {}, redact, runs = 1, minPass, retentionDays = 365, supersedes = [], casesDir = defaultCasesDir(methodFile), config = {}, options = {} }) {
+export async function createCase({ methodFile, runDir, id, note, author, expect = [], rubric = [], ref, context = [], passingRun, observations = {}, redact, runs, minPass, retentionDays = 365, supersedes = [], casesDir = defaultCasesDir(methodFile), config = {}, options = {} }) {
   if (!caseId.test(id ?? '')) fail('Case IDs use lowercase letters, digits and hyphens', 'case_invalid');
   if (typeof note !== 'string' || !note.trim()) fail('A case records the correction note: --note "the person\'s words"', 'case_invalid');
   if (!runDir && !passingRun) fail('Give the run that went wrong (--run), the run that was right (--passing-run), or both', 'case_invalid');
@@ -161,9 +161,9 @@ export async function createCase({ methodFile, runDir, id, note, author, expect 
     expect = [...expect, { kind: 'rubric', ref, criteria: rubricCriteria(rubric), ...(context.length ? { context } : {}) }];
   }
   validateExpectations(expect);
-  if (!Number.isSafeInteger(runs) || runs < 1 || runs > 20) fail('runs must be between 1 and 20', 'case_invalid');
-  minPass ??= runs;
-  if (!Number.isSafeInteger(minPass) || minPass < 1 || minPass > runs) fail('min_pass must be between 1 and runs', 'case_invalid');
+  // Without runs, a test decides: one run when only scripts run, three when a model step runs live.
+  if (runs !== undefined && (!Number.isSafeInteger(runs) || runs < 1 || runs > 20)) fail('runs must be between 1 and 20', 'case_invalid');
+  if (minPass !== undefined && (!Number.isSafeInteger(minPass) || minPass < 1 || minPass > (runs ?? 20))) fail('min_pass must be between 1 and runs', 'case_invalid');
   const dir = join(casesDir, id);
   if (await exists(dir)) fail(`Case already exists: ${id}`, 'case_exists');
   safeData(observations);
@@ -215,7 +215,7 @@ export async function createCase({ methodFile, runDir, id, note, author, expect 
     const value = {
       format: 'method-case/1', id, status: 'active', method_file: basename(methodFile), note: applyRedaction(note, redact), author: author ?? null,
       created: created.toISOString(), source: { run_dir: pathResolve(runDir ?? passingRun), execution_id: recorded.execution_id, method_sha256: recorded.method_sha256, ...(passingRun ? { passing_run_dir: pathResolve(passingRun) } : {}) },
-      expect, runs, min_pass: minPass, supersedes, superseded_by: null, ...(Object.keys(keptFiles).length ? { files: keptFiles } : {}),
+      expect, runs: runs ?? null, min_pass: minPass ?? null, supersedes, superseded_by: null, ...(Object.keys(keptFiles).length ? { files: keptFiles } : {}),
       retention_until: new Date(created.getTime() + retentionDays * 86_400_000).toISOString().slice(0, 10), redacted: !!(redact && Object.keys(redact).length),
     };
     await writeJSON(join(dir, 'recording.json'), recording);
@@ -286,7 +286,8 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
     .filter(name => method.environment?.[name]?.type === 'files'));
   const parent = await mkdtemp(join(tmpdir(), 'method-case-'));
   try {
-    for (let n = 0; n < testCaseValue.runs; n++) {
+    let total = testCaseValue.runs ?? 1, minPass = testCaseValue.min_pass ?? total;
+    for (let n = 0; n < total; n++) {
       const runDir = join(parent, `run-${n + 1}`);
       const environment = { ...config.environment }, paths = {};
       for (const name of written) {
@@ -308,15 +309,23 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
       // A replayed step's path refers to the source run's file; the case kept a copy of it.
       for (const [path, name] of Object.entries(testCaseValue.files ?? {})) outcome.files[path] ??= join(testCaseValue.dir, name);
       const evaluation = await evaluate(testCaseValue.expect, outcome, { caseDir: testCaseValue.dir, config, options: { runOptions, classification: runOptions.classification, cacheDir: runOptions.cacheDir } });
-      attempts.push({ ...evaluation, run_status: result.status, ...(result.code ? { code: result.code } : {}), ...(result.status === 'failed' ? { error: result.error } : {}), live_steps: live });
+      const liveModel = live.filter(id => ['call', 'agent', 'classify'].includes(method.steps[id]?.do?.kind));
+      attempts.push({ ...evaluation, run_status: result.status, ...(result.code ? { code: result.code } : {}), ...(result.status === 'failed' ? { error: result.error } : {}), live_steps: live, live_model_steps: liveModel,
+        judge_calls: evaluation.results.reduce((sum, r) => sum + (r.judge_calls ?? 0), 0) });
+      // A model step that runs live can answer differently each time, so it must pass three runs.
+      if (testCaseValue.runs == null && n === 0 && liveModel.length) { total = 3; minPass = testCaseValue.min_pass ?? 3; }
       const passes = attempts.filter(a => a.status === 'pass').length, failures = attempts.length - passes;
       // Stop as soon as the result is decided.
-      if (passes >= testCaseValue.min_pass || failures > testCaseValue.runs - testCaseValue.min_pass) break;
+      if (passes >= minPass || failures > total - minPass) break;
     }
   } finally { await rm(parent, { recursive: true, force: true }); }
   const passes = attempts.filter(a => a.status === 'pass').length;
-  const status = attempts.some(a => a.status === 'unverifiable') ? 'unverifiable' : passes >= testCaseValue.min_pass ? 'pass' : 'fail';
-  return { id: testCaseValue.id, status, passes, runs: attempts.length, min_pass: testCaseValue.min_pass, attempts, duration_ms: Math.round(performance.now() - started) };
+  const needed = testCaseValue.min_pass ?? (attempts.some(a => a.live_model_steps?.length) ? 3 : 1);
+  const status = attempts.some(a => a.status === 'unverifiable') ? 'unverifiable' : passes >= needed ? 'pass' : 'fail';
+  // Passing some runs and failing another means the Method does not follow the rule reliably.
+  const unreliable = status === 'fail' && passes > 0;
+  return { id: testCaseValue.id, status, passes, runs: attempts.length, min_pass: needed, ...(unreliable ? { unreliable: `passed ${passes} of ${attempts.length} runs: the Method does not follow this rule every time` } : {}),
+    attempts, duration_ms: Math.round(performance.now() - started) };
 }
 
 const scratchLimit = { files: 5000, bytes: 100_000_000 };
@@ -371,6 +380,7 @@ async function changedFirst(methodFile, config, cases) {
  * @param {{casesDir?: string | undefined, ids?: string[] | undefined, baseline?: string | undefined, newIds?: string[] | undefined, runOptions?: any, concurrency?: number | undefined}} [options]
  */
 export async function testSuite(methodFile, config, { casesDir = defaultCasesDir(methodFile), ids, baseline, newIds = [], runOptions = {}, concurrency = 4 } = {}) {
+  const suiteStarted = performance.now();
   const today = new Date().toISOString().slice(0, 10);
   const all = await listCases(methodFile, casesDir);
   for (const id of [...(ids ?? []), ...newIds]) if (!all.some(c => c.id === id)) fail(`No case ${id} for ${basename(methodFile)}`, 'case_invalid');
@@ -387,8 +397,11 @@ export async function testSuite(methodFile, config, { casesDir = defaultCasesDir
   });
   const blocking = new Set(['fail', 'regression', 'unverifiable', 'not_fixed', 'not_red']);
   const count = verdict => report.filter(r => r.verdict === verdict).length;
+  const everyAttempt = report.flatMap(r => [r.candidate, r.baseline].filter(Boolean).flatMap(c => c.attempts));
   return {
     passed: !report.some(r => blocking.has(r.verdict)),
+    // What the check cost: model steps that ran live and judge calls that were not cached.
+    totals: { duration_ms: Math.round(performance.now() - suiteStarted), live_model_steps: everyAttempt.reduce((sum, a) => sum + (a.live_model_steps?.length ?? 0), 0), judge_calls: everyAttempt.reduce((sum, a) => sum + (a.judge_calls ?? 0), 0) },
     method: pathResolve(methodFile), ...(baseline ? { baseline: pathResolve(baseline) } : {}),
     counts: Object.fromEntries(['pass', 'fixed', 'regression', 'fail', 'unverifiable', 'not_fixed', 'not_red'].map(v => [v, count(v)])),
     retired: all.filter(c => c.status === 'retired').length,

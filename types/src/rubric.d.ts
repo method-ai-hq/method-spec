@@ -31,6 +31,7 @@ export function judgeRubric({ value, criteria, context, judges, config, options 
         reason: any;
         probability?: undefined;
     })[];
+    judge_calls: number;
 }>;
 /**
  * Choose the fast judge for a criterion only when it agrees with every example: the model judge's verdicts on the
