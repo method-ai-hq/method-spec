@@ -252,3 +252,18 @@ test('a replay reads real folders, writes to scratch copies, and judges a saved 
   assert.equal(changed.cases[0].verdict, 'pass'); assert.deepEqual(changed.cases[0].candidate.attempts[0].live_steps, ['save']);
   assert.equal(await readFile(join(out, 'report.md'), 'utf8'), 'something else');
 });
+
+test('a rubric reads context, such as the sources, without judging it', async t => {
+  const { dir, cfg, current, write } = await setup(t);
+  let prompt = '';
+  const fake = judge();
+  const transport = async body => { prompt = JSON.stringify(body); return fake.transport(body); };
+  await writeFile(current, JSON.stringify(version({ report: 'report-v2.mjs' })));
+  await runMethod(current, cfg, { runDir: join(dir, 'fixed'), inputs: { amounts: [4, 6], to: 'ap@example.com' } });
+  const created = await createCase({ methodFile: current, runDir: join(dir, 'run'), passingRun: join(dir, 'fixed'), id: 'with-context', note: 'Say whether delivery is confirmed.',
+    rubric: ['The report says whether delivery of the summary is confirmed.'], context: ['outputs.total', 'inputs.to'], config: withJudge(cfg), options: { runOptions: { transport }, cacheDir: join(dir, 'cache') } });
+  assert.deepEqual(created.expect[0].context, ['outputs.total', 'inputs.to']);
+  assert.match(prompt, /Context:.*outputs\.total.*10.*inputs\.to.*ap@example\.com/s);
+  const report = await testSuite(current, withJudge(cfg), { runOptions: { transport, cacheDir: join(dir, 'cache') } });
+  assert.equal(report.cases[0].verdict, 'pass');
+});

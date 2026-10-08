@@ -57,6 +57,7 @@ function validateExpectations(expect) {
     else if (item.kind === 'rubric') {
       if (typeof item.ref !== 'string') fail('A rubric expectation needs ref, the output to judge, such as outputs.report', 'case_invalid');
       if (!Array.isArray(item.criteria) || !item.criteria.length || item.criteria.some(c => typeof c?.text !== 'string' || !c.text.trim() || typeof c.id !== 'string')) fail('A rubric lists criteria as plain sentences', 'case_invalid');
+      if (item.context !== undefined && (!Array.isArray(item.context) || item.context.some(ref => typeof ref !== 'string'))) fail('Rubric context lists references, such as outputs.material or inputs.notes', 'case_invalid');
     } else fail(`Unknown expectation kind: ${item.kind}`, 'case_invalid');
   }
 }
@@ -96,7 +97,9 @@ export async function evaluate(expect, outcome, { caseDir, config, options = {} 
       if (found.missing || found.value === null) { status = outcome.status === 'failed' ? 'fail' : 'unverifiable'; reason = `${item.ref} is missing${outcome.error ? ` (the run ${outcome.status}: ${outcome.error})` : ''}`; }
       else if (item.kind === 'equals') { status = isDeepStrictEqual(found.value, item.value) ? 'pass' : 'fail'; reason = `${item.ref} = ${JSON.stringify(found.value)}`; }
       else {
-        detail = await judgeRubric({ value: await judgedValue(found.value, outcome), criteria: item.criteria, judges: item.judges ?? {}, config, options });
+        // Context values (sources, the person's words) are read by the judge but not judged.
+        const context = item.context?.length ? Object.fromEntries(await Promise.all(item.context.map(async ref => { const c = lookup(outcome, ref); return [ref, c.missing ? null : await judgedValue(c.value, outcome)]; }))) : undefined;
+        detail = await judgeRubric({ value: await judgedValue(found.value, outcome), criteria: item.criteria, context, judges: item.judges ?? {}, config, options });
         status = detail.status;
         reason = detail.criteria.filter(c => !c.pass).map(c => `${c.text} — ${c.reason}`).join('; ') || `all ${detail.criteria.length} criteria pass`;
       }
@@ -132,7 +135,7 @@ export async function outcomeOfRun(runDir) {
   // Paths in files connections map to the copies that the runtime kept for this run.
   const files = {};
   for (const entry of ledger.filter(e => e.automatic && e.copies)) for (const [path, copy] of Object.entries(entry.copies)) files[path === '.' ? entry.root : join(entry.root, path)] = join(runDir, copy);
-  return { status: summary.status, code: summary.code ?? null, ...(summary.error ? { error: summary.error } : {}), result,
+  return { status: summary.status, code: summary.code ?? null, ...(summary.error ? { error: summary.error } : {}), result, inputs: checkpoint?.root?.inputs ?? {},
     outputs: outputsFrom(checkpoint), effects: ledger.length ? effectSummary(ledger).effects : [], artifacts: join(runDir, 'artifacts'), files };
 }
 
@@ -142,11 +145,11 @@ export async function outcomeOfRun(runDir) {
  * the case must pass on it. A case from a passing run alone pins behaviour that is already right. A rubric's judge
  * is calibrated on the runs it has.
  * @param {{methodFile: string, runDir?: string | undefined, id: string, note: string, author?: string | null | undefined, expect?: any[] | undefined, rubric?: string[] | undefined,
- *   ref?: string | undefined, passingRun?: string | undefined, observations?: Record<string, any[]> | undefined, redact?: Record<string, string> | undefined,
+ *   ref?: string | undefined, context?: string[] | undefined, passingRun?: string | undefined, observations?: Record<string, any[]> | undefined, redact?: Record<string, string> | undefined,
  *   runs?: number | undefined, minPass?: number | undefined, retentionDays?: number | undefined, supersedes?: string[] | undefined, casesDir?: string | undefined,
  *   config?: any, options?: any}} input
  */
-export async function createCase({ methodFile, runDir, id, note, author, expect = [], rubric = [], ref, passingRun, observations = {}, redact, runs = 1, minPass, retentionDays = 365, supersedes = [], casesDir = defaultCasesDir(methodFile), config = {}, options = {} }) {
+export async function createCase({ methodFile, runDir, id, note, author, expect = [], rubric = [], ref, context = [], passingRun, observations = {}, redact, runs = 1, minPass, retentionDays = 365, supersedes = [], casesDir = defaultCasesDir(methodFile), config = {}, options = {} }) {
   if (!caseId.test(id ?? '')) fail('Case IDs use lowercase letters, digits and hyphens', 'case_invalid');
   if (typeof note !== 'string' || !note.trim()) fail('A case records the correction note: --note "the person\'s words"', 'case_invalid');
   if (!runDir && !passingRun) fail('Give the run that went wrong (--run), the run that was right (--passing-run), or both', 'case_invalid');
@@ -155,7 +158,7 @@ export async function createCase({ methodFile, runDir, id, note, author, expect 
   if (rubric.length) {
     ref ??= typeof method.result === 'string' ? `outputs.${method.result.split('.')[0]}` : undefined;
     if (!ref) fail('Name the output to judge with --ref outputs.NAME; the Method result has several values', 'case_invalid');
-    expect = [...expect, { kind: 'rubric', ref, criteria: rubricCriteria(rubric) }];
+    expect = [...expect, { kind: 'rubric', ref, criteria: rubricCriteria(rubric), ...(context.length ? { context } : {}) }];
   }
   validateExpectations(expect);
   if (!Number.isSafeInteger(runs) || runs < 1 || runs > 20) fail('runs must be between 1 and 20', 'case_invalid');
@@ -244,10 +247,14 @@ function neededSteps(method, expect) {
   for (const [id, step] of Object.entries(method.steps)) for (const name of Object.keys(effectiveOutputs(step))) producers[name] = id;
   const roots = [];
   for (const item of expect) {
-    if (!['equals', 'rubric'].includes(item.kind) || !item.ref.startsWith('outputs.')) return null;
-    const producer = producers[item.ref.split('.')[1]];
-    if (!producer) return null;
-    roots.push(producer);
+    if (!['equals', 'rubric'].includes(item.kind)) return null;
+    for (const ref of [item.ref, ...(item.context ?? [])]) {
+      if (ref.startsWith('inputs.')) continue;
+      if (!ref.startsWith('outputs.')) return null;
+      const producer = producers[ref.split('.')[1]];
+      if (!producer) return null;
+      roots.push(producer);
+    }
   }
   const { dependencies } = validateMethod(method);
   const needed = new Set();

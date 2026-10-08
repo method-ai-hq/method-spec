@@ -299,7 +299,7 @@ Expectations (`--expect` is a JSON list):
 - `{"kind": "status", "in": ["failed"]}` checks the run status.
 - `{"kind": "effect", "effect": "send/0/delivered", "verdict": ["contradicted"]}` checks an effect verdict.
 - `{"kind": "predicate", "runtime": "node", "entrypoint": "check.mjs"}` runs a script on `{status, code, result, outputs, effects}` that returns `{"pass": true|false, "reason": "..."}`. The script is copied into the case.
-- `{"kind": "rubric", "ref": "outputs.report", "criteria": [{"id": "c1", "text": "..."}]}` judges text, a record (as JSON), or a text file output against plain sentences. `--rubric SENTENCE` (repeatable) makes one; `--ref` defaults to the Method's result.
+- `{"kind": "rubric", "ref": "outputs.report", "criteria": [{"id": "c1", "text": "..."}]}` judges text, a record (as JSON), or a text file output against plain sentences. `--rubric SENTENCE` (repeatable) makes one; `--ref` defaults to the Method's result. `"context": ["outputs.material", "inputs.claim"]` (`--context REF`, repeatable) gives the judge other values to check against, such as the sources or the person's words; the judge reads them but does not judge them, and quotes come only from the judged value.
 
 Each expectation can carry `text`, a plain-language statement for people. A case is refused if its non-rubric expectations pass on an empty result: such a case cannot detect the error.
 

@@ -1,13 +1,14 @@
 /**
  * Judge a value. Returns {status: pass|fail, criteria: [{id, text, pass, judge, votes|probability, reason}]}.
- * @param {{value: any, criteria: Array<{id: string, text: string}>, judges?: Record<string, string>, config: any, options?: any}} input
+ * @param {{value: any, criteria: Array<{id: string, text: string}>, context?: any, judges?: Record<string, string>, config: any, options?: any}} input
  */
-export function judgeRubric({ value, criteria, judges, config, options }: {
+export function judgeRubric({ value, criteria, context, judges, config, options }: {
     value: any;
     criteria: Array<{
         id: string;
         text: string;
     }>;
+    context?: any;
     judges?: Record<string, string>;
     config: any;
     options?: any;

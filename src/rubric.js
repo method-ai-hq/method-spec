@@ -14,16 +14,17 @@ const defaults = { judge_runs: 3, classify_threshold: 0.9, max_value_bytes: 200_
 export const rubricSettings = config => ({ ...defaults, ...config?.rubric });
 const judgeMethod = {
   format: 'method/3.3', name: 'Rubric judge', goal: 'Decide whether a value meets each criterion, with quotes.',
-  inputs: { value: { type: 'text' }, criteria: { type: 'text' } },
+  inputs: { value: { type: 'text' }, criteria: { type: 'text' }, context: { type: 'text', default: '' } },
   steps: {
     judge: {
       name: 'Judge the criteria',
-      in: { value: 'inputs.value', criteria: 'inputs.criteria' },
+      in: { value: 'inputs.value', criteria: 'inputs.criteria', context: 'inputs.context' },
       do: { kind: 'call', model: 'judge', prompt: [
         'Decide whether the text below meets each criterion. Judge only from the text below: do not open files, run commands, or use outside knowledge, and do not assume what the text does not say.',
         'For each criterion, return its id, pass (true or false), quote, and reason.',
         'quote: words copied exactly from the text that decide the criterion. When no single passage decides it (for example, when the criterion is about something the text must not contain, and the text does not contain it), use an empty quote.',
-        'reason: one short sentence.', '', 'Criteria (JSON):', '{{criteria}}', '', 'Text:', '{{value}}',
+        'Quotes come only from the text, never from the context. The context (for example the sources or the person\'s words) is there so you can check the text against it; do not judge the context.',
+        'reason: one short sentence.', '', 'Criteria (JSON):', '{{criteria}}', '', 'Context:', '{{context}}', '', 'Text:', '{{value}}',
       ].join('\n') },
       out: { verdicts: { type: 'list', fields: { id: 'text', pass: 'boolean', quote: 'text', reason: 'text' } } },
     },
@@ -44,14 +45,14 @@ async function cached(key, compute, cacheDir) {
 }
 
 /** One vote of the model judge on every criterion. */
-async function modelVote(text, criteria, config, options) {
+async function modelVote(text, criteria, config, options, context) {
   const { runMethod } = await import('./runner.js');
   const dir = await mkdtemp(join(tmpdir(), 'method-judge-'));
   try {
     const file = join(dir, 'judge.method');
     await writeFile(file, JSON.stringify(judgeMethod));
     const result = await runMethod(file, { ...config, allow_local_processes: true }, { ...options.runOptions, runDir: join(dir, 'run'),
-      inputs: { value: text, criteria: JSON.stringify(criteria.map(({ id, text }) => ({ id, text }))) }, replay: undefined });
+      inputs: { value: text, criteria: JSON.stringify(criteria.map(({ id, text }) => ({ id, text }))), context: context || '(none)' }, replay: undefined });
     if (result.status !== 'completed') fail(`The rubric judge did not finish: ${result.error ?? result.status}`, 'judge_failed');
     const byId = new Map(result.result.map(v => [v.id, v]));
     const quoted = normalize(text);
@@ -76,17 +77,18 @@ async function classifyPass(text, criterion, options) {
 
 /**
  * Judge a value. Returns {status: pass|fail, criteria: [{id, text, pass, judge, votes|probability, reason}]}.
- * @param {{value: any, criteria: Array<{id: string, text: string}>, judges?: Record<string, string>, config: any, options?: any}} input
+ * @param {{value: any, criteria: Array<{id: string, text: string}>, context?: any, judges?: Record<string, string>, config: any, options?: any}} input
  */
-export async function judgeRubric({ value, criteria, judges = {}, config, options = {} }) {
+export async function judgeRubric({ value, criteria, context, judges = {}, config, options = {} }) {
   const settings = rubricSettings(config);
   const text = valueText(value ?? '');
   if (Buffer.byteLength(text) > settings.max_value_bytes) fail(`The judged value exceeds ${settings.max_value_bytes} bytes`, 'judge_failed');
   const modelCriteria = criteria.filter(c => judges[c.id] !== 'classify');
   const profile = config?.models?.judge ?? null;
-  const key = hash(['rubric/1', text, modelCriteria, profile, settings.judge_runs]);
+  const contextText = context === undefined || context === null ? '' : valueText(context);
+  const key = hash(['rubric/2', text, contextText, modelCriteria, profile, settings.judge_runs]);
   const votes = modelCriteria.length ? await cached(key, async () => {
-    const all = await Promise.all(Array.from({ length: settings.judge_runs }, () => modelVote(text, modelCriteria, config, options)));
+    const all = await Promise.all(Array.from({ length: settings.judge_runs }, () => modelVote(text, modelCriteria, config, options, contextText)));
     return modelCriteria.map((c, i) => all.map(run => run[i]));
   }, options.cacheDir) : [];
   const results = [];
