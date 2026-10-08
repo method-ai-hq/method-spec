@@ -20,7 +20,7 @@ const judgeMethod = {
       name: 'Judge the criteria',
       in: { value: 'inputs.value', criteria: 'inputs.criteria' },
       do: { kind: 'call', model: 'judge', prompt: [
-        'Decide whether the text below meets each criterion. Judge only from the text. Do not use outside knowledge, and do not assume what the text does not say.',
+        'Decide whether the text below meets each criterion. Judge only from the text below: do not open files, run commands, or use outside knowledge, and do not assume what the text does not say.',
         'For each criterion, return its id, pass (true or false), quote, and reason.',
         'quote: words copied exactly from the text that decide the criterion. When no single passage decides it (for example, when the criterion is about something the text must not contain, and the text does not contain it), use an empty quote.',
         'reason: one short sentence.', '', 'Criteria (JSON):', '{{criteria}}', '', 'Text:', '{{value}}',

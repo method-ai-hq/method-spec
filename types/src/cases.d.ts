@@ -56,6 +56,7 @@ export function outcomeOfRun(runDir: any): Promise<{
         action_outcome: any;
     }[];
     artifacts: string;
+    files: {};
     error?: any;
     status: any;
     code: any;
@@ -137,6 +138,9 @@ export function createCase({ methodFile, runDir, id, note, author, expect, rubri
         text?: any;
     }[];
     dir: string;
+    retention_until: string;
+    redacted: boolean;
+    files?: {};
     format: string;
     id: string;
     status: string;
@@ -155,8 +159,6 @@ export function createCase({ methodFile, runDir, id, note, author, expect, rubri
     min_pass: number;
     supersedes: string[];
     superseded_by: any;
-    retention_until: string;
-    redacted: boolean;
 }>;
 /**
  * Retire a case whose rule is obsolete. The case stays on disk with its reason, so the history is kept.

@@ -1,4 +1,4 @@
-import { readFile, readdir, mkdir, mkdtemp, rm, writeFile, stat } from 'node:fs/promises';
+import { readFile, readdir, mkdir, mkdtemp, rm, writeFile, stat, cp } from 'node:fs/promises';
 import { resolve as pathResolve, dirname, basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { isDeepStrictEqual } from 'node:util';
@@ -68,10 +68,17 @@ const lookup = (root, ref) => {
   for (const key of ref.split('.')) { if (!own(value, key)) return { missing: true }; value = value[key]; }
   return { value };
 };
-/** A file output is judged by its contents. */
-async function judgedValue(value, artifacts) {
-  if (value && typeof value === 'object' && typeof value.path === 'string' && typeof value.sha256 === 'string' && artifacts) {
-    try { return await readFile(await containedFile(artifacts, value.path), 'utf8'); } catch { return value; }
+/**
+ * A file is judged by its contents as the run wrote them: a declared file output from the run's artifacts, or a
+ * path inside a files connection from the copy that the runtime kept when it observed the folder.
+ */
+async function judgedValue(value, outcome) {
+  if (value && typeof value === 'object' && typeof value.path === 'string' && typeof value.sha256 === 'string' && outcome.artifacts) {
+    try { return await readFile(await containedFile(outcome.artifacts, value.path), 'utf8'); } catch { return value; }
+  }
+  if (typeof value === 'string' && outcome.files) {
+    const copy = outcome.files[pathResolve(value)];
+    if (copy) { try { return await readFile(copy, 'utf8'); } catch { /* judge the text itself */ } }
   }
   return value;
 }
@@ -89,7 +96,7 @@ export async function evaluate(expect, outcome, { caseDir, config, options = {} 
       if (found.missing || found.value === null) { status = outcome.status === 'failed' ? 'fail' : 'unverifiable'; reason = `${item.ref} is missing${outcome.error ? ` (the run ${outcome.status}: ${outcome.error})` : ''}`; }
       else if (item.kind === 'equals') { status = isDeepStrictEqual(found.value, item.value) ? 'pass' : 'fail'; reason = `${item.ref} = ${JSON.stringify(found.value)}`; }
       else {
-        detail = await judgeRubric({ value: await judgedValue(found.value, outcome.artifacts), criteria: item.criteria, judges: item.judges ?? {}, config, options });
+        detail = await judgeRubric({ value: await judgedValue(found.value, outcome), criteria: item.criteria, judges: item.judges ?? {}, config, options });
         status = detail.status;
         reason = detail.criteria.filter(c => !c.pass).map(c => `${c.text} — ${c.reason}`).join('; ') || `all ${detail.criteria.length} criteria pass`;
       }
@@ -102,7 +109,7 @@ export async function evaluate(expect, outcome, { caseDir, config, options = {} 
       const profile = configuration(config).runtimes?.[item.runtime];
       if (!profile) fail(`Unknown runtime for predicate: ${item.runtime}`, 'preflight');
       try {
-        const { artifacts, ...visible } = outcome;
+        const { artifacts, files, ...visible } = outcome;
         const result = await executeProcess({ command: await executable(profile.command), args: [...(profile.args ?? []), await containedFile(caseDir, item.entrypoint)], cwd: caseDir,
           input: visible, env: { PATH: process.env.PATH ?? '', LANG: 'C.UTF-8' }, signal: AbortSignal.timeout(60_000), maxBytes: 1_000_000 });
         const value = JSON.parse(result.output);
@@ -122,8 +129,11 @@ export async function outcomeOfRun(runDir) {
   const checkpoint = await readJSON(join(runDir, 'checkpoint.json')).catch(() => null);
   const result = await readJSON(join(runDir, 'result.json')).catch(() => null);
   const ledger = await readLedger(runDir);
+  // Paths in files connections map to the copies that the runtime kept for this run.
+  const files = {};
+  for (const entry of ledger.filter(e => e.automatic && e.copies)) for (const [path, copy] of Object.entries(entry.copies)) files[path === '.' ? entry.root : join(entry.root, path)] = join(runDir, copy);
   return { status: summary.status, code: summary.code ?? null, ...(summary.error ? { error: summary.error } : {}), result,
-    outputs: outputsFrom(checkpoint), effects: ledger.length ? effectSummary(ledger).effects : [], artifacts: join(runDir, 'artifacts') };
+    outputs: outputsFrom(checkpoint), effects: ledger.length ? effectSummary(ledger).effects : [], artifacts: join(runDir, 'artifacts'), files };
 }
 
 /**
@@ -186,6 +196,15 @@ export async function createCase({ methodFile, runDir, id, note, author, expect 
       const judges = await chooseJudges({ criteria: item.criteria, examples, config, options });
       if (Object.keys(judges).length) item.judges = judges;
     }
+    // Keep the files that the source run wrote, so a replayed step's path is judged by what it wrote then.
+    const source = await outcomeOfRun(runDir ?? passingRun);
+    const keptFiles = {};
+    for (const [path, copy] of Object.entries(source.files)) {
+      const name = `files/${Object.keys(keptFiles).length}`;
+      await mkdir(join(dir, 'files'), { recursive: true, mode: 0o700 });
+      await cp(copy, join(dir, name));
+      keptFiles[path] = name;
+    }
     const accepted = Object.fromEntries(Object.entries(recorded.iterations).map(([step, list]) => [step, list.filter(Boolean).map(entry => entry.candidate)]));
     await mkdir(join(dir, 'artifacts'), { recursive: true, mode: 0o700 });
     await copyForkFiles({ dir: runDir ?? passingRun }, recorded.method, accepted, join(dir, 'artifacts'));
@@ -193,7 +212,7 @@ export async function createCase({ methodFile, runDir, id, note, author, expect 
     const value = {
       format: 'method-case/1', id, status: 'active', method_file: basename(methodFile), note: applyRedaction(note, redact), author: author ?? null,
       created: created.toISOString(), source: { run_dir: pathResolve(runDir ?? passingRun), execution_id: recorded.execution_id, method_sha256: recorded.method_sha256, ...(passingRun ? { passing_run_dir: pathResolve(passingRun) } : {}) },
-      expect, runs, min_pass: minPass, supersedes, superseded_by: null,
+      expect, runs, min_pass: minPass, supersedes, superseded_by: null, ...(Object.keys(keptFiles).length ? { files: keptFiles } : {}),
       retention_until: new Date(created.getTime() + retentionDays * 86_400_000).toISOString().slice(0, 10), redacted: !!(redact && Object.keys(redact).length),
     };
     await writeJSON(join(dir, 'recording.json'), recording);
@@ -253,25 +272,32 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
   const method = await readDocument(methodFile);
   const only = neededSteps(method, testCaseValue.expect);
   const attempts = [];
+  // Folders that a step writes become scratch copies; folders that are only read stay as they are.
+  const written = new Set(Object.values(method.steps).flatMap(step => (step.changes ?? []).filter(x => x.startsWith('environment.')).map(x => x.slice(12)))
+    .filter(name => method.environment?.[name]?.type === 'files'));
   const parent = await mkdtemp(join(tmpdir(), 'method-case-'));
   try {
     for (let n = 0; n < testCaseValue.runs; n++) {
       const runDir = join(parent, `run-${n + 1}`);
-      const environment = { ...config.environment };
-      for (const [name, env] of Object.entries(method.environment ?? {})) if (env.type === 'files') {
-        environment[name] = join(parent, `scratch-${n + 1}`, name);
-        await mkdir(environment[name], { recursive: true });
+      const environment = { ...config.environment }, paths = {};
+      for (const name of written) {
+        const real = pathResolve(config.environment?.[name] ?? '.'), scratch = join(parent, `scratch-${n + 1}`, name);
+        if (await scratchCopy(real, scratch)) { environment[name] = scratch; paths[scratch] = recording.environment?.[name] ?? config.environment?.[name]; }
+        else { attempts.push({ status: 'unverifiable', reason: `${name} is too large to copy for a safe replay (more than ${scratchLimit.files} files or ${scratchLimit.bytes / 1e6} MB).` }); break; }
       }
+      if (attempts.at(-1)?.status === 'unverifiable') break;
       let result;
       try {
         result = await runMethod(methodFile, { ...config, environment }, { ...runOptions, runDir, inputs: recording.inputs, state: recording.initial_state,
-          replay: { recording, observations: recording.observations ?? {}, artifacts: await exists(artifacts) ? artifacts : undefined, ...(only ? { only } : {}) } });
+          replay: { recording, paths, observations: recording.observations ?? {}, artifacts: await exists(artifacts) ? artifacts : undefined, ...(only ? { only } : {}) } });
       } catch (error) { attempts.push({ status: 'unverifiable', reason: error.message }); break; }
       if (result.status === 'failed' && result.code === 'unverifiable') { attempts.push({ status: 'unverifiable', reason: result.error }); break; }
       const events = (await readFile(join(runDir, 'events.jsonl'), 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line));
       const replayed = new Set(events.filter(e => e.event === 'step.replayed').map(e => `${e.step}:${e.iteration}`));
       const live = [...new Set(events.filter(e => e.event === 'step.candidate' && !replayed.has(`${e.step}:${e.iteration}`)).map(e => e.step))];
       const outcome = await outcomeOfRun(runDir);
+      // A replayed step's path refers to the source run's file; the case kept a copy of it.
+      for (const [path, name] of Object.entries(testCaseValue.files ?? {})) outcome.files[path] ??= join(testCaseValue.dir, name);
       const evaluation = await evaluate(testCaseValue.expect, outcome, { caseDir: testCaseValue.dir, config, options: { runOptions, classification: runOptions.classification, cacheDir: runOptions.cacheDir } });
       attempts.push({ ...evaluation, run_status: result.status, ...(result.code ? { code: result.code } : {}), ...(result.status === 'failed' ? { error: result.error } : {}), live_steps: live });
       const passes = attempts.filter(a => a.status === 'pass').length, failures = attempts.length - passes;
@@ -284,6 +310,25 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
   return { id: testCaseValue.id, status, passes, runs: attempts.length, min_pass: testCaseValue.min_pass, attempts, duration_ms: Math.round(performance.now() - started) };
 }
 
+const scratchLimit = { files: 5000, bytes: 100_000_000 };
+const scratchSkip = new Set(['.git', 'node_modules', '.venv', '__pycache__', 'sensitive', '.method-runs', 'cases']);
+/** Copy a folder (or one file) into a scratch location, or return false when it is too large. */
+async function scratchCopy(real, scratch) {
+  let files = 0, bytes = 0, info;
+  try { info = await stat(real); } catch { await mkdir(scratch, { recursive: true }); return true; }
+  if (info.isFile()) { await mkdir(dirname(scratch), { recursive: true }); await cp(real, scratch); return true; }
+  async function size(dir) {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      if (scratchSkip.has(entry.name)) continue;
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) await size(path);
+      else if (entry.isFile()) { files++; bytes += (await stat(path)).size; if (files > scratchLimit.files || bytes > scratchLimit.bytes) throw Object.assign(Error('large'), { code: 'too_large' }); }
+    }
+  }
+  try { await size(real); } catch (error) { if (error.code === 'too_large') return false; throw error; }
+  await cp(real, scratch, { recursive: true, filter: source => !scratchSkip.has(source.split(/[\\/]/).pop()) });
+  return true;
+}
 async function parallel(items, limit, work) {
   const results = new Array(items.length);
   let next = 0;

@@ -6,7 +6,7 @@ import { resolveModels } from './agents.js';
 import { executorVersion, assertCheckpointExecutor } from './executor-version.js';
 import { executeClaude } from './claude.js';
 import { configuration } from './defaults.js';
-import { mkdir, readFile, appendFile, realpath, open, unlink, cp }  from 'node:fs/promises';
+import { mkdir, readFile, appendFile, realpath, open, unlink, cp, copyFile, stat as statFile }  from 'node:fs/promises';
 import { resolve as pathResolve, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
@@ -428,8 +428,21 @@ async function executeRun(file, config, options) {
           await accept(await act());
           // The runtime reads each changed folder itself; a file that the step claims to have written must have changed.
           for (const name of folders) {
-            const entry = observeFiles({ key: effectKey(id, iteration, `files:${name}`), connection: name, root: pathResolve(config.environment[name]), before: before[name],
-              after: await listFolder(pathResolve(config.environment[name]), [runDir]), outputs, completedAt: new Date().toISOString() });
+            const folder = pathResolve(config.environment[name]);
+            const entry = observeFiles({ key: effectKey(id, iteration, `files:${name}`), connection: name, root: folder, before: before[name],
+              after: await listFolder(folder, [runDir]), outputs, completedAt: new Date().toISOString() });
+            // Keep a copy of what the step wrote, so the run record shows it even after a later run overwrites it.
+            entry.root = folder; entry.copies = {};
+            for (const change of (entry.changed ?? []).filter(c => c.change !== 'removed').slice(0, 20)) {
+              const source = change.path === '.' ? folder : pathResolve(folder, change.path);
+              try {
+                if ((await statFile(source)).size > 1_000_000) continue;
+                const copy = `effects/files/${iteration}/${id}/${name}/${change.path === '.' ? 'file' : change.path}`;
+                await mkdir(dirname(pathResolve(runDir, copy)), { recursive: true, mode: 0o700 });
+                await copyFile(source, pathResolve(runDir, copy));
+                entry.copies[change.path] = copy;
+              } catch { /* A file that disappeared again has no copy. */ }
+            }
             await appendLedger(runDir, entry);
             await record('effect.observed', entry);
             if (entry.verdict === 'contradicted') fail(`Effect ${entry.effect} was contradicted: ${entry.reason}`, 'effect_contradicted');

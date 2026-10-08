@@ -224,3 +224,31 @@ test('a strict case stops at its first failed run', async t => {
   const report = await testSuite(current, cfg);
   assert.equal(report.cases[0].candidate.attempts.length, 1);
 });
+
+test('a replay reads real folders, writes to scratch copies, and judges a saved path by what that run wrote', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'method-paths-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const notes = join(dir, 'notes'), out = join(dir, 'out');
+  await mkdir(notes); await mkdir(out);
+  await writeFile(join(notes, 'a.md'), 'delivery not yet confirmed');
+  await writeFile(join(dir, 'read.mjs'), 'import{readFileSync,readdirSync}from"node:fs";const a=JSON.parse(readFileSync(0,"utf8"));console.log(JSON.stringify({material:readdirSync(a.notes).map(f=>readFileSync(a.notes+"/"+f,"utf8")).join("\\n")}))');
+  const save = extra => `import{readFileSync,writeFileSync}from"node:fs";const a=JSON.parse(readFileSync(0,"utf8"));writeFileSync(a.out+"/report.md","Report: "+a.material${extra});console.log(JSON.stringify({path:a.out+"/report.md"}))`;
+  await writeFile(join(dir, 'save.mjs'), save(''));
+  const doc = { format: 'method/3.3', name: 'Paths', goal: 'Save a report.', environment: { notes: { type: 'files', description: 'Notes.' }, out: { type: 'files', description: 'Out.' } },
+    steps: { read: { name: 'Read', purpose: 'Read notes.', in: { notes: 'environment.notes' }, do: script('read.mjs'), out: { material: text } },
+      save: { name: 'Save', purpose: 'Save the report.', in: { material: 'material', out: 'environment.out' }, do: script('save.mjs'), out: { path: text }, changes: ['environment.out'] } }, result: 'path' };
+  const file = join(dir, 'p.method'); await writeFile(file, JSON.stringify(doc));
+  const cfg = withJudge(config({ notes, out }));
+  assert.equal((await runMethod(file, cfg, { runDir: join(dir, 'run') })).status, 'completed');
+  const fake = judge(), options = { runOptions: { transport: fake.transport }, cacheDir: join(dir, 'cache') };
+  await createCase({ methodFile: file, passingRun: join(dir, 'run'), id: 'mentions-delivery', note: 'Keep the delivery status.', rubric: ['The report says whether delivery is confirmed.'], config: cfg, options });
+  // A later run overwrites the real file; the case still judges what its source run wrote.
+  await writeFile(join(out, 'report.md'), 'something else');
+  const unchanged = await testSuite(file, cfg, { runOptions: options.runOptions });
+  assert.equal(unchanged.cases[0].verdict, 'pass'); assert.deepEqual(unchanged.cases[0].candidate.attempts[0].live_steps, []);
+  // A changed save step runs against a scratch copy; the read step is still replayed.
+  await writeFile(join(dir, 'save.mjs'), save('+"!"'));
+  const changed = await testSuite(file, cfg, { runOptions: options.runOptions });
+  assert.equal(changed.cases[0].verdict, 'pass'); assert.deepEqual(changed.cases[0].candidate.attempts[0].live_steps, ['save']);
+  assert.equal(await readFile(join(out, 'report.md'), 'utf8'), 'something else');
+});

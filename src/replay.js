@@ -30,7 +30,9 @@ export function replayedCandidate(replay, { id, step, iteration, bindings, manif
   const recording = replay.recording;
   if (recording.keys[id] !== stepKey(step, { files: manifest, profiles, tools })) return null;
   const saved = recording.iterations[id]?.[iteration];
-  if (!saved || !isDeepStrictEqual(saved.inputs, bindings)) return null;
+  // A scratch folder stands in for a real one; compare with the path that the recorded run saw.
+  const seen = replay.paths ? JSON.parse(JSON.stringify(bindings, (key, value) => typeof value === 'string' && replay.paths[value] ? replay.paths[value] : value)) : bindings;
+  if (!saved || !isDeepStrictEqual(saved.inputs, seen)) return null;
   return structuredClone(saved.candidate);
 }
 export function unverifiable(id, iteration, step) {
@@ -60,6 +62,6 @@ export async function recordRun(runDir) {
   }
   return {
     format: 'method-recording/1', method_sha256: hash(method), execution_id: started.execution_id,
-    inputs: started.inputs ?? {}, initial_state: started.initial_state ?? {}, keys, iterations, observations, method,
+    inputs: started.inputs ?? {}, initial_state: started.initial_state ?? {}, environment: started.config?.environment ?? {}, keys, iterations, observations, method,
   };
 }

@@ -26,6 +26,7 @@ export function recordRun(runDir: any): Promise<{
     execution_id: any;
     inputs: any;
     initial_state: any;
+    environment: any;
     keys: {
         [k: string]: string;
     };
