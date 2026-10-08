@@ -187,6 +187,7 @@ test('a rubric case: plain sentences, judged with quotes, calibrated on the bad 
     rubric: ['The report says whether delivery of the summary is confirmed.'], config: judged, options });
   assert.equal(created.expect[0].kind, 'rubric'); assert.equal(created.expect[0].ref, 'outputs.report');
   assert.equal(created.on_failing_run[0].criteria[0].pass, false); assert.equal(created.on_passing_run[0].criteria[0].pass, true);
+  assert.equal(created.warnings, undefined);
   assert.equal(JSON.parse(await readFile(join(dir, 'cases/delivery-stated/examples.json'), 'utf8')).length, 2);
   const calls = fake.calls();
   const report = await testSuite(current, judged, { runOptions: { transport: fake.transport, cacheDir } });

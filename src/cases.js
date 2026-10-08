@@ -222,7 +222,9 @@ export async function createCase({ methodFile, runDir, id, note, author, expect 
     if (examples.length) await writeJSON(join(dir, 'examples.json'), applyRedaction(examples, redact));
     await writeJSON(join(dir, 'case.json'), value);
     for (const old of supersedes) await retireCase(methodFile, old, { by: id, reason: `Superseded by ${id}: ${value.note}`, casesDir });
-    return { ...value, dir, ...(bad ? { on_failing_run: bad.results } : {}), ...(good ? { on_passing_run: good.results } : {}) };
+    // A criterion that the bad run already meets does not detect the reported problem.
+    const weak = (bad?.results ?? []).flatMap(r => (r.criteria ?? []).filter(c => c.pass).map(c => `"${c.text}" already passes on the run that went wrong, so it does not detect this problem. Make it more specific or remove it.`));
+    return { ...value, dir, ...(weak.length ? { warnings: weak } : {}), ...(bad ? { on_failing_run: bad.results } : {}), ...(good ? { on_passing_run: good.results } : {}) };
   } catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
 }
 

@@ -139,6 +139,7 @@ export function createCase({ methodFile, runDir, id, note, author, expect, rubri
         reason: string;
         text?: any;
     }[];
+    warnings?: string[];
     dir: string;
     retention_until: string;
     redacted: boolean;
