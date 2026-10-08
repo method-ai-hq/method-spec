@@ -1,4 +1,5 @@
-import { readFile, readdir, appendFile, mkdir, stat } from 'node:fs/promises';
+import { readFile, readdir, appendFile, mkdir } from 'node:fs/promises';
+import { readdirSync, statSync } from 'node:fs';
 import { resolve as pathResolve, posix, relative, isAbsolute, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -140,29 +141,35 @@ export async function observeEffect({ effect, key, token, inputs, attempt, actio
 
 // Automatic observation of files connections: the runtime reads the folder itself, before and after the step.
 const skippedFolders = new Set(['.git', 'node_modules', '.venv', '__pycache__', 'sensitive', '.method-runs']);
-const folderLimit = 50_000;
-/** Size and modification time of every file under a folder, or null when the folder is too large to observe. */
+// Listing must stay cheap: a step that writes to a large repository should not wait for it.
+export const folderLimit = { files: 20_000, ms: 3_000 };
+/**
+ * Size and modification time of every file under a folder (synchronous reads are about ten times faster than one
+ * awaited stat per file), or null when the folder is larger than the limit or the listing takes longer than the budget.
+ */
 export async function listFolder(root, exclude = []) {
   const files = {};
+  const started = performance.now();
+  let info;
+  try { info = statSync(root); } catch (error) { if (error.code === 'ENOENT') return files; throw error; }
+  // A files connection can also name one file, such as a ledger.
+  if (info.isFile()) return { '.': `${info.size}:${info.mtimeMs}` };
   let count = 0;
-  async function visit(dir) {
+  const stack = [root];
+  while (stack.length) {
+    const dir = stack.pop();
     let entries;
-    try { entries = await readdir(dir, { withFileTypes: true }); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch (error) { if (['ENOENT', 'EACCES', 'EPERM'].includes(error.code)) continue; throw error; }
     for (const entry of entries) {
       const path = pathResolve(dir, entry.name);
       if (exclude.includes(path)) continue;
-      if (entry.isDirectory()) { if (!skippedFolders.has(entry.name)) await visit(path); continue; }
+      if (entry.isDirectory()) { if (!skippedFolders.has(entry.name)) stack.push(path); continue; }
       if (!entry.isFile()) continue;
-      if (++count > folderLimit) throw Object.assign(new Error('too many files'), { code: 'folder_limit' });
-      const info = await stat(path);
-      files[relative(root, path).split(sep).join('/')] = `${info.size}:${info.mtimeMs}`;
+      if (++count > folderLimit.files || performance.now() - started > folderLimit.ms) return null;
+      const stats = statSync(path, { throwIfNoEntry: false });
+      if (stats) files[relative(root, path).split(sep).join('/')] = `${stats.size}:${stats.mtimeMs}`;
     }
   }
-  let info;
-  try { info = await stat(root); } catch (error) { if (error.code === 'ENOENT') return files; throw error; }
-  // A files connection can also name one file, such as a ledger.
-  if (info.isFile()) return { '.': `${info.size}:${info.mtimeMs}` };
-  try { await visit(root); } catch (error) { if (error.code === 'folder_limit') return null; throw error; }
   return files;
 }
 /**
@@ -171,7 +178,7 @@ export async function listFolder(root, exclude = []) {
  */
 export function observeFiles({ key, connection, root, before, after, outputs, completedAt }) {
   const base = { effect: key, automatic: true, connection, action_outcome: 'ok', attempt: 1, observed_at: new Date().toISOString(), final: true, completed_at: completedAt, horizon_at: completedAt, next_observation_at: null, evidence: [] };
-  if (!before || !after) return { ...base, verdict: 'unobserved', reason: `${connection} has more than ${folderLimit} files; it was not observed.` };
+  if (!before || !after) return { ...base, verdict: 'unobserved', reason: `${connection} is too large to observe (more than ${folderLimit.files} files, or longer than ${folderLimit.ms / 1000} s to list); it is not observed in this run. Point the connection at a smaller folder, or declare an effect.` };
   const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort()
     .filter(file => before[file] !== after[file]).map(file => ({ path: file, change: !before[file] ? 'added' : !after[file] ? 'removed' : 'modified' }));
   const touched = new Set(changed.filter(c => c.change !== 'removed').map(c => c.path));

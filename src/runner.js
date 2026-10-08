@@ -252,6 +252,7 @@ async function executeRun(file, config, options) {
       const seconds = Math.round((Date.parse(at) - Date.now()) / 1000);
       if (seconds >= 2) await write('progress', { message: `Waiting ${seconds} s to check ${key}.` });
     };
+    const tooLarge = new Set();
     const effectInputs = (step, scope) => Object.fromEntries(Object.entries(step ?? {}).map(([alias, ref]) => [alias, structuredClone(resolve(scope, ref))]));
     await verifyBundle();
     for (const id of order) {
@@ -376,7 +377,7 @@ async function executeRun(file, config, options) {
           if (options.replay && !replayed && (step.ask || (step.changes ?? []).some(x => x.startsWith('environment.') && method.environment?.[x.slice(12)]?.type !== 'files'))) unverifiable(id, iteration, step);
           const folders = (step.changes ?? []).filter(x => x.startsWith('environment.') && method.environment?.[x.slice(12)]?.type === 'files').map(x => x.slice(12));
           const before = {};
-          for (const name of folders) before[name] = await listFolder(pathResolve(config.environment[name]), [runDir]);
+          for (const name of folders) before[name] = tooLarge.has(name) ? null : await listFolder(pathResolve(config.environment[name]), [runDir]);
           if (step.ask && !replayed) {
             const prompt = renderPrompt(step.ask, bindings);
             if (Buffer.byteLength(prompt) + Buffer.byteLength(JSON.stringify(bindings)) > config.limits.max_request_bytes) fail('Expanded prompt exceeds request limit', 'input_limit');
@@ -429,8 +430,11 @@ async function executeRun(file, config, options) {
           // The runtime reads each changed folder itself; a file that the step claims to have written must have changed.
           for (const name of folders) {
             const folder = pathResolve(config.environment[name]);
+            // A folder that was too large once is not listed again in this run, and is reported once.
+            if (tooLarge.has(name)) continue;
+            if (!before[name]) tooLarge.add(name);
             const entry = observeFiles({ key: effectKey(id, iteration, `files:${name}`), connection: name, root: folder, before: before[name],
-              after: await listFolder(folder, [runDir]), outputs, completedAt: new Date().toISOString() });
+              after: before[name] ? await listFolder(folder, [runDir]) : null, outputs, completedAt: new Date().toISOString() });
             // Keep a copy of what the step wrote, so the run record shows it even after a later run overwrites it.
             entry.root = folder; entry.copies = {};
             for (const change of (entry.changed ?? []).filter(c => c.change !== 'removed').slice(0, 20)) {
