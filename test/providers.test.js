@@ -146,3 +146,10 @@ test('a hosted model is chosen before the calling agent; --agent and configured 
   assert.deepEqual((await resolveModels(doc, {}, { hostedModel: 'x/y', env, agent: 'codex' })).model, { backend: 'codex' });
   assert.equal((await resolveModels(doc, { models: { default: { backend: 'codex', command: 'my-codex' } } }, { hostedModel: 'x/y', env })).model.command, 'my-codex');
 });
+
+test('no default profile is chosen when every step names a configured profile', async () => {
+  const { resolveModels } = await import('../src/agents.js');
+  const doc = method({ ...step(), do: { kind: 'call', model: 'writer', prompt: 'Return value.' } });
+  const profiles = await resolveModels(doc, { models: { writer: { backend: 'method', model: 'x/y' } } }, { env: { CODEX_THREAD_ID: '1' } });
+  assert.deepEqual(Object.keys(profiles), ['writer']);
+});

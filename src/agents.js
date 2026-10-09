@@ -19,6 +19,8 @@ export async function resolveModels(method, config, options = {}) {
   const caller = env.CLAUDECODE && !env.CODEX_THREAD_ID ? 'claude'
     : env.CODEX_THREAD_ID && !env.CLAUDECODE ? 'codex' : undefined;
   const backend = options.agent ?? caller;
+  // When every step names a configured profile, no default is chosen, so an unused local agent is never checked.
+  if (names.every(name => name !== 'default' && profiles[name])) return profiles;
   // The generic local-agent default follows the caller. Named profiles and custom
   // executables are explicit configuration; resumed runs were returned above.
   const genericDefault = !profiles.default ||
