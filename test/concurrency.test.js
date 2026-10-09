@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm, readdir } from 'node:fs/promises';
+import { writeJSON } from '../src/io.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runMethod, validateMethod, validateConfig } from '../src/index.js';
@@ -123,4 +124,13 @@ test('a missing own Typesafe key fails before any request', async t => {
   const result = await f.run(undefined, {}, { ...f.cfg, classification: { ...identity, api_key_env: 'METHOD_TEST_MISSING_KEY' } }).catch(error => error);
   assert.match(String(result.message ?? result.error), /METHOD_TEST_MISSING_KEY/);
   await assert.rejects(typesafeClassification('METHOD_TEST_MISSING_KEY').evaluate({ model: 'x', question: 'q', options: {}, inputs: {} }), /METHOD_TEST_MISSING_KEY/);
+});
+
+test('writes of the same JSON file at the same time do not collide', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'method-write-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const file = join(dir, 'state.json');
+  await Promise.all(Array.from({ length: 50 }, (_, i) => writeJSON(file, { i })));
+  assert.equal(typeof JSON.parse(await readFile(file, 'utf8')).i, 'number');
+  assert.deepEqual((await readdir(dir)).sort(), ['state.json']);
 });

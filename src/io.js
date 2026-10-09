@@ -1,6 +1,6 @@
 import { readFile, realpath, mkdir, writeFile, rename, access } from 'node:fs/promises';
 import { resolve, relative, isAbsolute, dirname, delimiter } from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
@@ -37,7 +37,8 @@ export async function snapshotBundle(root, paths, destination) {
   return manifest;
 }
 export async function writeJSON(file, data) {
-  const temp = `${file}.tmp`;
+  // A unique name per write: items that run at once can write the same file without sharing a temporary file.
+  const temp = `${file}.${randomUUID()}.tmp`;
   await writeFile(temp, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 });
   await rename(temp, file);
 }
