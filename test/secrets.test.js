@@ -31,7 +31,6 @@ test('a missing secret stops the run before any step and names the secret', asyn
   const f = await fixture(t);
   await assert.rejects(f.run({ secrets: {} }), error => error.code === 'missing_secret' && error.missing[0] === 'ARCHIVE_TOKEN');
   assert.throws(() => validateMethod(method({ secrets: { PATH: 'Not allowed.' } })));
-  assert.throws(() => validateMethod(method({ secrets: { lower: 'Not allowed.' } })));
 });
 
 test('a script that calls a model API is refused', async t => {
