@@ -26,6 +26,18 @@ export type ModelProfile = {
     api_key_env: string;
     max_output_tokens: number;
     reasoning_effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+} | {
+    backend: 'anthropic-messages';
+    model: string;
+    api_key_env: string;
+    max_output_tokens: number;
+    effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+} | {
+    backend: 'openrouter-chat';
+    model: string;
+    api_key_env: string;
+    max_output_tokens: number;
+    reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high';
 };
 export interface ClassificationProvider {
     resolve(signal: AbortSignal): Promise<{
@@ -51,9 +63,11 @@ export interface ClassificationProvider {
     }>;
 }
 export interface RuntimeConfig {
+    /** With api_key_env, classification calls Typesafe directly with that key. */
     classification?: {
         provider: 'typesafe';
         model: string;
+        api_key_env?: string;
     };
     allow_local_processes?: boolean;
     limits?: {
@@ -63,6 +77,8 @@ export interface RuntimeConfig {
         max_tool_calls?: number;
         max_output_bytes?: number;
         max_request_bytes?: number;
+        effect_wait_ms?: number;
+        max_concurrency?: number;
     };
     step_defaults?: {
         timeout_ms?: number;

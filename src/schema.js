@@ -2,6 +2,9 @@ const text = { type: 'string', minLength: 1, maxLength: 16000 };
 const name = { type: 'string', pattern: '^[a-z][a-z0-9_]*$', maxLength: 80, not: { enum: ['constructor', 'prototype', '__proto__'] } };
 const ref = { type: 'string', pattern: '^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*|\\.[0-9]+)*$' };
 const positive = { type: 'integer', minimum: 1, maximum: 2147483647 };
+// How many items of an each step may run at once.
+const width = { type: 'integer', minimum: 1, maximum: 32 };
+const keyEnv = { type: 'string', pattern: '^[A-Z_][A-Z0-9_]*$' };
 export const object = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
 const map = (value) => ({ type: 'object', propertyNames: name, additionalProperties: value });
 const list = (items) => ({ type: 'array', items, uniqueItems: true });
@@ -56,7 +59,7 @@ export const methodSchema = {
       ...object({
         name: text, purpose: text, reading: object({ inputs: text, outputs: text, output_name: text, condition: text, check: text, check_name: text }, []), in: map(ref), out: { oneOf: [name, map({ $ref: '#/$defs/data' })] },
         do: { $ref: '#/$defs/execution' }, ask: text, check: { $ref: '#/$defs/check' },
-        each: { ...map(ref), minProperties: 1, maxProperties: 1 },
+        each: { ...map(ref), minProperties: 1, maxProperties: 1 }, concurrency: width,
         repeat: object({ max_iterations: positive, until: ref }, ['max_iterations']), when: ref,
         after: { anyOf: [name, list(name)] }, changes: list(ref), effects: { ...map(effect), minProperties: 1 }, no_effect_reason: text,
         limits: object({ timeout_ms: positive, max_agent_turns: positive, max_model_requests: positive }, []),
@@ -72,12 +75,18 @@ export const methodSchema = {
 export const configSchema = {
   $schema: 'http://json-schema.org/draft-07/schema#',
   ...object({
-    limits: object({ timeout_ms: positive, max_model_requests: { type: 'integer', minimum: 0 }, max_invocations: positive, max_tool_calls: { type: 'integer', minimum: 0 }, max_output_bytes: positive, max_request_bytes: positive, effect_wait_ms: { type: 'integer', minimum: 0 } }, []),
+    limits: object({ timeout_ms: positive, max_model_requests: { type: 'integer', minimum: 0 }, max_invocations: positive, max_tool_calls: { type: 'integer', minimum: 0 }, max_output_bytes: positive, max_request_bytes: positive, effect_wait_ms: { type: 'integer', minimum: 0 }, max_concurrency: width }, []),
     step_defaults: object({ timeout_ms: positive, max_agent_turns: positive, max_model_requests: positive }, []),
     allow_local_processes: { type: 'boolean' },
-    classification: object({ provider: {const: 'typesafe'}, model: text }),
+    // With api_key_env the runtime calls Typesafe directly with the operator's own key.
+    classification: object({ provider: {const: 'typesafe'}, model: text, api_key_env: keyEnv }, ['provider', 'model']),
     runtimes: map(object({ command: text, args: { type: 'array', items: { type: 'string' } }, version: text, env: list({ type: 'string', pattern: '^[A-Z_][A-Z0-9_]*$' }) }, ['command', 'version'])),
-    models: map({ oneOf: [object({ backend: { const: 'openai-responses' }, model: text, api_key_env: { type: 'string', pattern: '^[A-Z_][A-Z0-9_]*$' }, max_output_tokens: positive, reasoning_effort: { enum: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] } }, ['backend', 'model', 'api_key_env', 'max_output_tokens']), object({ backend: { enum: ['codex', 'claude'] }, command: text, model: text, reasoning_effort: text }, ['backend'])] }),
+    // Direct API backends: each one has a fixed endpoint, so a profile cannot send its key to another host.
+    models: map({ oneOf: [
+      object({ backend: { const: 'openai-responses' }, model: text, api_key_env: keyEnv, max_output_tokens: positive, reasoning_effort: { enum: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] } }, ['backend', 'model', 'api_key_env', 'max_output_tokens']),
+      object({ backend: { const: 'anthropic-messages' }, model: text, api_key_env: keyEnv, max_output_tokens: positive, effort: { enum: ['low', 'medium', 'high', 'xhigh', 'max'] } }, ['backend', 'model', 'api_key_env', 'max_output_tokens']),
+      object({ backend: { const: 'openrouter-chat' }, model: text, api_key_env: keyEnv, max_output_tokens: positive, reasoning_effort: { enum: ['minimal', 'low', 'medium', 'high'] } }, ['backend', 'model', 'api_key_env', 'max_output_tokens']),
+      object({ backend: { enum: ['codex', 'claude'] }, command: text, model: text, reasoning_effort: text }, ['backend'])] }),
     tools: map({oneOf: [object({ description: text, in: map({ $ref: `${methodSchema.$id}#/$defs/data` }), out: map({ $ref: `${methodSchema.$id}#/$defs/data` }), run, effects: list(name) }), object({description: text, connection: name, tool: text, parameters: {type:'object'}, effects: list(name)})]}),
     environment: map({ type: 'string' }),
     rubric: object({ judge_runs: { type: 'integer', minimum: 1, maximum: 9 }, classify_threshold: { type: 'number', minimum: 0.5, maximum: 1 }, max_value_bytes: positive }, []),

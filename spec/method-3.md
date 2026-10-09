@@ -99,6 +99,8 @@ The provider must return exactly the declared probability keys, finite probabili
 
 Embedded callers supply `config.classification: {provider: 'typesafe', model: '<pinned version>'}` and a `ClassificationProvider` through run options. The SDK resolves this identity once through the Method account and saves it in the resolved configuration. Resume uses that identity. Classification-only runs do not prepare an agent. Missing provider setup returns `needs_input`.
 
+To use your own Typesafe key, add `api_key_env` to that configuration, for example `{provider: 'typesafe', model: 'jev-1.13.0', api_key_env: 'TYPESAFE_API_KEY'}`. The runtime then calls `https://api.typesafe.ai/v1/systemone` directly with that key. It does not use a supplied provider or the Method account, and the key is redacted from run records. A missing variable fails preflight.
+
 Each invocation reserves one model request and calls the provider once. Requests and responses are bounded to 64 KiB or the smaller configured byte limit. The invocation deadline and cancellation apply. Responses must match the saved provider and model. Invalid responses fail without repair or automatic retry. The result follows the existing candidate, check, and acceptance path. `model.request` and `model.response` carry `kind: classify`, request ID, provider, and model; the response adds confidence, usage, and duration. Missing usage remains unknown.
 
 ### Scripts
@@ -125,9 +127,17 @@ The temporary Method MCP bridge exposes only the step's declared Method tools. C
 
 Method enforces the Codex process deadline, prompt/output size, and Method bridge tool-call cap. It saves prompts, output schema, JSON events, stderr, and reported usage. It does not edit persistent Codex settings or enforce a monetary budget.
 
-#### Direct API backend
+#### Direct API backends
 
-The optional direct provider is the [OpenAI Responses API](https://developers.openai.com/api/docs/guides/function-calling). Model profiles specify `backend: openai-responses`, the exact model identifier, `api_key_env`, a required `max_output_tokens`, and optional `reasoning_effort`. No model is silently substituted. Use a model supporting strict structured outputs; incompatible settings return a recorded provider error.
+Three direct providers are available. Each profile specifies the exact model identifier, `api_key_env`, and a required `max_output_tokens`. Each backend has one fixed endpoint; a profile cannot name another URL. No model is silently substituted. Use a model supporting strict structured outputs; incompatible settings return a recorded provider error.
+
+| Backend | Endpoint | Optional setting |
+|---|---|---|
+| `openai-responses` | OpenAI Responses API | `reasoning_effort`: none, minimal, low, medium, high, xhigh |
+| `anthropic-messages` | Anthropic Messages API | `effort`: low, medium, high, xhigh, max |
+| `openrouter-chat` | OpenRouter chat completions | `reasoning_effort`: minimal, low, medium, high |
+
+The output schema goes to each provider's strict structured output. OpenRouter requests require providers that support the requested parameters and name no fallback models. Anthropic tool turns keep the assistant content, including thinking blocks, unchanged. `model.request`, `model.response`, and `model.error` record the backend. Usage is recorded as input and output tokens; Anthropic input includes cache reads and writes.
 
 `call` sends one request with a strict JSON output schema and no tools. The runner validates the response locally. It does not issue repair calls or transport retries.
 
@@ -322,7 +332,8 @@ Each expectation can carry `text`, a plain-language statement for people. A case
 ## Loops and stopping
 
 - `when` references a boolean. False skips the entire step. Skipped outputs do not exist; a consumer fails if it requests one.
-- `each: {item: inputs.items}` runs sequentially, once per item. One collection alias is supported. Each output becomes a list in the original item order. An empty collection produces empty output lists.
+- `each: {item: inputs.items}` runs once per item, in order. One collection alias is supported. Each output becomes a list in the original item order. An empty collection produces empty output lists.
+- `concurrency: N` (1–32) with `each` runs up to N items at once; the configuration limit `max_concurrency` (default 8) caps it. The step cannot use `ask`, `changes`, or `effects`. Outputs keep item order. The first failure stops the other running items and fails the step; items accepted before it stay in the checkpoint, and resume (with `--retry` for the failed item) runs only the unfinished items.
 - `repeat: {max_iterations: 5}` performs exactly five accepted invocations.
 - `repeat: {max_iterations: 5, until: done}` checks a boolean step output after each accepted invocation. It stops when true. Reaching the limit without true fails the step. The last accepted state remains in the checkpoint.
 
@@ -332,7 +343,7 @@ Repeated inputs bound to state are refreshed each iteration. Other upstream valu
 
 ## Limits and accounting
 
-Operator configuration can override the finite default run limits: one hour, 100 model requests, 100 step invocations, 200 tool calls, and 16 MiB each for input and output. A missing configuration uses the local Codex agent as model `default`. Custom scripts, tools, and models still require their configuration. Model requests and tool calls may be zero. A Method cannot increase those caps.
+Operator configuration can override the finite default run limits: one hour, 100 model requests, 100 step invocations, 200 tool calls, 16 MiB each for input and output, and 8 concurrent items per step. A missing configuration uses the local Codex agent as model `default`. Custom scripts, tools, and models still require their configuration. Model requests and tool calls may be zero. A Method cannot increase those caps.
 
 A model-using step can override `max_model_requests`; an agent-using step can also override `max_agent_turns`. Configuration `step_defaults` can change the defaults. Action and check share these limits and `timeout_ms` for each invocation. For the direct API backend, one agent turn is one model response. Repeated invocations share the run caps. For a direct API agent, the runner does not dispatch a tool when no follow-up model request or agent turn remains.
 

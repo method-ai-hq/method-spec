@@ -2,7 +2,9 @@
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export type Shape = 'text' | 'number' | 'boolean' | 'record' | 'list' | 'file' | {type: Exclude<Shape, object>; description?: string; fields?: Record<string, Shape>; items?: Shape; format?: string};
 export type Script = {kind: 'run'; runtime: string; entrypoint: string; args?: string[]};
-export type ModelProfile = {backend: 'codex' | 'claude'; command?: string; model?: string; reasoning_effort?: string} | {backend: 'openai-responses'; model: string; api_key_env: string; max_output_tokens: number; reasoning_effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'};
+export type ModelProfile = {backend: 'codex' | 'claude'; command?: string; model?: string; reasoning_effort?: string} | {backend: 'openai-responses'; model: string; api_key_env: string; max_output_tokens: number; reasoning_effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'}
+  | {backend: 'anthropic-messages'; model: string; api_key_env: string; max_output_tokens: number; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'}
+  | {backend: 'openrouter-chat'; model: string; api_key_env: string; max_output_tokens: number; reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high'};
 export interface ClassificationProvider {
   resolve(signal: AbortSignal): Promise<{provider: 'typesafe'; model: string}>;
   evaluate(request: {request_id: string; model: string; question: string; options: Record<string, string>; inputs: Record<string, Json>}, signal: AbortSignal): Promise<{
@@ -11,9 +13,10 @@ export interface ClassificationProvider {
   }>;
 }
 export interface RuntimeConfig {
-  classification?: {provider: 'typesafe'; model: string};
+  /** With api_key_env, classification calls Typesafe directly with that key. */
+  classification?: {provider: 'typesafe'; model: string; api_key_env?: string};
   allow_local_processes?: boolean;
-  limits?: {timeout_ms?: number; max_model_requests?: number; max_invocations?: number; max_tool_calls?: number; max_output_bytes?: number; max_request_bytes?: number};
+  limits?: {timeout_ms?: number; max_model_requests?: number; max_invocations?: number; max_tool_calls?: number; max_output_bytes?: number; max_request_bytes?: number; effect_wait_ms?: number; max_concurrency?: number};
   step_defaults?: {timeout_ms?: number; max_agent_turns?: number; max_model_requests?: number};
   runtimes?: Record<string, {command: string; version: string; args?: string[]; env?: string[]}>;
   models?: Record<string, ModelProfile>;

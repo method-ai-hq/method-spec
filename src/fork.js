@@ -78,7 +78,7 @@ export function planFork({ parent, method, dependencies, steps, root, profiles, 
     if (saved.skipped?.includes(id)) { skipped.push(id); imported.push({ step: id, skipped: true }); continue; }
     const iterations = saved.accepted?.[id] ?? [];
     const each = Object.keys(step.each ?? {}).length > 0;
-    const complete = each ? own(saved.collections ?? {}, id) && iterations.length === saved.collections[id].length
+    const complete = each ? own(saved.collections ?? {}, id) && iterations.length === saved.collections[id].length && iterations.every(Boolean)
       : step.repeat?.until ? iterations.length > 0 && lookup(iterations.at(-1), step.repeat.until).value === true
       : iterations.length === (step.repeat?.max_iterations ?? 1);
     if (!complete) refuse('the parent run did not accept all of its iterations');

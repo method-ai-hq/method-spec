@@ -811,6 +811,11 @@
           "minProperties": 1,
           "maxProperties": 1
         },
+        "concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        },
         "repeat": {
           "type": "object",
           "properties": {

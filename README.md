@@ -30,7 +30,7 @@ The example runs checked counter steps and saves a trace. `node src/cli.js` is a
 
 Model profiles preserve explicit settings. Otherwise the runtime selects the calling Codex or Claude Code process, or the sole installed supported agent. Ambiguous selection returns needs_input. Both use their normal sign-in. Simple local-agent files need no runtime.json. Scripts, custom tools, connections, and direct API model profiles need explicit configuration. When supplying a configuration file, enable `allow_local_processes` for scripts or Codex.
 
-An explicit `backend: openai-responses` profile uses an API key environment variable. Request and agent-turn caps govern that direct API loop. Codex manages its own internal requests and installed tools. Method records Codex process logs and enforces its timeout and declared Method tool limits; it does not count every internal request or enforce a dollar budget.
+An explicit `backend: openai-responses`, `anthropic-messages`, or `openrouter-chat` profile uses an API key environment variable and the provider's fixed endpoint. Request and agent-turn caps govern that direct API loop. Codex manages its own internal requests and installed tools. Method records Codex process logs and enforces its timeout and declared Method tool limits; it does not count every internal request or enforce a dollar budget.
 
 Scripts and local coding agents are trusted local processes, not an OS sandbox. The Codex adapter disables approval and sandbox prompts. A Method tool list restricts the Method bridge, not all Codex access. Review the Method and helper code before running it.
 

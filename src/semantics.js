@@ -197,6 +197,11 @@ export function validateSemantics(method, assertData) {
       if (!Object.keys(step.in ?? {}).length && !Object.keys(step.each ?? {}).length) fail(`${id}: classification requires an input`);
       if (step.changes?.length) fail(`${id}: classification cannot change state or connections`);
     }
+    if (step.concurrency !== undefined) {
+      if (!step.each) fail(`${id}.concurrency requires each`);
+      // Items that run at once share no state, ask nobody, and change nothing outside the run.
+      if (step.ask || step.changes?.length || step.effects) fail(`${id}.concurrency: a step that runs items at once cannot use ask, changes, or effects`);
+    }
     validateDefs(outputs);
     for (const [key, def] of Object.entries(outputs)) {
       if (own(definitions, key)) fail(`Duplicate or reserved output: ${key}`);

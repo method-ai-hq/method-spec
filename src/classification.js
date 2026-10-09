@@ -1,4 +1,5 @@
 import { fail, safeData } from './semantics.js';
+import { boundedJSON } from './model.js';
 
 export const classificationByteLimit = 65_536;
 /** Shared response contract for hosted and embedded classification providers. */
@@ -19,6 +20,34 @@ export function validateClassification(answer, options, identity) {
   if (answer.usage !== null && (!answer.usage || Object.keys(answer.usage).length !== 2 ||
       !['input_tokens', 'output_tokens'].every(key => Number.isSafeInteger(answer.usage[key]) && answer.usage[key] >= 0))) invalid('invalid usage');
   return { choice: answer.choice, probabilities: answer.probabilities };
+}
+
+/** The classifier version a direct run uses when the configuration names none. */
+export const typesafeModel = 'jev-1.13.0';
+
+/**
+ * Call Typesafe directly with the operator's own key. The endpoint is fixed, so the key cannot go to another host.
+ * @param {string} apiKeyEnv
+ * @returns {import('./api-types.js').ClassificationProvider}
+ */
+export function typesafeClassification(apiKeyEnv) {
+  return {
+    async resolve() { return { provider: 'typesafe', model: typesafeModel }; },
+    async evaluate(request, signal) {
+      const key = process.env[apiKeyEnv];
+      if (!key) fail(`Missing environment variable: ${apiKeyEnv}`, 'preflight');
+      const response = await fetch('https://api.typesafe.ai/v1/systemone', {
+        method: 'POST', redirect: 'error', signal, headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ model: request.model, state: request.inputs,
+          questions: { classification: { type: 'choice', instructions: request.question, criteria: request.options } } }),
+      });
+      if (!response.ok) { await response.body?.cancel(); fail(`Typesafe HTTP ${response.status}`, 'provider_error'); }
+      const data = await boundedJSON(response, classificationByteLimit);
+      const answer = data?.answers?.classification;
+      return { choice: answer?.choice, probabilities: answer?.probabilities, confidence: answer?.confidence,
+        provider: 'typesafe', model: data?.model, usage: data?.usage ?? null };
+    },
+  };
 }
 
 /** One managed request; candidate checks and acceptance remain in the runner. */

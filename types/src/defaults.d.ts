@@ -12,6 +12,7 @@ export const defaultLimits: Readonly<{
     max_output_bytes: 16777216;
     max_request_bytes: 16777216;
     effect_wait_ms: 300000;
+    max_concurrency: 8;
 }>;
 export const defaultStepLimits: Readonly<{
     timeout_ms: 600000;

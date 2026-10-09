@@ -1,5 +1,5 @@
 import { hostname } from 'node:os';
-import { executeClassification } from './classification.js';
+import { executeClassification, typesafeClassification } from './classification.js';
 import { effectiveOutputs } from './semantics.js';
 import { executionTools, validateToolResult } from './tool-connections.js';
 import { resolveModels } from './agents.js';
@@ -123,8 +123,11 @@ async function executeRun(file, config, options) {
     root, accepted, skipped, active, collections, codexProcesses, codexInputTokens, codexOutputTokens, codexUsageReports,
     ...(forkedFrom ? { forked_from: forkedFrom } : {}),
   });
+  // An operator's own classification key takes precedence over a provider supplied by the host.
+  const classifier = config.classification?.api_key_env ? typesafeClassification(config.classification.api_key_env) : options.classification;
   const secrets = [...new Set([
     ...Object.values(profiles).map(p => process.env[p.api_key_env]),
+    process.env[config.classification?.api_key_env],
     ...Object.values(runtimeProfiles).flatMap(p => (p.env ?? []).map(key => process.env[key])),
   ].filter(x => x && x.length >= 4))];
   const redact = value => {
@@ -187,7 +190,7 @@ async function executeRun(file, config, options) {
     if (saved) {
       const prior = JSON.parse(await readFile(pathResolve(runDir, 'summary.json'), 'utf8'));
       if (['completed', 'unconfirmed'].includes(prior.status)) {
-        for (const [id, iterations] of Object.entries(accepted)) for (const outputs of iterations) await checkFiles(effectiveOutputs(method.steps[id]), outputs);
+        for (const [id, iterations] of Object.entries(accepted)) for (const outputs of iterations.filter(Boolean)) await checkFiles(effectiveOutputs(method.steps[id]), outputs);
         return prior;
       }
     }
@@ -267,17 +270,21 @@ async function executeRun(file, config, options) {
       if (eachEntry && !own(collections, id)) collections[id] = structuredClone(resolve(root, eachEntry[1]));
       const collection = eachEntry ? collections[id] : null;
       const count = collection ? collection.length : (step.repeat?.max_iterations ?? 1);
-      if (!step.repeat?.until && count - (accepted[id]?.length ?? 0) > config.limits.max_invocations - invocations) fail('Loop exceeds remaining invocation cap', 'invocation_limit');
+      if (!step.repeat?.until && count - (accepted[id]?.filter(Boolean).length ?? 0) > config.limits.max_invocations - invocations) fail('Loop exceeds remaining invocation cap', 'invocation_limit');
       const collected = Object.fromEntries(Object.keys(stepOutputs).map(k => [k, []]));
       let untilReached = false;
-      for (let iteration = 0; iteration < count; iteration++) {
+      // Items of an each step may run at once. The first failure stops the others.
+      const width = eachEntry ? Math.min(step.concurrency ?? 1, config.limits.max_concurrency) : 1;
+      const siblings = new AbortController();
+      const stepSignal = options.signal ? AbortSignal.any([options.signal, siblings.signal]) : siblings.signal;
+      /** Run one iteration. Returns true when the repeat condition is reached. */
+      const runIteration = async iteration => {
         const previous = accepted[id]?.[iteration];
         if (previous) {
           await checkFiles(stepOutputs, previous);
-          if (eachEntry) for (const key of Object.keys(collected)) collected[key].push(previous[key]);
+          if (eachEntry) for (const key of Object.keys(collected)) collected[key][iteration] = previous[key];
           else Object.assign(root, previous);
-          if (step.repeat?.until && resolve(previous, step.repeat.until) === true) { untilReached = true; break; }
-          continue;
+          return !!step.repeat?.until && resolve(previous, step.repeat.until) === true;
         }
         if (invocations >= config.limits.max_invocations) fail('Invocation cap reached', 'invocation_limit');
         invocations++;
@@ -285,7 +292,7 @@ async function executeRun(file, config, options) {
         if (eachEntry) bindings[eachEntry[0]] = collection[iteration];
         const remaining = Math.min(limits.timeout_ms, deadline - performance.now());
         if (remaining <= 0) throw timeoutError();
-        const bound = boundedSignal(remaining, options.signal);
+        const bound = boundedSignal(remaining, stepSignal);
         let localRequests = 0, localAgentTurns = 0;
         const scopedRecord = (event, data) => record(event, { step: id, iteration, ...data });
         const guard = () => { if (bound.signal.aborted) throw bound.signal.reason; if (performance.now() >= deadline) throw timeoutError(); };
@@ -358,7 +365,7 @@ async function executeRun(file, config, options) {
             exec = { ...exec, prompt: rendered };
           }
           const phaseContext = { ...context, record: (event, data) => scopedRecord(event, { phase, ...data }) };
-          const result = exec.kind === 'classify' ? {[step.out]: await executeClassification(exec, input, config.classification, options.classification, phaseContext)}
+          const result = exec.kind === 'classify' ? {[step.out]: await executeClassification(exec, input, config.classification, classifier, phaseContext)}
             : exec.kind === 'run' ? await executeScript(exec, input, bound.signal, phaseContext.record, operationId(phase))
             : profiles[exec.model].backend === 'codex' ? await executeCodex(exec, input, schema, phaseContext)
             : profiles[exec.model].backend === 'claude' ? await executeClaude(exec, input, schema, phaseContext)
@@ -478,13 +485,29 @@ async function executeRun(file, config, options) {
           guard();
           await writeJSON(pathResolve(runDir, 'state.json'), nextState);
           state = nextState; root.state = state;
-          (accepted[id] ??= []).push(outputs);
+          (accepted[id] ??= [])[iteration] = outputs;
           active = null;
           await scopedRecord('step.accepted', { outputs, state, check });
-          if (eachEntry) for (const key of Object.keys(collected)) collected[key].push(outputs[key]);
+          if (eachEntry) for (const key of Object.keys(collected)) collected[key][iteration] = outputs[key];
           else Object.assign(root, outputs);
-          if (step.repeat?.until && resolve(outputs, step.repeat.until) === true) { untilReached = true; break; }
+          return !!step.repeat?.until && resolve(outputs, step.repeat.until) === true;
         } finally { bound.close(); }
+      };
+      if (width === 1) {
+        for (let iteration = 0; iteration < count; iteration++) if (await runIteration(iteration)) { untilReached = true; break; }
+      } else {
+        // Each worker is the same for-each loop; it takes the next item that no other worker has taken.
+        let next = 0, failure = null;
+        const worker = async () => {
+          while (next < count && !failure) {
+            const iteration = next++;
+            try { await runIteration(iteration); }
+            catch (error) { if (!failure) { failure = { error, key: `${id}:${iteration}` }; siblings.abort(error); } }
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(width, count) }, worker));
+        // The step changes nothing outside the run, so resume runs the other unfinished items again.
+        if (failure) { active = failure.key; throw failure.error; }
       }
       if (eachEntry) Object.assign(root, collected);
       if (step.repeat?.until && !untilReached) fail(`Repeat condition not reached: ${id}`, 'iteration_limit');

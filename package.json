@@ -1,6 +1,6 @@
 {
   "name": "@withmethod/runtime",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Open-source Method validator and local executor",
   "type": "module",
   "license": "MIT",

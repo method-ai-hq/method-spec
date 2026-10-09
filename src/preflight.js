@@ -5,6 +5,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { validateMethod, validateConfig, own, fail } from './validate.js';
 import { executable, hash, relativeFile, containedFile } from './io.js';
 import { fixtureFiles } from './effects.js';
+import { directBackends } from './model.js';
 
 /** Check local dependencies without executing a script or model. Shared by validate and run. */
 export async function preflight(method, config, sourceRoot, options = {}) {
@@ -19,8 +20,10 @@ export async function preflight(method, config, sourceRoot, options = {}) {
   for (const step of Object.values(method.steps)) {
     for (const [phase, exec] of [['action', step.do], ['check', step.check]]) if (exec?.kind) {
       executions.push(exec);
-      if (exec.kind === 'classify' && (!config.classification || !options.classification?.evaluate)) {
-        const message = 'Classification needs Method sign-in or an embedded classification provider.';
+      if (exec.kind === 'classify' && config.classification?.api_key_env) {
+        if (!process.env[config.classification.api_key_env]) fail(`Missing environment variable: ${config.classification.api_key_env}`, 'preflight');
+      } else if (exec.kind === 'classify' && (!config.classification || !options.classification?.evaluate)) {
+        const message = 'Classification needs Method sign-in, your own Typesafe key (TYPESAFE_API_KEY), or an embedded classification provider.';
         if (options.allowMissingSetup) missingSetup.push(message); else fail(message, 'needs_input');
       }
       if (['call', 'agent'].includes(exec.kind)) {
@@ -43,7 +46,7 @@ export async function preflight(method, config, sourceRoot, options = {}) {
           if(options.allowMissingSetup) missingSetup.push(`Connect tool: ${name}`);
           else fail(`Missing tool connection: ${tool.connection}`, 'needs_input');
         }
-        if(tool.connection && profiles[exec.model]?.backend === 'openai-responses') fail('Connection browser tools require Codex or Claude; select an agent.', 'preflight');
+        if(tool.connection && directBackends.includes(profiles[exec.model]?.backend)) fail('Connection browser tools require Codex or Claude; select an agent.', 'preflight');
         for (const effect of tool.effects) {
           if (phase === 'check') fail(`Checker cannot use effectful tool: ${name}`, 'preflight');
           if (!(step.changes ?? []).includes(`environment.${effect}`)) fail(`Undeclared tool effect: ${name} -> ${effect}`, 'preflight');
