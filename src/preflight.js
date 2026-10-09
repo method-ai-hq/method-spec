@@ -46,7 +46,7 @@ export async function preflight(method, config, sourceRoot, options = {}) {
       if (exec.kind === 'classify' && config.classification?.api_key_env) {
         if (!hasSecret(options, config.classification.api_key_env)) fail(`Missing environment variable: ${config.classification.api_key_env}`, 'preflight');
       } else if (exec.kind === 'classify' && (!config.classification || !options.classification?.evaluate)) {
-        const message = 'Classification needs Method sign-in, your own Typesafe key (TYPESAFE_API_KEY), or an embedded classification provider.';
+        const message = 'Classification needs Method sign-in, your own OpenRouter key (OPENROUTER_API_KEY), or an embedded classification provider.';
         if (options.allowMissingSetup) missingSetup.push(message); else fail(message, 'needs_input');
       }
       if (['call', 'agent'].includes(exec.kind)) {

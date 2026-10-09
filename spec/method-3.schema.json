@@ -524,14 +524,51 @@
               },
               "minProperties": 2,
               "maxProperties": 255
+            },
+            "answer": {
+              "const": "yes_no"
+            },
+            "levels": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*$",
+                "maxLength": 80,
+                "not": {
+                  "enum": [
+                    "constructor",
+                    "prototype",
+                    "__proto__"
+                  ]
+                }
+              },
+              "minItems": 2,
+              "maxItems": 10,
+              "uniqueItems": true
             }
           },
           "required": [
             "kind",
-            "question",
-            "options"
+            "question"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "required": [
+                "options"
+              ]
+            },
+            {
+              "required": [
+                "answer"
+              ]
+            },
+            {
+              "required": [
+                "levels"
+              ]
+            }
+          ]
         }
       ]
     },

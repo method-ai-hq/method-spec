@@ -47,31 +47,53 @@ export type ModelProfile = {
 export interface HostedModels {
     request(body: Record<string, any>, signal: AbortSignal): Promise<any>;
 }
+/** One classify step's answer form: named options, yes or no, or 2-10 ordered levels (lowest first). */
+export type ClassificationForm = {
+    options: Record<string, string>;
+} | {
+    answer: 'yes_no';
+} | {
+    levels: string[];
+};
+/** cost is in US dollars when the service reports it. */
+export type ClassificationUsage = {
+    input_tokens: number;
+    output_tokens: number;
+    cost?: number;
+} | null;
+type ClassificationMeta = {
+    provider: 'typesafe';
+    model: string;
+    confidence: number | null;
+    usage: ClassificationUsage;
+};
+/** choice: the most likely option. answer: true is yes. score: the expected level index (0 = first level). */
+export type ClassificationAnswer = ClassificationMeta & ({
+    choice: string;
+    probabilities: Record<string, number>;
+} | {
+    answer: boolean;
+    probability: number;
+} | {
+    level: string;
+    score: number;
+    probabilities: Record<string, number>;
+});
+export type ClassificationRequest = {
+    request_id: string;
+    model: string;
+    question: string;
+    inputs: Record<string, Json>;
+} & ClassificationForm;
 export interface ClassificationProvider {
     resolve(signal: AbortSignal): Promise<{
         provider: 'typesafe';
         model: string;
     }>;
-    evaluate(request: {
-        request_id: string;
-        model: string;
-        question: string;
-        options: Record<string, string>;
-        inputs: Record<string, Json>;
-    }, signal: AbortSignal): Promise<{
-        choice: string;
-        probabilities: Record<string, number>;
-        provider: 'typesafe';
-        model: string;
-        confidence: number;
-        usage: {
-            input_tokens: number;
-            output_tokens: number;
-        } | null;
-    }>;
+    evaluate(request: ClassificationRequest, signal: AbortSignal): Promise<ClassificationAnswer>;
 }
 export interface RuntimeConfig {
-    /** With api_key_env, classification calls Typesafe directly with that key. */
+    /** With api_key_env, classification calls Jev through OpenRouter (openrouter.ai) directly with that key, for example OPENROUTER_API_KEY. */
     classification?: {
         provider: 'typesafe';
         model: string;
@@ -216,3 +238,4 @@ export type RunResult = RunSummary & {
     diagnostics?: string;
     missing?: string[];
 });
+export {};

@@ -4,7 +4,7 @@ import {mkdtemp, writeFile, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {runMethod, validateMethod, validateConfig, effectiveOutputs} from '../src/index.js';
-import {validateClassification} from '../src/classification.js';
+import {validateClassification, jevRequest, jevAnswer} from '../src/classification.js';
 import {preflight} from '../src/preflight.js';
 
 const identity = {provider: 'typesafe', model: 'jev-fixture'};
@@ -52,6 +52,12 @@ test('invalid classifier definitions and nested files fail before execution', ()
     m=>m.steps.classify.do.options.constructor='bad',m=>m.steps.classify.do.model='default',
     m=>delete m.steps.classify.in,m=>m.steps.classify.out={category:{type:'text'}},
     m=>m.steps.classify.changes=['state.x'],m=>m.steps.second=structuredClone(m.steps.classify),
+    m=>m.steps.classify.do.answer='yes_no',m=>m.steps.classify.do.levels=['low','high'],
+    m=>{delete m.steps.classify.do.options;},m=>{delete m.steps.classify.do.options;m.steps.classify.do.answer='yes';},
+    m=>{delete m.steps.classify.do.options;m.steps.classify.do.levels=['low'];},
+    m=>{delete m.steps.classify.do.options;m.steps.classify.do.levels=Array.from({length:11},(_,i)=>'l'+i);},
+    m=>{delete m.steps.classify.do.options;m.steps.classify.do.levels=['low','low'];},
+    m=>{delete m.steps.classify.do.options;m.steps.classify.do.levels=['Low','high'];},
     m=>m.inputs.message={type:'record',fields:{files:{type:'list',items:'file'}}},
   ]) {const m=doc();edit(m);assert.throws(()=>validateMethod(m));}
 });
@@ -61,9 +67,9 @@ test('response validation rejects malformed results and preserves tied maxima', 
     a=>a.probabilities.extra=0,a=>a.probabilities.other=.6,a=>a.choice='absent',
     a=>{a.probabilities.billing=.2;a.probabilities.other=.8;},a=>a.confidence=Infinity,
     a=>a.model='changed',a=>a.usage={input_tokens:-1,output_tokens:1},a=>a.extra=true,
-  ]) {const a=answer();edit(a);assert.throws(()=>validateClassification(a,doc().steps.classify.do.options,identity));}
-  const tied=answer();assert.equal(validateClassification(tied,doc().steps.classify.do.options,identity).choice,'billing');
-  const within=answer();within.probabilities.other+=1e-7;validateClassification(within,doc().steps.classify.do.options,identity);
+  ]) {const a=answer();edit(a);assert.throws(()=>validateClassification(a,doc().steps.classify.do,identity));}
+  const tied=answer();assert.equal(validateClassification(tied,doc().steps.classify.do,identity).choice,'billing');
+  const within=answer();within.probabilities.other+=1e-7;validateClassification(within,doc().steps.classify.do,identity);
 });
 test('preflight reports managed setup without inference or agent setup', async t=>{
   const f=await fixture(t);const r=await preflight(doc(),{},f.root,{allowMissingSetup:true});
@@ -145,4 +151,44 @@ test('a classification that the service briefly cannot answer is tried three tim
   const g=await fixture(t); calls=0;
   g.provider.evaluate=async()=>{ calls++; throw Object.assign(new Error('409: version'),{status:409,code:'classification_version_unavailable'}); };
   assert.equal((await g.run()).status,'failed'); assert.equal(calls,1);
+});
+
+const yesNo = () => ({...doc(), steps:{classify:{...doc().steps.classify, do:{kind:'classify', question:'Is {{message}} about money?', answer:'yes_no'}}}});
+const scored = () => ({...doc(), steps:{classify:{...doc().steps.classify, do:{kind:'classify', question:'How urgent is it?', levels:['low','medium','high']}}}});
+const yesAnswer = (p=.8) => ({...identity, answer:p>=.5, probability:p, confidence:null, usage:{input_tokens:3, output_tokens:1, cost:1e-5}});
+const scoreAnswer = () => ({...identity, level:'medium', score:1.1, probabilities:{low:.2, medium:.5, high:.3}, confidence:.4, usage:null});
+test('yes/no and score forms derive outputs, validate, and run', async t=>{
+  validateMethod(yesNo()); validateMethod(scored());
+  assert.deepEqual(effectiveOutputs(yesNo().steps.classify).category.fields, {answer:'boolean', probability:'number'});
+  const fields = effectiveOutputs(scored().steps.classify).category.fields;
+  assert.equal(fields.level, 'text'); assert.equal(fields.score, 'number'); assert.deepEqual(Object.keys(fields.probabilities.fields), ['low','medium','high']);
+  const y = yesNo().steps.classify.do, s = scored().steps.classify.do;
+  assert.deepEqual(validateClassification(yesAnswer(), y, identity), {answer:true, probability:.8});
+  validateClassification(yesAnswer(.5), y, identity);
+  for (const edit of [a=>a.answer=false, a=>a.probability=1.2, a=>a.answer='yes', a=>a.choice='x', a=>a.usage.cost=-1, a=>a.usage.extra=1, a=>a.confidence=2])
+    {const a=yesAnswer();edit(a);assert.throws(()=>validateClassification(a,y,identity));}
+  assert.deepEqual(validateClassification(scoreAnswer(), s, identity), {level:'medium', score:1.1, probabilities:{low:.2, medium:.5, high:.3}});
+  for (const edit of [a=>a.level='high', a=>a.level='extreme', a=>a.score=2, a=>a.score=-1, a=>a.probabilities.high=.4, a=>delete a.probabilities.high, a=>delete a.score])
+    {const a=scoreAnswer();edit(a);assert.throws(()=>validateClassification(a,s,identity));}
+  const f=await fixture(t,yesNo()); let seen;
+  f.provider.evaluate=async request=>{seen=request;return yesAnswer();};
+  const r=await f.run(); assert.equal(r.status,'completed'); assert.deepEqual(r.result,{answer:true,probability:.8});
+  assert.equal(seen.answer,'yes_no'); assert.equal(seen.options,undefined); assert.equal(r.usage.cost_usd,1e-5);
+  const g=await fixture(t,scored()); g.provider.evaluate=async request=>{assert.deepEqual(request.levels,['low','medium','high']);return scoreAnswer();};
+  assert.equal((await g.run()).result.level,'medium');
+});
+
+test('Jev requests use the OpenRouter release name and answers keep the pinned version', ()=>{
+  const base={request_id:'r', model:'jev-1.13.0', question:'Q?', inputs:{message:'m'}};
+  assert.deepEqual(jevRequest({...base, answer:'yes_no'}), {model:'jev-1.13', state:{message:'m'}, questions:{classification:{type:'noul', instructions:'Q?'}}});
+  assert.deepEqual(jevRequest({...base, levels:['low','high']}).questions.classification, {type:'score', instructions:'Q?', criteria:['low','high']});
+  assert.deepEqual(jevRequest({...base, options:{a:'A', b:'B'}}).questions.classification, {type:'choice', instructions:'Q?', criteria:{a:'A', b:'B'}});
+  const pin={provider:'typesafe', model:'jev-1.13.0'}, usage={input_tokens:5, output_tokens:2, cost:1e-5};
+  const yes=jevAnswer({...base, answer:'yes_no'}, {model:'typesafe/jev-1.13-20260917', id:'gen-1', provider:'Typesafe', answers:{classification:{type:'noul', noul:.3}}, usage});
+  assert.deepEqual(validateClassification(yes, {answer:'yes_no'}, pin), {answer:false, probability:.3});
+  const score=jevAnswer({...base, levels:['low','mid','high']}, {model:'typesafe/jev-1.13-20260917', answers:{classification:{type:'score', score:1.6, legend:{0:'low', 1:'mid', 2:'high'}, probabilities:{0:.1, 1:.2, 2:.7}, confidence:.5}}, usage});
+  const scoreOut=validateClassification(score, {levels:['low','mid','high']}, pin);
+  assert.equal(scoreOut.level,'high'); assert.ok(Math.abs(scoreOut.score-1.6)<1e-9); assert.deepEqual(scoreOut.probabilities,{low:.1, mid:.2, high:.7});
+  for (const model of ['typesafe/jev-1.130', 'typesafe/jev-router', 'jev-1.13.0'])
+    assert.throws(()=>validateClassification(jevAnswer({...base, answer:'yes_no'}, {model, answers:{classification:{noul:.3}}, usage}), {answer:'yes_no'}, pin), /model/);
 });

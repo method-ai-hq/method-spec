@@ -18,7 +18,10 @@ const shapeProperties = {
 const run = object({ kind: { const: 'run' }, runtime: name, entrypoint: path, args: { type: 'array', items: { type: 'string' } } }, ['kind', 'runtime', 'entrypoint']);
 const call = object({ kind: { const: 'call' }, model: name, prompt: text });
 const agent = object({ kind: { const: 'agent' }, model: name, prompt: text, tools: list(name), browser: ref }, ['kind', 'model', 'prompt']);
-const classify = object({ kind: { const: 'classify' }, question: text, options: { ...map(text), minProperties: 2, maxProperties: 255 } });
+// A classify step has one answer form: named options, yes or no, or 2–10 ordered levels (lowest first).
+const classify = { ...object({ kind: { const: 'classify' }, question: text, options: { ...map(text), minProperties: 2, maxProperties: 255 },
+  answer: { const: 'yes_no' }, levels: { type: 'array', items: name, minItems: 2, maxItems: 10, uniqueItems: true } }, ['kind', 'question']),
+  oneOf: [{ required: ['options'] }, { required: ['answer'] }, { required: ['levels'] }] };
 const duration = { type: 'string', pattern: '^(0|[1-9][0-9]{0,6})(s|m|h|d)$' };
 const count = { type: 'integer', minimum: 0 };
 // Built-in observers need no script and no fixtures; the runtime's own tests cover their judgment.
@@ -84,7 +87,7 @@ export const configSchema = {
     limits: object({ timeout_ms: positive, max_model_requests: { type: 'integer', minimum: 0 }, max_invocations: positive, max_tool_calls: { type: 'integer', minimum: 0 }, max_output_bytes: positive, max_request_bytes: positive, effect_wait_ms: { type: 'integer', minimum: 0 }, max_concurrency: width }, []),
     step_defaults: object({ timeout_ms: positive, max_agent_turns: positive, max_model_requests: positive }, []),
     allow_local_processes: { type: 'boolean' },
-    // With api_key_env the runtime calls Typesafe directly with the operator's own key.
+    // With api_key_env the runtime calls Jev through OpenRouter directly with the operator's own key.
     classification: object({ provider: {const: 'typesafe'}, model: text, api_key_env: keyEnv }, ['provider', 'model']),
     runtimes: map(object({ command: text, args: { type: 'array', items: { type: 'string' } }, version: text }, ['command', 'version'])),
     // Direct API backends: each one has a fixed endpoint, so a profile cannot send its key to another host.

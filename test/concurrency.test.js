@@ -99,27 +99,27 @@ test('concurrency requires each and a step that changes nothing', () => {
   assert.throws(() => validateConfig({ limits: { max_concurrency: 64 } }));
 });
 
-test('an own Typesafe key calls Typesafe directly and is never recorded', async t => {
+test('an own OpenRouter key calls Jev through OpenRouter directly and is never recorded', async t => {
   const f = await fixture(t, doc(2));
   const original = globalThis.fetch, requests = [];
-  process.env.METHOD_TEST_TYPESAFE_KEY = 'ts-secret-key';
-  t.after(() => { globalThis.fetch = original; delete process.env.METHOD_TEST_TYPESAFE_KEY; });
+  process.env.METHOD_TEST_OPENROUTER_KEY = 'ts-secret-key';
+  t.after(() => { globalThis.fetch = original; delete process.env.METHOD_TEST_OPENROUTER_KEY; });
   globalThis.fetch = async (url, init) => {
     const body = JSON.parse(init.body); requests.push({ url, auth: init.headers.authorization, body });
     const a = answer(body.state.message);
-    return new Response(JSON.stringify({ model: body.model, answers: { classification: { type: 'choice', choice: a.choice, probabilities: a.probabilities, confidence: 0.9 } }, usage: { input_tokens: 3, output_tokens: 1 } }));
+    return new Response(JSON.stringify({ model: `typesafe/${body.model}-20260917`, answers: { classification: { type: 'choice', choice: a.choice, probabilities: a.probabilities, confidence: 0.9 } }, usage: { input_tokens: 3, output_tokens: 1, cost: 0.5 } }));
   };
   const managed = { resolve: async () => identity, evaluate: async () => { throw Error('the managed provider must not be used'); } };
-  const result = await f.run(managed, {}, { ...f.cfg, classification: { ...identity, api_key_env: 'METHOD_TEST_TYPESAFE_KEY' } });
+  const result = await f.run(managed, {}, { ...f.cfg, classification: { ...identity, api_key_env: 'METHOD_TEST_OPENROUTER_KEY' } });
   assert.equal(result.status, 'completed');
   assert.equal(requests.length, items.length);
-  assert.equal(requests[0].url, 'https://api.typesafe.ai/v1/systemone'); assert.equal(requests[0].auth, 'Bearer ts-secret-key');
+  assert.equal(requests[0].url, 'https://openrouter.ai/api/v1/systemone'); assert.equal(requests[0].auth, 'Bearer ts-secret-key');
   assert.deepEqual(requests[0].body.questions.classification, { type: 'choice', instructions: 'Which team?', criteria: { billing: 'Invoices', other: 'Anything else' } });
-  assert.equal(result.usage.input_tokens, 3 * items.length);
+  assert.equal(result.usage.input_tokens, 3 * items.length); assert.equal(result.usage.cost_usd, 0.5 * items.length);
   assert.ok(!(await readFile(join(f.runDir, 'events.jsonl'), 'utf8')).includes('ts-secret-key'));
 });
 
-test('a missing own Typesafe key fails before any request', async t => {
+test('a missing own OpenRouter key fails before any request', async t => {
   const f = await fixture(t);
   const result = await f.run(undefined, {}, { ...f.cfg, classification: { ...identity, api_key_env: 'METHOD_TEST_MISSING_KEY' } }).catch(error => error);
   assert.match(String(result.message ?? result.error), /METHOD_TEST_MISSING_KEY/);

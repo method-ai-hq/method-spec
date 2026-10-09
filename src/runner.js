@@ -22,6 +22,7 @@ import { cacheable, iterationKey, readCache, copyOutputFiles } from './cache.js'
 import { effectKey, connectionsFor, testFixtures, runObserverScript, observeEffect, readLedger, appendLedger, currentEffects, effectSummary, statusWithEffects, waitUntil, nextObservation, horizonAt, previousObservations, listFolder, observeFiles, isBuiltin } from './effects.js';
 import { observerConnection } from './semantics.js';
 import { replayedCandidate, unverifiable } from './replay.js';
+import { prepareObservation } from './observed-effects.js';
 
 function initialValues(defs = {}, supplied = {}) {
   const result = {};
@@ -129,6 +130,8 @@ async function executeRun(file, config, options) {
   let active = saved?.active ?? null;
   // Accepted iterations by key, so that a later run can reuse them.
   const keys = saved?.cache ?? {}, reused = saved?.reused ?? {};
+  // What each accepted action process was seen to do, so that a reused iteration keeps it.
+  const observed = saved?.observed ?? {};
   const cache = options.replay || options.fresh === true ? new Map() : await readCache(options.cacheFrom ?? []);
   const fresh = new Set(Array.isArray(options.fresh) ? options.fresh : []);
   if (active && !(options.retry ?? []).includes(active) && !(method.steps[active.split(':')[0]]?.ask && options.human?.steps?.[active])) fail(`Inspect the trace and external state, then use --retry ${active} to authorize another attempt.`, 'recovery_required');
@@ -136,7 +139,7 @@ async function executeRun(file, config, options) {
     executor_version: executorVersion, execution_id: executionId, device_name: deviceName,
     models: profiles, method_sha256: hash(method), config_sha256: hash(suppliedConfig), runtime_sha256: hash(runtimeInfo),
     started_at: startedAt, elapsed_ms: performance.now() - started, sequence, invocations, requests, toolCalls, knownUsage, inputTokens, outputTokens,
-    root, accepted, skipped, active, collections, cache: keys, reused, costUsd, codexProcesses, codexInputTokens, codexOutputTokens, codexUsageReports,
+    root, accepted, skipped, active, collections, cache: keys, reused, observed, costUsd, codexProcesses, codexInputTokens, codexOutputTokens, codexUsageReports,
   });
   // An operator's own classification key takes precedence over a provider supplied by the host.
   const classifier = config.classification?.api_key_env ? typesafeClassification(config.classification.api_key_env, name => secretValue(options, name)) : options.classification;
@@ -206,7 +209,7 @@ async function executeRun(file, config, options) {
     await writeJSON(pathResolve(runDir, 'summary.json'), { status: 'running', started_at: startedAt });
     await record(saved ? 'run.resumed' : 'run.started', { executor_version: executorVersion, execution_id: executionId, device_name: deviceName, method, config, inputs, initial_state: state, runtime_profiles: runtimeInfo, isolation: 'trusted-local-processes; not an OS sandbox' });
     await options.onStart?.({ method, inputs, state, runDir });
-    const executeScript = async (exec, input, signal, scopedRecord, operationId) => {
+    const executeScript = async (exec, input, signal, scopedRecord, operationId, onObserved) => {
       await verifyBundle();
       const profile = runtimeInfo[exec.runtime];
       const environment = { PATH: options.processPath ?? process.env.PATH ?? '', LANG: 'C.UTF-8', METHOD_OUTPUT_DIR: artifacts, METHOD_ENVIRONMENT: JSON.stringify(connectionsFor(method, config.environment)) };
@@ -216,15 +219,18 @@ async function executeRun(file, config, options) {
       if (Buffer.byteLength(JSON.stringify(input)) > config.limits.max_request_bytes) fail('Script input exceeds request limit', 'input_limit');
       await scopedRecord('process.started', { ...(operationId ? {operation_id: operationId} : {}), entrypoint: exec.entrypoint, runtime: exec.runtime, args: exec.args ?? [] });
       let result;
+      // The process records the hosts, files, variables, and programs it used (observed_effects); the script is unchanged.
+      const observation = await prepareObservation(profile, { runDir, bundle, artifacts, env: environment });
+      const observedEffects = async () => { const value = await observation.finish(); onObserved?.(value); return value; };
       try {
-        result = await executeProcess({ command: profile.command, args: [...(profile.args ?? []), await containedFile(bundle, exec.entrypoint), ...(exec.args ?? [])], cwd: bundle, input, env: environment, signal, maxBytes: config.limits.max_output_bytes,
+        result = await executeProcess({ command: profile.command, args: [...observation.args, ...(profile.args ?? []), await containedFile(bundle, exec.entrypoint), ...(exec.args ?? [])], cwd: bundle, input, env: { ...environment, ...observation.env }, signal, maxBytes: config.limits.max_output_bytes,
           onProgress: async value => { const progress = progressMessage(value); if (progress && !signal.aborted) await scopedRecord('progress', progress); },
         });
       } catch (error) {
-        await scopedRecord('process.failed', { code: error.code ?? 'process_failed', exit_code: error.exit_code ?? null, diagnostics: error.diagnostics ?? '', output: error.output ?? '' });
+        await scopedRecord('process.failed', { code: error.code ?? 'process_failed', exit_code: error.exit_code ?? null, diagnostics: error.diagnostics ?? '', output: error.output ?? '', observed_effects: await observedEffects() });
         throw error;
       }
-      await scopedRecord('process.completed', { exit_code: 0, diagnostics: result.diagnostics, output: result.output, internal_model_usage: 'not observable by executor' });
+      await scopedRecord('process.completed', { exit_code: 0, diagnostics: result.diagnostics, output: result.output, internal_model_usage: 'not observable by executor', observed_effects: await observedEffects() });
       let output;
       try { output = JSON.parse(result.output); } catch { fail('Script must return one JSON object', 'invalid_output'); }
       safeData(output);
@@ -301,9 +307,10 @@ async function executeRun(file, config, options) {
           await copyOutputFiles(hit.dir, step, hit.outputs, artifacts);
           await checkFiles(stepOutputs, hit.outputs);
           (accepted[id] ??= [])[iteration] = hit.outputs;
+          if (hit.observed) (observed[id] ??= [])[iteration] = hit.observed;
           keys[key] = [id, iteration]; reused[id] = (reused[id] ?? 0) + 1;
           await record('step.started', { step: id, iteration, inputs: bindings, state_before: state, external_effects_possible: false, reused_from: hit.dir });
-          await record('step.accepted', { step: id, iteration, outputs: hit.outputs, state, check: { status: 'unchecked', reason: 'Reused from an earlier run', evidence: [] }, reused_from: hit.dir });
+          await record('step.accepted', { step: id, iteration, outputs: hit.outputs, state, check: { status: 'unchecked', reason: 'Reused from an earlier run', evidence: [] }, reused_from: hit.dir, ...(hit.observed ? { observed_effects: hit.observed } : {}) });
           if (eachEntry) for (const name of Object.keys(collected)) collected[name][iteration] = hit.outputs[name];
           else Object.assign(root, hit.outputs);
           return !!step.repeat?.until && resolve(hit.outputs, step.repeat.until) === true;
@@ -313,7 +320,7 @@ async function executeRun(file, config, options) {
         const remaining = Math.min(limits.timeout_ms, deadline - performance.now());
         if (remaining <= 0) throw timeoutError();
         const bound = boundedSignal(remaining, stepSignal);
-        let localRequests = 0, localAgentTurns = 0;
+        let localRequests = 0, localAgentTurns = 0, actionObserved;
         const scopedRecord = (event, data) => record(event, { step: id, iteration, ...data });
         const guard = () => { if (bound.signal.aborted) throw bound.signal.reason; if (performance.now() >= deadline) throw timeoutError(); };
         const stateNames = (step.changes ?? []).filter(x => x.startsWith('state.')).map(x => x.slice(6));
@@ -387,7 +394,7 @@ async function executeRun(file, config, options) {
           }
           const phaseContext = { ...context, record: (event, data) => scopedRecord(event, { phase, ...data }) };
           const result = exec.kind === 'classify' ? {[step.out]: await executeClassification(exec, input, config.classification, classifier, phaseContext)}
-            : exec.kind === 'run' ? await executeScript(exec, input, bound.signal, phaseContext.record, operationId(phase))
+            : exec.kind === 'run' ? await executeScript(exec, input, bound.signal, phaseContext.record, operationId(phase), phase === 'action' ? value => { actionObserved = value; } : undefined)
             : profiles[exec.model].backend === 'codex' ? await executeCodex(exec, input, schema, phaseContext)
             : profiles[exec.model].backend === 'claude' ? await executeClaude(exec, input, schema, phaseContext)
             : await executeModel(exec, input, schema, phaseContext);
@@ -507,9 +514,10 @@ async function executeRun(file, config, options) {
           await writeJSON(pathResolve(runDir, 'state.json'), nextState);
           state = nextState; root.state = state;
           (accepted[id] ??= [])[iteration] = outputs;
+          if (actionObserved) (observed[id] ??= [])[iteration] = actionObserved;
           if (key) keys[key] = [id, iteration];
           active = null;
-          await scopedRecord('step.accepted', { outputs, state, check });
+          await scopedRecord('step.accepted', { outputs, state, check, ...(actionObserved ? { observed_effects: actionObserved } : {}) });
           if (eachEntry) for (const key of Object.keys(collected)) collected[key][iteration] = outputs[key];
           else Object.assign(root, outputs);
           return !!step.repeat?.until && resolve(outputs, step.repeat.until) === true;

@@ -55,7 +55,8 @@ export async function readCache(dirs) {
     try { checkpoint = JSON.parse(await readFile(pathResolve(dir, 'checkpoint.json'), 'utf8')); } catch { continue; }
     for (const [key, [id, iteration]] of Object.entries(checkpoint.cache ?? {})) {
       const outputs = checkpoint.accepted?.[id]?.[iteration];
-      if (outputs && !found.has(key)) found.set(key, { dir, outputs });
+      const observed = checkpoint.observed?.[id]?.[iteration];
+      if (outputs && !found.has(key)) found.set(key, { dir, outputs, ...(observed ? { observed } : {}) });
     }
   }
   return found;

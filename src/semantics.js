@@ -22,10 +22,15 @@ export function shape(def) { return typeof def === 'string' ? { type: def } : de
 /** Derive primitive outputs once for validators, executors, and readers. */
 export function effectiveOutputs(step) {
   if (step.do?.kind !== 'classify') return step.out ?? {};
+  const probabilities = ids => ({ type: 'record', fields: Object.fromEntries(ids.map(id => [id, 'number'])) });
+  if (step.do.answer === 'yes_no') return { [step.out]: {
+    type: 'record', description: 'Yes (true) or no (false), and the probability of yes.', fields: { answer: 'boolean', probability: 'number' } } };
+  if (step.do.levels) return { [step.out]: {
+    type: 'record', description: 'Most likely level, expected level index (0 = first level), and probabilities for each level.',
+    fields: { level: 'text', score: 'number', probabilities: probabilities(step.do.levels) } } };
   return { [step.out]: {
     type: 'record', description: 'Selected category and probabilities for each option.',
-    fields: { choice: 'text', probabilities: { type: 'record', fields:
-      Object.fromEntries(Object.keys(step.do.options).map(id => [id, 'number'])) } },
+    fields: { choice: 'text', probabilities: probabilities(Object.keys(step.do.options ?? {})) },
   } };
 }
 function containsFile(definition) {
@@ -193,7 +198,9 @@ export function validateSemantics(method, assertData) {
       if (method.format === 'method/3.1') fail(`${id}: classify requires method/3.2 or later`);
       requiredText(step.name, `${id}.name`, 'Give this classification step a name.');
       requiredText(step.do.question, `${id}.do.question`, 'Write the classification question.');
-      for (const [name, description] of Object.entries(step.do.options)) requiredText(description, `${id}.do.options.${name}`, 'Describe this option.');
+      if ([step.do.options, step.do.answer, step.do.levels].filter(value => value !== undefined).length !== 1)
+        fail(`${id}.do: give exactly one of options, answer: yes_no, or levels`);
+      for (const [name, description] of Object.entries(step.do.options ?? {})) requiredText(description, `${id}.do.options.${name}`, 'Describe this option.');
       if (!Object.keys(step.in ?? {}).length && !Object.keys(step.each ?? {}).length) fail(`${id}: classification requires an input`);
       if (step.changes?.length) fail(`${id}: classification cannot change state or connections`);
     }
