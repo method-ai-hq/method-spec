@@ -40,4 +40,6 @@ test('a script that calls a model API is refused', async t => {
   }
   assert.equal(modelCall('from openai import OpenAI'), 'openai');
   assert.equal(modelCall('import os\nlinks = ["https://example.com/openai"]'), null);
+  // Managing keys is not a model request.
+  assert.equal(modelCall('url = "https://openrouter.ai/api/v1/keys/" + key_hash'), null);
 });

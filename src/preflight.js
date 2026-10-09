@@ -14,10 +14,12 @@ const modelImports = [
   /^\s*(?:from|import)\s+(openai|anthropic|litellm|langchain[a-z_]*|google\.generativeai|mistralai|cohere|groq)\b/m,
   /(?:from\s+|require\(\s*|import\(\s*)['"](openai|@anthropic-ai\/sdk|@openrouter\/[^'"]+|langchain|@langchain\/[^'"]+|@ai-sdk\/[^'"]+|@google\/generative-ai|groq-sdk)['"]/,
 ];
+// A host counts only with a request endpoint, so a script that manages keys or reads usage is not refused.
+const modelEndpoint = /completions|\/messages|\/responses|systemone|generateContent|embeddings/;
 /** The first model API that a script file uses, or null. */
 export function modelCall(text) {
   const host = modelHosts.find(name => text.includes(name));
-  if (host) return host;
+  if (host && modelEndpoint.test(text)) return host;
   for (const pattern of modelImports) { const match = pattern.exec(text); if (match) return match[1]; }
   return null;
 }
