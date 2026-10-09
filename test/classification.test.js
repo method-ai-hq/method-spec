@@ -82,8 +82,8 @@ test('limits prevent dispatch and oversized inputs fail',async t=>{
   const g=await fixture(t);assert.equal((await g.run({inputs:{message:'x'.repeat(65536)}})).code,'input_limit');
 });
 test('timeout rejects late provider answers without retry',async t=>{
-  const m=doc();m.steps.classify.limits={timeout_ms:20};const f=await fixture(t,m);let calls=0;
-  f.provider.evaluate=async()=>{calls++;await new Promise(r=>setTimeout(r,100));return answer();};
+  const m=doc();m.steps.classify.limits={timeout_ms:300};const f=await fixture(t,m);let calls=0;
+  f.provider.evaluate=async()=>{calls++;await new Promise(r=>setTimeout(r,900));return answer();};
   const r=await f.run();assert.equal(r.code,'timeout');assert.equal(calls,1);
   assert.equal((await f.events()).some(e=>e.event==='step.accepted'),false);
 });
