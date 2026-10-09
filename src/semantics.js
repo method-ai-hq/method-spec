@@ -222,6 +222,7 @@ export function validateSemantics(method, assertData) {
     const local = {};
     for (const [key, ref] of Object.entries(step.in ?? {})) {
       if (reserved.has(key)) fail(`${id}.in.${key}: ${key} is a reserved name (inputs, state, environment, run). Choose another alias.`);
+      if (own(step.each ?? {}, ref.split('.')[0])) fail(`${id}.in.${key}: ${ref.split('.')[0]} is the each item, and the step receives it already. Remove it from in.`);
       if (own(outputs, key)) fail(`${id}.in.${key}: this step also has an output named ${key}. Give the input or the output another name.`);
       local[key] = globalRef(ref);
     }

@@ -43,3 +43,9 @@ test('a script that calls a model API is refused', async t => {
   // Managing keys is not a model request.
   assert.equal(modelCall('url = "https://openrouter.ai/api/v1/keys/" + key_hash'), null);
 });
+
+test('an each item named again in in gets an error that says so', () => {
+  const doc = { format: 'method/3.3', name: 'Each', goal: 'Score texts.', inputs: { items: { type: 'list', items: 'text' } },
+    steps: { score: { name: 'Score', each: { text: 'inputs.items' }, in: { text: 'text' }, do: { kind: 'classify', question: 'Is it long?', options: { yes: 'Long.', no: 'Short.' } }, out: 'score' } }, result: 'score' };
+  assert.throws(() => validateMethod(doc), /text is the each item, and the step receives it already/);
+});
