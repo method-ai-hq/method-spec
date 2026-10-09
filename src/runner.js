@@ -18,7 +18,7 @@ import { executeCodex } from './codex.js';
 import { renderPrompt } from './prompt.js';
 import { preflight } from './preflight.js';
 import { progressMessage } from './progress.js';
-import { readParentRun, planFork, copyForkFiles } from './fork.js';
+import { cacheable, iterationKey, readCache, copyOutputFiles } from './cache.js';
 import { effectKey, connectionsFor, testFixtures, runObserverScript, observeEffect, readLedger, appendLedger, currentEffects, effectSummary, statusWithEffects, waitUntil, nextObservation, horizonAt, previousObservations, listFolder, observeFiles, isBuiltin } from './effects.js';
 import { observerConnection } from './semantics.js';
 import { replayedCandidate, unverifiable } from './replay.js';
@@ -34,6 +34,8 @@ function initialValues(defs = {}, supplied = {}) {
   safeData(result); assertSchema(outputSchema(defs), result, 'Initial data');
   return result;
 }
+/** A declared secret comes from the host's secret store, or else the process environment. */
+const secretValue = (options, name) => name ? (options.secrets && own(options.secrets, name) ? options.secrets[name] : process.env[name]) : undefined;
 const timeoutError = () => Object.assign(new Error('Execution deadline exceeded'), { code: 'timeout' });
 function boundedSignal(ms, parent) {
   const controller = new AbortController();
@@ -53,9 +55,6 @@ function boundedSignal(ms, parent) {
 export async function runMethod(file, config, options = {}) {
   const runDir = pathResolve(options.runDir ?? pathResolve('.method-runs', randomUUID()));
   if (options.resume && !options.runDir) fail('Resume needs an explicit run directory', 'preflight');
-  if (options.fromRun && options.resume) fail('A fork starts a new run. Resume the fork with --resume alone.', 'preflight');
-  if (options.fromRun && !options.reuse?.length) fail('Name the accepted steps to reuse with --reuse STEP.', 'preflight');
-  if (options.reuse?.length && !options.fromRun) fail('Reuse needs --from-run with the parent run directory.', 'preflight');
   await mkdir(dirname(runDir), { recursive: true, mode: 0o700 });
   if (!options.resume) {
     try { await readFile(pathResolve(runDir, 'checkpoint.json')); fail('Run already exists. Use resume.', 'run_exists'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
@@ -78,22 +77,35 @@ export async function runMethod(file, config, options = {}) {
   finally { await lock.close(); await unlink(lockPath); }
 }
 
+/** One sentence that says what to do next for a failure code. */
+export function fixFor(error) {
+  const fixes = {
+    missing_secret: `Supply ${error.missing?.join(', ') ?? 'the declared secrets'}, then run again. No step ran.`,
+    model_call_in_script: 'Make each model or classifier request its own call, agent, or classify step, then run again.',
+    process_failed: 'Read diagnostics, fix the script, and run again. Unchanged steps are reused.',
+    invalid_output: 'Make the step return its declared outputs, then run again. Unchanged steps are reused.',
+    classification_unavailable: 'The classification service did not answer after 3 attempts. Run again; unchanged steps are reused.',
+    model_credit_used: error.message,
+    needs_input: error.message,
+  };
+  return fixes[error.code] ?? 'Fix the problem and run again. Unchanged steps are reused.';
+}
+const lastLines = (text, count) => String(text).trimEnd().split('\n').slice(-count).join('\n');
+
 async function executeRun(file, config, options) {
   const runDir = options.runDir;
   const saved = options.resume ? JSON.parse(await readFile(pathResolve(runDir, 'checkpoint.json'), 'utf8')) : null;
   if (saved) assertCheckpointExecutor(saved);
   const method = await readDocument(file);
-  const { order, dependencies } = validateMethod(method);
+  const { order } = validateMethod(method);
   validateConfig(config);
   const suppliedConfig = config;
   config = configuration(config);
   const sourceRoot = await realpath(options.sourceRoot ?? dirname(pathResolve(file)));
   if (saved && (saved.method_sha256 !== hash(method) || saved.config_sha256 !== hash(suppliedConfig))) fail('Method or configuration changed. Resume needs the original version.', 'resume_mismatch');
   if (saved && (options.inputs || options.state)) fail('Resume uses saved inputs and state; omit --inputs and --state.', 'resume_mismatch');
-  const parent = options.fromRun ? await readParentRun(pathResolve(options.fromRun)) : null;
-  // A fork keeps the parent's inputs and initial state unless new values are supplied.
-  const inputs = saved?.root.inputs ?? initialValues(method.inputs, options.inputs ?? parent?.checkpoint.root?.inputs);
-  let state = saved?.root.state ?? initialValues(method.state, options.state ?? parent?.initialState);
+  const inputs = saved?.root.inputs ?? initialValues(method.inputs, options.inputs);
+  let state = saved?.root.state ?? initialValues(method.state, options.state);
   if (saved && !saved.models) fail('The checkpoint is missing its selected model profiles. Resume needs the original run records.', 'resume_mismatch');
   config.models = await resolveModels(method, config, { ...options, savedModels: saved?.models });
   const profiles = config.models, runtimeProfiles = config.runtimes ?? {}, tools = config.tools ?? {};
@@ -106,6 +118,7 @@ async function executeRun(file, config, options) {
   if (saved && hash(runtimeInfo) !== saved.runtime_sha256) fail('Runtime executable changed', 'resume_mismatch');
   let sequence = saved?.sequence ?? 0, invocations = saved?.invocations ?? 0, requests = saved?.requests ?? 0, toolCalls = saved?.toolCalls ?? 0, knownUsage = saved?.knownUsage ?? 0, inputTokens = saved?.inputTokens ?? 0, outputTokens = saved?.outputTokens ?? 0;
   let started = performance.now() - (saved?.elapsed_ms ?? 0), deadline = started + config.limits.timeout_ms;
+  let costUsd = saved?.costUsd ?? null;
   let codexProcesses = saved?.codexProcesses ?? 0, codexInputTokens = saved?.codexInputTokens ?? 0, codexOutputTokens = saved?.codexOutputTokens ?? 0, codexUsageReports = saved?.codexUsageReports ?? 0;
   const executionId = saved?.execution_id ?? randomUUID();
   const deviceName = saved?.device_name ?? options.deviceName ?? hostname();
@@ -114,21 +127,23 @@ async function executeRun(file, config, options) {
   const accepted = saved?.accepted ?? {}, skipped = saved?.skipped ?? [];
   const collections = saved?.collections ?? {};
   let active = saved?.active ?? null;
-  let forkedFrom = saved?.forked_from ?? null;
+  // Accepted iterations by key, so that a later run can reuse them.
+  const keys = saved?.cache ?? {}, reused = saved?.reused ?? {};
+  const cache = options.replay || options.fresh === true ? new Map() : await readCache(options.cacheFrom ?? []);
+  const fresh = new Set(Array.isArray(options.fresh) ? options.fresh : []);
   if (active && !(options.retry ?? []).includes(active) && !(method.steps[active.split(':')[0]]?.ask && options.human?.steps?.[active])) fail(`Inspect the trace and external state, then use --retry ${active} to authorize another attempt.`, 'recovery_required');
   const checkpoint = () => writeJSON(pathResolve(runDir, 'checkpoint.json'), {
     executor_version: executorVersion, execution_id: executionId, device_name: deviceName,
     models: profiles, method_sha256: hash(method), config_sha256: hash(suppliedConfig), runtime_sha256: hash(runtimeInfo),
     started_at: startedAt, elapsed_ms: performance.now() - started, sequence, invocations, requests, toolCalls, knownUsage, inputTokens, outputTokens,
-    root, accepted, skipped, active, collections, codexProcesses, codexInputTokens, codexOutputTokens, codexUsageReports,
-    ...(forkedFrom ? { forked_from: forkedFrom } : {}),
+    root, accepted, skipped, active, collections, cache: keys, reused, costUsd, codexProcesses, codexInputTokens, codexOutputTokens, codexUsageReports,
   });
   // An operator's own classification key takes precedence over a provider supplied by the host.
-  const classifier = config.classification?.api_key_env ? typesafeClassification(config.classification.api_key_env) : options.classification;
+  const classifier = config.classification?.api_key_env ? typesafeClassification(config.classification.api_key_env, name => secretValue(options, name)) : options.classification;
   const secrets = [...new Set([
-    ...Object.values(profiles).map(p => process.env[p.api_key_env]),
-    process.env[config.classification?.api_key_env],
-    ...Object.values(runtimeProfiles).flatMap(p => (p.env ?? []).map(key => process.env[key])),
+    ...Object.values(profiles).map(p => secretValue(options, p.api_key_env)),
+    secretValue(options, config.classification?.api_key_env),
+    ...Object.keys(method.secrets ?? {}).map(name => secretValue(options, name)),
   ].filter(x => x && x.length >= 4))];
   const redact = value => {
     if (typeof value === 'string') return secrets.reduce((s, secret) => s.split(secret).join('[REDACTED]'), value);
@@ -155,18 +170,12 @@ async function executeRun(file, config, options) {
   };
   const summary = () => ({ run_dir: runDir, started_at: startedAt, device_name: deviceName, elapsed_ms: performance.now() - started, invocations, model_requests: requests, tool_calls: toolCalls,
     ...(codexProcesses ? { codex: { processes: codexProcesses, input_tokens: codexUsageReports ? codexInputTokens : null, output_tokens: codexUsageReports ? codexOutputTokens : null, scope: 'Codex-reported usage; internal requests and built-in tools are managed by Codex' } } : {}),
-    ...(forkedFrom ? { forked_from: forkedFrom } : {}),
-    usage: { responses_with_usage: knownUsage, responses_without_usage: requests - knownUsage, input_tokens: knownUsage ? inputTokens : null, output_tokens: knownUsage ? outputTokens : null, cost_usd: null, scope: 'executor-managed model requests only' } });
+    ...(Object.keys(reused).length ? { reused } : {}),
+    usage: { responses_with_usage: knownUsage, responses_without_usage: requests - knownUsage, input_tokens: knownUsage ? inputTokens : null, output_tokens: knownUsage ? outputTokens : null, cost_usd: costUsd, scope: 'executor-managed model requests only' } });
   let manifest;
   try {
     manifest = saved ? JSON.parse(await readFile(pathResolve(runDir, 'manifest.json'), 'utf8')).files : await snapshotBundle(sourceRoot, files, bundle);
-    if (parent) {
-      const fork = planFork({ parent, method, dependencies, steps: options.reuse, root, profiles, config, runtimeInfo, manifest });
-      Object.assign(accepted, fork.accepted); skipped.push(...fork.skipped); Object.assign(collections, fork.collections);
-      forkedFrom = fork.provenance;
-      await copyForkFiles(parent, method, fork.accepted, artifacts);
-    }
-    await writeJSON(pathResolve(runDir, 'manifest.json'), { executor_version: executorVersion, method_sha256: hash(method), config_sha256: hash(suppliedConfig), files: manifest, runtime_profiles: runtimeInfo, models: profiles, ...(forkedFrom ? { forked_from: forkedFrom } : {}) });
+    await writeJSON(pathResolve(runDir, 'manifest.json'), { executor_version: executorVersion, method_sha256: hash(method), config_sha256: hash(suppliedConfig), files: manifest, runtime_profiles: runtimeInfo, models: profiles });
     await writeJSON(pathResolve(runDir, 'method.json'), method);
     await writeJSON(pathResolve(runDir, 'state.json'), state);
     const verifyBundle = async () => {
@@ -195,18 +204,15 @@ async function executeRun(file, config, options) {
       }
     }
     await writeJSON(pathResolve(runDir, 'summary.json'), { status: 'running', started_at: startedAt });
-    await record(saved ? 'run.resumed' : 'run.started', { executor_version: executorVersion, execution_id: executionId, device_name: deviceName, method, config, inputs, initial_state: state, runtime_profiles: runtimeInfo, isolation: 'trusted-local-processes; not an OS sandbox', ...(forkedFrom ? { forked_from: forkedFrom } : {}) });
-    if (parent) for (const entry of forkedFrom.steps) await record('step.imported', { ...entry, outputs: accepted[entry.step] ?? null, parent_execution_id: forkedFrom.execution_id, parent_run_dir: forkedFrom.run_dir });
+    await record(saved ? 'run.resumed' : 'run.started', { executor_version: executorVersion, execution_id: executionId, device_name: deviceName, method, config, inputs, initial_state: state, runtime_profiles: runtimeInfo, isolation: 'trusted-local-processes; not an OS sandbox' });
     await options.onStart?.({ method, inputs, state, runDir });
     const executeScript = async (exec, input, signal, scopedRecord, operationId) => {
       await verifyBundle();
       const profile = runtimeInfo[exec.runtime];
       const environment = { PATH: options.processPath ?? process.env.PATH ?? '', LANG: 'C.UTF-8', METHOD_OUTPUT_DIR: artifacts, METHOD_ENVIRONMENT: JSON.stringify(connectionsFor(method, config.environment)) };
       if (operationId) environment.METHOD_OPERATION_ID = operationId;
-      for (const key of profile.env ?? []) {
-        if (!process.env[key]) fail(`Missing runtime environment variable: ${key}`, 'preflight');
-        environment[key] = process.env[key];
-      }
+      // Preflight checked that every declared secret has a value.
+      for (const name of Object.keys(method.secrets ?? {})) environment[name] = secretValue(options, name);
       if (Buffer.byteLength(JSON.stringify(input)) > config.limits.max_request_bytes) fail('Script input exceeds request limit', 'input_limit');
       await scopedRecord('process.started', { ...(operationId ? {operation_id: operationId} : {}), entrypoint: exec.entrypoint, runtime: exec.runtime, args: exec.args ?? [] });
       let result;
@@ -286,10 +292,24 @@ async function executeRun(file, config, options) {
           else Object.assign(root, previous);
           return !!step.repeat?.until && resolve(previous, step.repeat.until) === true;
         }
-        if (invocations >= config.limits.max_invocations) fail('Invocation cap reached', 'invocation_limit');
-        invocations++;
         const bindings = Object.fromEntries(Object.entries(step.in ?? {}).map(([k, ref]) => [k, structuredClone(resolve(root, ref))]));
         if (eachEntry) bindings[eachEntry[0]] = collection[iteration];
+        const key = cacheable(step, tools) ? iterationKey({ step, bindings, iteration, profiles, config, runtimeInfo, manifest }) : null;
+        const hit = key && !fresh.has(id) ? cache.get(key) : undefined;
+        if (hit) {
+          // An earlier run accepted this exact iteration. Its outputs and files are reused; nothing executes.
+          await copyOutputFiles(hit.dir, step, hit.outputs, artifacts);
+          await checkFiles(stepOutputs, hit.outputs);
+          (accepted[id] ??= [])[iteration] = hit.outputs;
+          keys[key] = [id, iteration]; reused[id] = (reused[id] ?? 0) + 1;
+          await record('step.started', { step: id, iteration, inputs: bindings, state_before: state, external_effects_possible: false, reused_from: hit.dir });
+          await record('step.accepted', { step: id, iteration, outputs: hit.outputs, state, check: { status: 'unchecked', reason: 'Reused from an earlier run', evidence: [] }, reused_from: hit.dir });
+          if (eachEntry) for (const name of Object.keys(collected)) collected[name][iteration] = hit.outputs[name];
+          else Object.assign(root, hit.outputs);
+          return !!step.repeat?.until && resolve(hit.outputs, step.repeat.until) === true;
+        }
+        if (invocations >= config.limits.max_invocations) fail('Invocation cap reached', 'invocation_limit');
+        invocations++;
         const remaining = Math.min(limits.timeout_ms, deadline - performance.now());
         if (remaining <= 0) throw timeoutError();
         const bound = boundedSignal(remaining, stepSignal);
@@ -303,7 +323,8 @@ async function executeRun(file, config, options) {
         const context = {
           models: profiles, artifacts, signal: bound.signal, maxAgentTurns: limits.max_agent_turns,
           maxRequestBytes: config.limits.max_request_bytes, maxOutputBytes: config.limits.max_output_bytes,
-          transport: options.transport, record: scopedRecord, guard,
+          transport: options.transport, hosted: options.hostedModels, secret: name => secretValue(options, name), record: scopedRecord, guard,
+          cost(value) { if (Number.isFinite(value) && value >= 0) costUsd = (costUsd ?? 0) + value; },
           canRequest: () => requests < config.limits.max_model_requests && localRequests < (limits.max_model_requests ?? 0),
           canAgentTurn: () => localAgentTurns < limits.max_agent_turns,
           reserveRequest() { guard(); if (!this.canRequest()) fail('Model request cap reached', 'model_limit'); requests++; localRequests++; },
@@ -486,6 +507,7 @@ async function executeRun(file, config, options) {
           await writeJSON(pathResolve(runDir, 'state.json'), nextState);
           state = nextState; root.state = state;
           (accepted[id] ??= [])[iteration] = outputs;
+          if (key) keys[key] = [id, iteration];
           active = null;
           await scopedRecord('step.accepted', { outputs, state, check });
           if (eachEntry) for (const key of Object.keys(collected)) collected[key][iteration] = outputs[key];
@@ -539,14 +561,15 @@ async function executeRun(file, config, options) {
     await writeJSON(pathResolve(runDir, 'summary.json'), redact(completed));
     return completed;
   } catch (error) {
-    const unfinished = active?.split(':')[0];
-    const reusable = order.filter(id => skipped.includes(id) || (accepted[id]?.length && id !== unfinished));
-    // Resume keeps the run's bundle, so a code fix needs a fork that reuses the accepted steps.
-    const fork = reusable.length ? ` To fix a step that was not accepted, edit it, then start a new run with --from-run ${runDir} --reuse ${reusable.join(',')}. The fork refuses a listed step that changed.` : '';
+    const [unfinished, iteration] = active?.split(':') ?? [];
     // Observations after a failed action tell the operator whether a retry could repeat a change that did happen.
     const observed = error.effects?.length ? ' Observed after the failed action: ' + error.effects.map(e => `${e.effect} ${e.verdict}${e.verdict === 'confirmed' ? ' (the change happened; do not retry it)' : ''}`).join('; ') + '.' : '';
     const ledger = await readLedger(runDir).catch(() => []);
-    const failed = { ...summary(), status: error.code === 'needs_input' ? 'needs_input' : 'failed', code: error.code ?? 'execution_failed', error: error.message, recovery: 'Resume with --run-dir and --resume. Inspect unfinished actions before authorizing --retry STEP:ITERATION. Accepted iterations are not repeated.' + observed + fork,
+    const failed = { ...summary(), status: error.code === 'needs_input' ? 'needs_input' : 'failed', code: error.code ?? 'execution_failed', error: error.message,
+      ...(unfinished ? { failed_step: unfinished, iteration: Number(iteration) } : {}), ...(error.diagnostics ? { diagnostics: lastLines(error.diagnostics, 20) } : {}),
+      fix: fixFor(error),
+      // A new run reuses unchanged accepted iterations, so a fix needs no resume. Resume keeps this run's bundle.
+      recovery: 'Fix the step and run again: unchanged steps are reused. To continue this run with its original files, resume with --run-dir and --resume; inspect unfinished actions before authorizing --retry STEP:ITERATION.' + observed,
       ...(ledger.length ? { effects: effectSummary(ledger) } : {}) };
     await record('run.failed', failed);
     await writeJSON(pathResolve(runDir, 'summary.json'), redact(failed));

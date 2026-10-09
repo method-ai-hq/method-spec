@@ -7,12 +7,33 @@ import { executable, hash, relativeFile, containedFile } from './io.js';
 import { fixtureFiles } from './effects.js';
 import { directBackends } from './model.js';
 
+// A script that calls a model hides prompts from the Method. These hosts and libraries are model APIs.
+const modelHosts = ['openrouter.ai', 'api.openai.com', 'api.anthropic.com', 'api.typesafe.ai', 'generativelanguage.googleapis.com',
+  'api.deepseek.com', 'api.groq.com', 'api.mistral.ai', 'api.together.xyz', 'api.fireworks.ai', 'api.cohere.com'];
+const modelImports = [
+  /^\s*(?:from|import)\s+(openai|anthropic|litellm|langchain[a-z_]*|google\.generativeai|mistralai|cohere|groq)\b/m,
+  /(?:from\s+|require\(\s*|import\(\s*)['"](openai|@anthropic-ai\/sdk|@openrouter\/[^'"]+|langchain|@langchain\/[^'"]+|@ai-sdk\/[^'"]+|@google\/generative-ai|groq-sdk)['"]/,
+];
+/** The first model API that a script file uses, or null. */
+export function modelCall(text) {
+  const host = modelHosts.find(name => text.includes(name));
+  if (host) return host;
+  for (const pattern of modelImports) { const match = pattern.exec(text); if (match) return match[1]; }
+  return null;
+}
+
+/** A declared secret has a value in the host's store or the process environment. */
+const hasSecret = (options, name) => !!(options.secrets && own(options.secrets, name) ? options.secrets[name] : process.env[name]);
+
 /** Check local dependencies without executing a script or model. Shared by validate and run. */
 export async function preflight(method, config, sourceRoot, options = {}) {
   validateMethod(method);
   validateConfig(config);
   config = configuration(config);
   const missingSetup = [];
+  const missingSecrets = Object.keys(method.secrets ?? {}).filter(name => !hasSecret(options, name));
+  if (missingSecrets.length && !options.allowMissingSetup) fail(`Missing secrets: ${missingSecrets.join(', ')}.`, 'missing_secret', { missing: missingSecrets });
+  if (missingSecrets.length) missingSetup.push(`Supply secrets: ${missingSecrets.join(', ')}`);
   let profiles;
   try { profiles = await resolveModels(method, config, options); } catch (error) { if (!options.allowMissingSetup || error.code !== 'needs_input') throw error; missingSetup.push(error.message); profiles = {}; }
   const runtimeProfiles = config.runtimes ?? {}, tools = config.tools ?? {};
@@ -21,7 +42,7 @@ export async function preflight(method, config, sourceRoot, options = {}) {
     for (const [phase, exec] of [['action', step.do], ['check', step.check]]) if (exec?.kind) {
       executions.push(exec);
       if (exec.kind === 'classify' && config.classification?.api_key_env) {
-        if (!process.env[config.classification.api_key_env]) fail(`Missing environment variable: ${config.classification.api_key_env}`, 'preflight');
+        if (!hasSecret(options, config.classification.api_key_env)) fail(`Missing environment variable: ${config.classification.api_key_env}`, 'preflight');
       } else if (exec.kind === 'classify' && (!config.classification || !options.classification?.evaluate)) {
         const message = 'Classification needs Method sign-in, your own Typesafe key (TYPESAFE_API_KEY), or an embedded classification provider.';
         if (options.allowMissingSetup) missingSetup.push(message); else fail(message, 'needs_input');
@@ -32,7 +53,9 @@ export async function preflight(method, config, sourceRoot, options = {}) {
         else if (['codex', 'claude'].includes(profile.backend)) {
           if (config.allow_local_processes !== true) fail('Local agents require allow_local_processes in operator configuration', 'preflight');
           try { await executable(profile.command ?? profile.backend); } catch(error) { if(!options.allowMissingSetup)throw error; missingSetup.push(error.message); }
-        } else if (!options.transport && !process.env[profile.api_key_env]) fail(`Missing environment variable: ${profile.api_key_env}`, 'preflight');
+        } else if (profile.backend === 'method') {
+          if (!options.hostedModels && !options.transport) { const message = 'Hosted models need Method sign-in. Run method login, then run again.'; if (options.allowMissingSetup) missingSetup.push(message); else fail(message, 'needs_input'); }
+        } else if (!options.transport && !hasSecret(options, profile.api_key_env)) fail(`Missing environment variable: ${profile.api_key_env}`, 'preflight');
       }
       if (exec.browser && !Object.values(tools).some(t => t.connection === exec.browser.split('.')[1])) {
         if(options.allowMissingSetup) missingSetup.push(`Prepare browser: ${exec.browser}`);
@@ -63,7 +86,6 @@ export async function preflight(method, config, sourceRoot, options = {}) {
     const profile = runtimeProfiles[exec.runtime];
     if (!profile && options.allowMissingSetup && ['node','python'].includes(exec.runtime)) { missingSetup.push(`Prepare ${exec.runtime} with method run.`); continue; }
     if (!profile) fail(`Unknown runtime: ${exec.runtime}`, 'preflight');
-    for (const key of profile.env ?? []) if (!process.env[key]) fail(`Missing runtime environment variable: ${key}`, 'preflight');
     if (!runtimeInfo[exec.runtime]) {
       const command = await executable(profile.command);
       runtimeInfo[exec.runtime] = { ...profile, command, binary_sha256: hash(await readFile(command)) };
@@ -72,7 +94,9 @@ export async function preflight(method, config, sourceRoot, options = {}) {
   for (const name of Object.keys(method.environment ?? {})) {
     if (!own(config.environment, name)) { if(options.allowMissingSetup)missingSetup.push(`Bind input: ${name}`); else fail(`Missing environment binding: ${name}`, 'preflight'); }
   }
-  const files = [...new Set([...(method.files ?? []), ...scripts.map(x => x.entrypoint), ...(options.checkFiles === false ? [] : await fixtureFiles(method, sourceRoot))])];
+  const code = [...new Set([...(method.files ?? []), ...scripts.map(x => x.entrypoint)])];
+  const files = [...new Set([...code, ...(options.checkFiles === false ? [] : await fixtureFiles(method, sourceRoot))])];
+  const modelCalls = [];
   for (const name of options.checkFiles === false ? [] : files) {
     relativeFile(name);
     let file;
@@ -81,7 +105,11 @@ export async function preflight(method, config, sourceRoot, options = {}) {
     const info = await stat(file);
     if (!info.isFile()) fail(`Method file is not a regular file: ${name}`, 'preflight');
     if (info.size > 20_000_000) fail(`Bundle file exceeds 20 MB: ${name}`, 'preflight');
-    await readFile(file);
+    const bytes = await readFile(file);
+    // Fixture data may quote a host; only the code that steps run is checked. Binary files are skipped.
+    const found = code.includes(name) && !bytes.includes(0) ? modelCall(bytes.toString('utf8')) : null;
+    if (found) modelCalls.push(`${name} uses ${found}`);
   }
+  if (modelCalls.length) fail(`A script calls a model API: ${modelCalls.slice(0, 5).join('; ')}. Make each model or classifier request its own call, agent, or classify step, with its prompt in the Method.`, 'model_call_in_script');
   return { scripts, runtimeInfo, files, missingSetup };
 }

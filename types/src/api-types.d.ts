@@ -38,7 +38,15 @@ export type ModelProfile = {
     api_key_env: string;
     max_output_tokens: number;
     reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high';
+} | {
+    backend: 'method';
+    model: string;
+    max_output_tokens?: number;
 };
+/** Sends an openrouter-chat request through the signed-in Method account and returns the provider's response. */
+export interface HostedModels {
+    request(body: Record<string, any>, signal: AbortSignal): Promise<any>;
+}
 export interface ClassificationProvider {
     resolve(signal: AbortSignal): Promise<{
         provider: 'typesafe';
@@ -89,7 +97,6 @@ export interface RuntimeConfig {
         command: string;
         version: string;
         args?: string[];
-        env?: string[];
     }>;
     models?: Record<string, ModelProfile>;
     tools?: Record<string, {
@@ -118,10 +125,15 @@ export interface RunOptions {
     runDir?: string | undefined;
     resume?: boolean | undefined;
     retry?: string[] | undefined;
-    /** Parent run directory for a new run that reuses accepted steps. Requires reuse. */
-    fromRun?: string | undefined;
-    /** Steps whose accepted outputs a fork takes from the parent run. Their upstream steps must be listed too. */
-    reuse?: string[] | undefined;
+    /** Earlier run directories. An iteration whose definition, inputs, and executed files match one of their accepted iterations is reused. */
+    cacheFrom?: string[] | undefined;
+    /** true runs every step; a list names steps that run even when a match exists. */
+    fresh?: boolean | string[] | undefined;
+    /** Values of the Method's declared secrets. Without it, the process environment supplies them. */
+    secrets?: Record<string, string> | undefined;
+    /** The model that unconfigured call and agent steps use through hostedModels. */
+    hostedModel?: string | undefined;
+    hostedModels?: HostedModels | undefined;
     human?: {
         steps: Record<string, {
             outputs: Record<string, Json>;
@@ -148,23 +160,7 @@ export interface RunOptions {
     /** Test/provider adapter for Responses requests. */
     transport?: ((...args: any[]) => Promise<any>) | undefined;
 }
-export interface ForkProvenance {
-    run_dir: string;
-    execution_id: string;
-    executor_version: string;
-    method_sha256: string;
-    steps: Array<{
-        step: string;
-        skipped?: true;
-        iterations?: number;
-        outputs_sha256?: string;
-    }>;
-    changed_files: Array<{
-        file: string;
-        change: 'added' | 'removed' | 'changed';
-    }>;
-    file_evidence: 'bundle' | 'entrypoints';
-}
+/** reused counts the iterations of each step that came from an earlier run. */
 export interface RunSummary {
     run_dir: string;
     started_at: string;
@@ -174,7 +170,7 @@ export interface RunSummary {
     model_requests: number;
     tool_calls: number;
     usage: Record<string, Json>;
-    forked_from?: ForkProvenance;
+    reused?: Record<string, number>;
 }
 export type EffectVerdict = 'pending' | 'confirmed' | 'unrefuted' | 'contradicted' | 'unknown' | 'not_replayed';
 export interface EffectSummary {
@@ -213,5 +209,10 @@ export type RunResult = RunSummary & {
     status: 'failed' | 'needs_input';
     code: string;
     error: string;
+    fix: string;
     recovery: string;
+    failed_step?: string;
+    iteration?: number;
+    diagnostics?: string;
+    missing?: string[];
 });

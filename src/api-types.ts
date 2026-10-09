@@ -4,7 +4,10 @@ export type Shape = 'text' | 'number' | 'boolean' | 'record' | 'list' | 'file' |
 export type Script = {kind: 'run'; runtime: string; entrypoint: string; args?: string[]};
 export type ModelProfile = {backend: 'codex' | 'claude'; command?: string; model?: string; reasoning_effort?: string} | {backend: 'openai-responses'; model: string; api_key_env: string; max_output_tokens: number; reasoning_effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'}
   | {backend: 'anthropic-messages'; model: string; api_key_env: string; max_output_tokens: number; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'}
-  | {backend: 'openrouter-chat'; model: string; api_key_env: string; max_output_tokens: number; reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high'};
+  | {backend: 'openrouter-chat'; model: string; api_key_env: string; max_output_tokens: number; reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high'}
+  | {backend: 'method'; model: string; max_output_tokens?: number};
+/** Sends an openrouter-chat request through the signed-in Method account and returns the provider's response. */
+export interface HostedModels {request(body: Record<string, any>, signal: AbortSignal): Promise<any>}
 export interface ClassificationProvider {
   resolve(signal: AbortSignal): Promise<{provider: 'typesafe'; model: string}>;
   evaluate(request: {request_id: string; model: string; question: string; options: Record<string, string>; inputs: Record<string, Json>}, signal: AbortSignal): Promise<{
@@ -18,7 +21,7 @@ export interface RuntimeConfig {
   allow_local_processes?: boolean;
   limits?: {timeout_ms?: number; max_model_requests?: number; max_invocations?: number; max_tool_calls?: number; max_output_bytes?: number; max_request_bytes?: number; effect_wait_ms?: number; max_concurrency?: number};
   step_defaults?: {timeout_ms?: number; max_agent_turns?: number; max_model_requests?: number};
-  runtimes?: Record<string, {command: string; version: string; args?: string[]; env?: string[]}>;
+  runtimes?: Record<string, {command: string; version: string; args?: string[]}>;
   models?: Record<string, ModelProfile>;
   tools?: Record<string, {description: string; in: Record<string, Shape>; out: Record<string, Shape>; run: Script; effects: string[]} | {description:string; connection:string; tool:string; parameters:Record<string,any>; effects:string[]}>;
   environment?: Record<string, string>;
@@ -29,10 +32,15 @@ export interface RunOptions {
   connections?: Record<string, {call: (name:string, args:any, signal:AbortSignal) => Promise<any>}>;
   inputs?: Record<string, Json> | undefined; state?: Record<string, Json> | undefined;
   runDir?: string | undefined; resume?: boolean | undefined; retry?: string[] | undefined;
-  /** Parent run directory for a new run that reuses accepted steps. Requires reuse. */
-  fromRun?: string | undefined;
-  /** Steps whose accepted outputs a fork takes from the parent run. Their upstream steps must be listed too. */
-  reuse?: string[] | undefined;
+  /** Earlier run directories. An iteration whose definition, inputs, and executed files match one of their accepted iterations is reused. */
+  cacheFrom?: string[] | undefined;
+  /** true runs every step; a list names steps that run even when a match exists. */
+  fresh?: boolean | string[] | undefined;
+  /** Values of the Method's declared secrets. Without it, the process environment supplies them. */
+  secrets?: Record<string, string> | undefined;
+  /** The model that unconfigured call and agent steps use through hostedModels. */
+  hostedModel?: string | undefined;
+  hostedModels?: HostedModels | undefined;
   human?: {steps: Record<string, {outputs: Record<string, Json>}>} | undefined;
   agent?: 'codex' | 'claude' | undefined;
   signal?: AbortSignal | undefined; sourceRoot?: string | undefined; processPath?: string | undefined;
@@ -44,8 +52,8 @@ export interface RunOptions {
   /** Test/provider adapter for Responses requests. */
   transport?: ((...args: any[]) => Promise<any>) | undefined;
 }
-export interface ForkProvenance {run_dir: string; execution_id: string; executor_version: string; method_sha256: string; steps: Array<{step: string; skipped?: true; iterations?: number; outputs_sha256?: string}>; changed_files: Array<{file: string; change: 'added' | 'removed' | 'changed'}>; file_evidence: 'bundle' | 'entrypoints'}
-export interface RunSummary {run_dir: string; started_at: string; device_name: string; elapsed_ms: number; invocations: number; model_requests: number; tool_calls: number; usage: Record<string, Json>; forked_from?: ForkProvenance}
+/** reused counts the iterations of each step that came from an earlier run. */
+export interface RunSummary {run_dir: string; started_at: string; device_name: string; elapsed_ms: number; invocations: number; model_requests: number; tool_calls: number; usage: Record<string, Json>; reused?: Record<string, number>}
 export type EffectVerdict = 'pending' | 'confirmed' | 'unrefuted' | 'contradicted' | 'unknown' | 'not_replayed';
 export interface EffectSummary {
   total: number; confirmed: number; unrefuted: number; contradicted: number; unknown: number; pending: number; next_observation_at: string | null;
@@ -53,4 +61,4 @@ export interface EffectSummary {
 }
 /** completed: every step was accepted and no effect is contradicted or unconfirmed (effects.pending can be above zero).
  * unconfirmed: every step was accepted, but an observer could not confirm an external change by its horizon. */
-export type RunResult = RunSummary & {effects?: EffectSummary} & ({status: 'completed'; result: Json} | {status: 'unconfirmed'; result: Json; code: string; error: string; recovery: string} | {status: 'failed' | 'needs_input'; code: string; error: string; recovery: string});
+export type RunResult = RunSummary & {effects?: EffectSummary} & ({status: 'completed'; result: Json} | {status: 'unconfirmed'; result: Json; code: string; error: string; recovery: string} | {status: 'failed' | 'needs_input'; code: string; error: string; fix: string; recovery: string; failed_step?: string; iteration?: number; diagnostics?: string; missing?: string[]});

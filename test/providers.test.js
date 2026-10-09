@@ -20,7 +20,7 @@ async function fixture(t, doc) {
   t.after(() => rm(dir, { recursive: true, force: true }));
   await writeFile(join(dir, 'tool.mjs'), 'let s="";for await(const x of process.stdin)s+=x;console.log(JSON.stringify({result:JSON.parse(s).value+1}))');
   const file = join(dir, 'test.method'); await writeFile(file, JSON.stringify(doc));
-  return { run: (cfg, transport) => runMethod(file, cfg, { runDir: join(dir, 'run'), transport }) };
+  return { dir, file, run: (cfg, transport) => runMethod(file, cfg, { runDir: join(dir, 'run'), transport }) };
 }
 
 const claude = {
@@ -125,4 +125,24 @@ test('direct backends use their fixed endpoints and key headers', async t => {
   assert.equal(seen[0].headers['x-api-key'], 'provider-secret'); assert.equal(seen[0].headers['anthropic-version'], '2023-06-01');
   assert.equal(seen[1].url, 'https://openrouter.ai/api/v1/chat/completions');
   assert.equal(seen[1].headers.authorization, 'Bearer provider-secret');
+});
+
+test('a hosted profile sends the openrouter-chat request through the host and records its cost', async t => {
+  const f = await fixture(t, method(step('agent')));
+  const sent = [];
+  const hostedModels = { request: async body => { sent.push(body); return { ...(sent.length === 1 ? router.tool() : router.text({ value: 5 })), usage: { prompt_tokens: 3, completion_tokens: 1, cost: 0.25 } }; } };
+  const cfg = config({}); delete cfg.models;
+  const result = await runMethod(f.file, cfg, { runDir: join(f.dir, 'hosted'), hostedModel: 'test/hosted', hostedModels, env: {} });
+  assert.equal(result.status, 'completed'); assert.equal(result.result, 5);
+  assert.equal(sent[0].model, 'test/hosted'); assert.equal(sent[0].response_format.type, 'json_schema');
+  assert.equal(result.usage.cost_usd, 0.5);
+});
+
+test('a hosted model is chosen before the calling agent; --agent and configured profiles win', async () => {
+  const { resolveModels } = await import('../src/agents.js');
+  const doc = method(step());
+  const env = { CLAUDECODE: '1' };
+  assert.deepEqual((await resolveModels(doc, {}, { hostedModel: 'x/y', env })).model, { backend: 'method', model: 'x/y' });
+  assert.deepEqual((await resolveModels(doc, {}, { hostedModel: 'x/y', env, agent: 'codex' })).model, { backend: 'codex' });
+  assert.equal((await resolveModels(doc, { models: { default: { backend: 'codex', command: 'my-codex' } } }, { hostedModel: 'x/y', env })).model.command, 'my-codex');
 });

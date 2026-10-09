@@ -1,4 +1,4 @@
-export function fail(message: any, code?: string): void;
+export function fail(message: any, code?: string, details?: {}): void;
 export function safeData(value: any, seen?: Set<any>, depth?: number): void;
 export function shape(def: any): any;
 /** Derive primitive outputs once for validators, executors, and readers. */

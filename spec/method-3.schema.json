@@ -74,6 +74,40 @@
         "$ref": "#/$defs/input"
       }
     },
+    "secrets": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[A-Z][A-Z0-9_]*$",
+        "maxLength": 80,
+        "not": {
+          "anyOf": [
+            {
+              "enum": [
+                "PATH",
+                "LANG",
+                "HOME"
+              ]
+            },
+            {
+              "pattern": "^METHOD_"
+            }
+          ]
+        }
+      },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 16000
+      },
+      "maxProperties": 50
+    },
+    "run_data": {
+      "enum": [
+        "account",
+        "device"
+      ]
+    },
     "environment": {
       "type": "object",
       "propertyNames": {

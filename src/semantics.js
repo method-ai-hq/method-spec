@@ -2,7 +2,7 @@ import { object } from './schema.js';
 import { validatePrompt } from './prompt.js';
 const reserved = new Set(['inputs', 'state', 'environment', 'run', 'constructor', 'prototype', '__proto__']);
 export const own = (obj, key) => obj !== null && typeof obj === 'object' && Object.hasOwn(obj, key);
-export function fail(message, code = 'validation') { throw Object.assign(new Error(message), { code }); }
+export function fail(message, code = 'validation', details = {}) { throw Object.assign(new Error(message), { ...details, code }); }
 export function safeData(value, seen = new Set(), depth = 0) {
   if (depth > 100) fail('Data nesting exceeds 100 levels');
   if (typeof value === 'number' && !Number.isFinite(value)) fail('Non-finite number');

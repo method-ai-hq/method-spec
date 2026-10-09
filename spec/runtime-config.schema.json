@@ -125,14 +125,6 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 16000
-          },
-          "env": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "pattern": "^[A-Z_][A-Z0-9_]*$"
-            },
-            "uniqueItems": true
           }
         },
         "required": [
@@ -299,6 +291,29 @@
             },
             "required": [
               "backend"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "backend": {
+                "const": "method"
+              },
+              "model": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 16000
+              },
+              "max_output_tokens": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              }
+            },
+            "required": [
+              "backend",
+              "model"
             ],
             "additionalProperties": false
           }

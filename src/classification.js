@@ -30,18 +30,18 @@ export const typesafeModel = 'jev-1.13.0';
  * @param {string} apiKeyEnv
  * @returns {import('./api-types.js').ClassificationProvider}
  */
-export function typesafeClassification(apiKeyEnv) {
+export function typesafeClassification(apiKeyEnv, secret = name => process.env[name]) {
   return {
     async resolve() { return { provider: 'typesafe', model: typesafeModel }; },
     async evaluate(request, signal) {
-      const key = process.env[apiKeyEnv];
+      const key = secret(apiKeyEnv);
       if (!key) fail(`Missing environment variable: ${apiKeyEnv}`, 'preflight');
       const response = await fetch('https://api.typesafe.ai/v1/systemone', {
         method: 'POST', redirect: 'error', signal, headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
         body: JSON.stringify({ model: request.model, state: request.inputs,
           questions: { classification: { type: 'choice', instructions: request.question, criteria: request.options } } }),
       });
-      if (!response.ok) { await response.body?.cancel(); fail(`Typesafe HTTP ${response.status}`, 'provider_error'); }
+      if (!response.ok) { await response.body?.cancel(); throw Object.assign(new Error(`Typesafe HTTP ${response.status}`), { code: 'provider_error', status: response.status }); }
       const data = await boundedJSON(response, classificationByteLimit);
       const answer = data?.answers?.classification;
       return { choice: answer?.choice, probabilities: answer?.probabilities, confidence: answer?.confidence,
@@ -50,10 +50,26 @@ export function typesafeClassification(apiKeyEnv) {
   };
 }
 
-/** One managed request; candidate checks and acceptance remain in the runner. */
+// A service that is briefly unavailable gets three attempts in all. A rejected request is not retried.
+const attempts = 3;
+const transient = error => error.code !== 'classification_daily_limit' && (error.status === 429 || error.status >= 500
+  || ['classification_unavailable', 'classification_timeout'].includes(error.code) || error.name === 'TimeoutError');
+
+/** One managed classification; candidate checks and acceptance remain in the runner. */
 export async function executeClassification(execution, inputs, identity, provider, context) {
   const request = { request_id: crypto.randomUUID(), model: identity.model, question: execution.question, options: execution.options, inputs };
   if (new TextEncoder().encode(JSON.stringify(request)).length > Math.min(classificationByteLimit, context.maxRequestBytes)) fail('Classification input exceeds request limit', 'input_limit');
+  for (let attempt = 1; ; attempt++) {
+    try { return await classifyOnce(request, execution, identity, provider, context); }
+    catch (error) {
+      if (attempt >= attempts || context.signal.aborted || !transient(error)) throw error;
+      await new Promise(resolve => setTimeout(resolve, 1000 * attempt * (1 + Math.random() / 4)));
+      context.guard();
+    }
+  }
+}
+
+async function classifyOnce(request, execution, identity, provider, context) {
   context.reserveRequest();
   const metadata = {kind: 'classify', request_id: request.request_id, provider: identity.provider, model: identity.model};
   await context.record('model.request', metadata);

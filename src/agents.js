@@ -1,7 +1,10 @@
 import { executable } from './io.js';
 import { fail } from './validate.js';
 
-/** Resolve once. Caller hints select a provider, never credentials or permissions. */
+/**
+ * Resolve once. Order: saved profiles, configured profiles, --agent, the host's hosted model, the calling agent,
+ * the one installed agent. Caller hints select a provider, never credentials or permissions.
+ */
 export async function resolveModels(method, config, options = {}) {
   const profiles = { ...(config.models ?? {}) };
   const names = [...new Set(Object.values(method.steps).flatMap(step => [step.do, step.check])
@@ -20,10 +23,10 @@ export async function resolveModels(method, config, options = {}) {
   // executables are explicit configuration; resumed runs were returned above.
   const genericDefault = !profiles.default ||
     (['codex', 'claude'].includes(profiles.default.backend) && !profiles.default.command);
-  if (backend && (options.agent || genericDefault)) {
-    profiles.default = profiles.default?.backend === backend
-      ? { ...profiles.default } : { backend };
-  }
+  if (options.agent && genericDefault) profiles.default = profiles.default?.backend === backend ? { ...profiles.default } : { backend };
+  // A signed-in host supplies a hosted model; it is used before a local agent that happens to be calling.
+  else if (options.hostedModel && !profiles.default) profiles.default = { backend: 'method', model: options.hostedModel };
+  else if (backend && genericDefault) profiles.default = profiles.default?.backend === backend ? { ...profiles.default } : { backend };
   const missing = names.filter(name => !profiles[name]);
   if (!missing.length) return profiles;
   let selected = profiles.default;

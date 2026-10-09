@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { isDeepStrictEqual } from 'node:util';
 import { recordRun, stepKey } from './replay.js';
 import { runMethod } from './runner.js';
-import { copyForkFiles } from './fork.js';
+import { copyOutputFiles } from './cache.js';
 import { configuration } from './defaults.js';
 import { fail, own, safeData, validateMethod, effectiveOutputs } from './validate.js';
 import { executable, executeProcess, hash, writeJSON, containedFile, readDocument } from './io.js';
@@ -210,7 +210,7 @@ export async function createCase({ methodFile, runDir, id, note, author, expect 
     }
     const accepted = Object.fromEntries(Object.entries(recorded.iterations).map(([step, list]) => [step, list.filter(Boolean).map(entry => entry.candidate)]));
     await mkdir(join(dir, 'artifacts'), { recursive: true, mode: 0o700 });
-    await copyForkFiles({ dir: runDir ?? passingRun }, recorded.method, accepted, join(dir, 'artifacts'));
+    for (const [step, iterations] of Object.entries(accepted)) for (const outputs of iterations) await copyOutputFiles(runDir ?? passingRun, recorded.method.steps[step], outputs, join(dir, 'artifacts'));
     const created = new Date();
     const value = {
       format: 'method-case/1', id, status: 'active', method_file: basename(methodFile), note: applyRedaction(note, redact), author: author ?? null,

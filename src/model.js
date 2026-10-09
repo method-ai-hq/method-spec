@@ -112,18 +112,24 @@ const adapters = {
     },
   },
 };
+// Hosted models: the same request as openrouter-chat, sent through the signed-in Method account by the host.
+adapters.method = { ...adapters['openrouter-chat'], url: null, headers: () => ({}) };
 export const directBackends = Object.keys(adapters);
+const hostedOutputTokens = 16_000;
 
 async function providerRequest(body, profile, adapter, context) {
   const text = json(body);
   if (Buffer.byteLength(text) > context.maxRequestBytes) fail('Model input exceeds request limit', 'input_limit');
-  const key = process.env[profile.api_key_env];
-  if (!key && !context.transport) fail(`Missing environment variable: ${profile.api_key_env}`, 'preflight');
+  const hosted = profile.backend === 'method';
+  const key = hosted ? null : context.secret(profile.api_key_env);
+  if (hosted && !context.hosted && !context.transport) fail('Hosted models need Method sign-in. Run method login, then run again.', 'needs_input');
+  if (!hosted && !key && !context.transport) fail(`Missing environment variable: ${profile.api_key_env}`, 'preflight');
   context.reserveRequest();
   await context.record('model.request', { backend: profile.backend, model: profile.model, request: body });
   try {
     const data = await abortable(() => context.transport
       ? context.transport(body, { signal: context.signal, backend: profile.backend })
+      : hosted ? context.hosted.request(body, context.signal)
       : (async () => {
         const response = await fetch(adapter.url, {
           method: 'POST', headers: { ...adapter.headers(key), 'content-type': 'application/json' },
@@ -136,6 +142,7 @@ async function providerRequest(body, profile, adapter, context) {
     if (Buffer.byteLength(json(data)) > context.maxOutputBytes) fail('Provider response exceeds output limit', 'output_limit');
     const usage = adapter.usage(data);
     context.usage(usage);
+    context.cost?.(object(data.usage).cost);
     await context.record('model.response', { backend: profile.backend, response: data, usage: usage ?? null });
     return data;
   } catch (error) {
@@ -153,7 +160,8 @@ export async function executeModel(execution, input, schema, context) {
   for (let turn = 0; turn < turns; turn++) {
     context.guard();
     if (execution.kind === 'agent') context.reserveAgentTurn();
-    const data = await providerRequest(adapter.body({ profile, instructions: execution.prompt, messages, schema, tools }), profile, adapter, context);
+    const settings = profile.backend === 'method' ? { max_output_tokens: hostedOutputTokens, ...profile } : profile;
+    const data = await providerRequest(adapter.body({ profile: settings, instructions: execution.prompt, messages, schema, tools }), profile, adapter, context);
     context.guard();
     const reply = adapter.read(data);
     if (reply.incomplete) fail(`Model response is not complete: ${reply.incomplete}`, 'model_incomplete');

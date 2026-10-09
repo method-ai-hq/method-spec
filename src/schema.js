@@ -5,6 +5,8 @@ const positive = { type: 'integer', minimum: 1, maximum: 2147483647 };
 // How many items of an each step may run at once.
 const width = { type: 'integer', minimum: 1, maximum: 32 };
 const keyEnv = { type: 'string', pattern: '^[A-Z_][A-Z0-9_]*$' };
+// A secret name is an environment variable name. Names that the runtime sets for scripts are reserved.
+const secretName = { type: 'string', pattern: '^[A-Z][A-Z0-9_]*$', maxLength: 80, not: { anyOf: [{ enum: ['PATH', 'LANG', 'HOME'] }, { pattern: '^METHOD_' }] } };
 export const object = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
 const map = (value) => ({ type: 'object', propertyNames: name, additionalProperties: value });
 const list = (items) => ({ type: 'array', items, uniqueItems: true });
@@ -45,6 +47,10 @@ export const methodSchema = {
   ...object({
     format: { enum: ['method/3.1', 'method/3.2', 'method/3.3'] }, name: text, goal: text, run_prompt: text, run_label: ref,
     files: list(path), inputs: map({ $ref: '#/$defs/input' }), state: map({ $ref: '#/$defs/input' }),
+    // Names and purposes only. The host supplies values to every script step; they never appear in the Method.
+    secrets: { type: 'object', propertyNames: secretName, additionalProperties: text, maxProperties: 50 },
+    // Where a signed-in host keeps run content: in the account (default) or only on the device that ran it.
+    run_data: { enum: ['account', 'device'] },
     environment: map(object({ type: { enum: ['browser', 'service', 'desktop', 'files', 'tool'] }, description: text, role: { const: 'observer' } }, ['type', 'description'])),
     steps: { ...map({ $ref: '#/$defs/step' }), minProperties: 1 },
     result: { anyOf: [ref, map(ref)] },
@@ -80,13 +86,15 @@ export const configSchema = {
     allow_local_processes: { type: 'boolean' },
     // With api_key_env the runtime calls Typesafe directly with the operator's own key.
     classification: object({ provider: {const: 'typesafe'}, model: text, api_key_env: keyEnv }, ['provider', 'model']),
-    runtimes: map(object({ command: text, args: { type: 'array', items: { type: 'string' } }, version: text, env: list({ type: 'string', pattern: '^[A-Z_][A-Z0-9_]*$' }) }, ['command', 'version'])),
+    runtimes: map(object({ command: text, args: { type: 'array', items: { type: 'string' } }, version: text }, ['command', 'version'])),
     // Direct API backends: each one has a fixed endpoint, so a profile cannot send its key to another host.
     models: map({ oneOf: [
       object({ backend: { const: 'openai-responses' }, model: text, api_key_env: keyEnv, max_output_tokens: positive, reasoning_effort: { enum: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] } }, ['backend', 'model', 'api_key_env', 'max_output_tokens']),
       object({ backend: { const: 'anthropic-messages' }, model: text, api_key_env: keyEnv, max_output_tokens: positive, effort: { enum: ['low', 'medium', 'high', 'xhigh', 'max'] } }, ['backend', 'model', 'api_key_env', 'max_output_tokens']),
       object({ backend: { const: 'openrouter-chat' }, model: text, api_key_env: keyEnv, max_output_tokens: positive, reasoning_effort: { enum: ['minimal', 'low', 'medium', 'high'] } }, ['backend', 'model', 'api_key_env', 'max_output_tokens']),
-      object({ backend: { enum: ['codex', 'claude'] }, command: text, model: text, reasoning_effort: text }, ['backend'])] }),
+      object({ backend: { enum: ['codex', 'claude'] }, command: text, model: text, reasoning_effort: text }, ['backend']),
+      // A hosted model through the signed-in Method account. The host supplies the transport; there is no key.
+      object({ backend: { const: 'method' }, model: text, max_output_tokens: positive }, ['backend', 'model'])] }),
     tools: map({oneOf: [object({ description: text, in: map({ $ref: `${methodSchema.$id}#/$defs/data` }), out: map({ $ref: `${methodSchema.$id}#/$defs/data` }), run, effects: list(name) }), object({description: text, connection: name, tool: text, parameters: {type:'object'}, effects: list(name)})]}),
     environment: map({ type: 'string' }),
     rubric: object({ judge_runs: { type: 'integer', minimum: 1, maximum: 9 }, classify_threshold: { type: 'number', minimum: 0.5, maximum: 1 }, max_value_bytes: positive }, []),

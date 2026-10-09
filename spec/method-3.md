@@ -109,19 +109,34 @@ In Method 3.2, give each script action a name and purpose that describe its rule
 
 Split scripts where retrying one operation could repeat another completed action. Keep calculations together when they serve one decision. Return the decision rule or external receipt as inspectable output. For external writes, describe how to check uncertain completion and use the service's duplicate-prevention key when available.
 
-Script actions and checks receive `METHOD_OPERATION_ID`: `mop_` followed by SHA-256 of the JSON array `[execution_id, step_id, iteration, phase]`, where phase is `action` or `check`. The saved execution ID is a UUID. Explicit retries reuse this operation ID; new runs, iterations, and phases have distinct IDs. The variable is reserved and cannot be supplied through runtime environment configuration. Tool call identities keep their existing behavior.
+Script actions and checks receive `METHOD_OPERATION_ID`: `mop_` followed by SHA-256 of the JSON array `[execution_id, step_id, iteration, phase]`, where phase is `action` or `check`. The saved execution ID is a UUID. Explicit retries reuse this operation ID; new runs, iterations, and phases have distinct IDs. The variable is reserved and cannot be declared as a secret. Tool call identities keep their existing behavior.
 
-Runtime profiles name an executable, optional fixed arguments, a declared version, and optional environment-variable names. Commands use argument arrays without shell expansion. Node, Python, or another JSON-speaking executable can be registered.
+Runtime profiles name an executable, optional fixed arguments, and a declared version. Commands use argument arrays without shell expansion. Node, Python, or another JSON-speaking executable can be registered.
 
-A script reads one JSON object on standard input, writes one JSON output object on standard output, and sends diagnostics to standard error. It runs from a saved copy of the bundle. Scripts receive PATH, LANG, METHOD_OUTPUT_DIR, METHOD_ENVIRONMENT (the configured connection map as JSON), explicitly named environment variables, and METHOD_PROGRESS_FD when a progress pipe is attached. Missing explicit variables fail. The executor hashes the resolved runtime binary and records the operator's declared version.
+A script reads one JSON object on standard input, writes one JSON output object on standard output, and sends diagnostics to standard error. It runs from a saved copy of the bundle. Scripts receive PATH, LANG, METHOD_OUTPUT_DIR, METHOD_ENVIRONMENT (the configured connection map as JSON), the declared secrets, and METHOD_PROGRESS_FD when a progress pipe is attached. The executor hashes the resolved runtime binary and records the operator's declared version.
 
-The operator must set `allow_local_processes: true`. These are trusted local processes, **not an OS sandbox**. They can access resources allowed to the operating-system user. A script can call a trained model or an external API, but those internal calls are not metered or restricted by the executor's model-request counter. Use managed `call`/`agent` steps for measured model use.
+The operator must set `allow_local_processes: true`. These are trusted local processes, **not an OS sandbox**. They can access resources allowed to the operating-system user.
+
+**Model requests are steps.** Each model or classifier request is its own `call`, `agent`, or `classify` step, with its prompt in the Method, so that it is recorded and can be changed and compared. Preflight refuses a Method whose script files (declared `files` and entrypoints) name a model API host (`openrouter.ai`, `api.openai.com`, `api.anthropic.com`, `api.typesafe.ai`, `generativelanguage.googleapis.com`, `api.deepseek.com`, `api.groq.com`, `api.mistral.ai`, `api.together.xyz`, `api.fireworks.ai`, `api.cohere.com`) or import a model client library (`openai`, `anthropic`, `@anthropic-ai/sdk`, `litellm`, `langchain`, `@ai-sdk/*`, and similar), with code `model_call_in_script`. Fixture files are not checked. A host that a script builds at run time is not found; the check is not a sandbox.
+
+#### Secrets
+
+A Method declares the secrets that its scripts need by name and purpose. It never holds their values:
+
+```yaml
+secrets:
+  ARCHIVE_TOKEN: Read-only token for the post archive.
+```
+
+Names use capital letters, digits, and underscores. `PATH`, `LANG`, `HOME`, and names that begin with `METHOD_` are reserved. The host supplies the values (runtime option `secrets`); without it, the process environment does. Every script step receives every declared secret. A missing value fails preflight with `missing_secret` and lists the names in `missing`; no step runs. Model profiles and classification find `api_key_env` in the same way.
+
+`run_data: account` (the default) or `run_data: device` tells a signed-in host where to keep run content. The runtime keeps all run records locally either way.
 
 On timeout or process exit, the runner kills the process group on POSIX systems. The first release is tested on macOS and Linux. Windows process-tree termination and runtime compatibility are not claimed.
 
 ### Models and agents
 
-Explicit model profiles take priority. Missing profiles use an explicit `--agent`, the configured default, the identified calling coding agent, or the sole installed supported agent. If both Codex and Claude are available without a choice, execution requests input. Both use their normal sign-in. The selected profiles remain fixed on resume. Codex starts a fresh process with approval and sandbox prompts disabled; it is trusted local execution. A supplied configuration must allow local processes. Without a config file, the CLI enables that default local path.
+Explicit model profiles take priority. Missing profiles use an explicit `--agent`, the configured default, the host's hosted model (`hostedModel`), the identified calling coding agent, or the sole installed supported agent. If both Codex and Claude are available without a choice, execution requests input. Both use their normal sign-in. The selected profiles remain fixed on resume. Codex starts a fresh process with approval and sandbox prompts disabled; it is trusted local execution. A supplied configuration must allow local processes. Without a config file, the CLI enables that default local path.
 
 The temporary Method MCP bridge exposes only the step's declared Method tools. Codex also retains its built-in and installed tools. Empty `tools` does not mean that Codex has no tools. Both `call` and `agent` use a Codex process with a structured final output on this backend. Internal Codex model requests and tools are not governed by Method's direct API request/turn counters.
 
@@ -136,8 +151,9 @@ Three direct providers are available. Each profile specifies the exact model ide
 | `openai-responses` | OpenAI Responses API | `reasoning_effort`: none, minimal, low, medium, high, xhigh |
 | `anthropic-messages` | Anthropic Messages API | `effort`: low, medium, high, xhigh, max |
 | `openrouter-chat` | OpenRouter chat completions | `reasoning_effort`: minimal, low, medium, high |
+| `method` | The host's `hostedModels.request`: the same request as `openrouter-chat`, sent through the signed-in Method account. It needs no key; `max_output_tokens` is optional (16000). | — |
 
-The output schema goes to each provider's strict structured output. OpenRouter requests require providers that support the requested parameters and name no fallback models. Anthropic tool turns keep the assistant content, including thinking blocks, unchanged. `model.request`, `model.response`, and `model.error` record the backend. Usage is recorded as input and output tokens; Anthropic input includes cache reads and writes.
+The output schema goes to each provider's strict structured output. OpenRouter requests require providers that support the requested parameters and name no fallback models. Anthropic tool turns keep the assistant content, including thinking blocks, unchanged. `model.request`, `model.response`, and `model.error` record the backend. Usage is recorded as input and output tokens; Anthropic input includes cache reads and writes. A response that reports `usage.cost` adds it to the summary's `usage.cost_usd`.
 
 `call` sends one request with a strict JSON output schema and no tools. The runner validates the response locally. It does not issue repair calls or transport retries.
 
@@ -361,7 +377,7 @@ File outputs use `{path, sha256}`. Write them beneath `METHOD_OUTPUT_DIR`; paths
 
 Generic run records are private local artifacts by default (directory mode 0700, files 0600). Known configured environment-secret values are redacted from traces and result files when at least four characters long. This is a convenience, not a comprehensive secret detector. State checkpoints contain actual state values; keep state and inputs free of credentials. Do not publish raw run directories without review.
 
-Failures do not trigger automatic retries. Resume with the original method and configuration:
+Failures do not trigger automatic retries, except that a classification the service could not answer (HTTP 429 or 5xx, or an unavailable or timed-out service) is tried three times in all. A failed run's summary gives `code`, `error`, a `fix` sentence, and, when a step was running, `failed_step`, `iteration`, and the last 20 lines of its `diagnostics`. To continue the same run with its original files, resume:
 
 ```sh
 method run task.method --config runtime.json --run-dir runs/example --resume
@@ -377,27 +393,11 @@ A process lock prevents concurrent resume. An abruptly killed process can leave 
 
 For new evidence or changed inputs, use a new run. `--state prior-run/state.json` imports state but starts the method from the beginning. An application ledger of evidence hashes can select only changed work. This is separate from resuming a stopped run.
 
-### Fork a run
+### Reuse unchanged steps
 
-When a fix changes only steps that a stopped or completed run did not accept, start a new run that reuses the unchanged accepted steps:
+A host can pass earlier run directories as `cacheFrom`. Before an iteration runs, the runner computes its key: the step definition without display text (`name`, `purpose`, `reading`), the resolved inputs (including the `each` item), the model profiles, classification setup, tool definitions, and runtime profiles that it uses, and, for a step that runs a script, every bundle file. When an earlier run accepted an iteration with the same key, the runner copies its declared file outputs (and the assets of a `method-website` file), checks their hashes, and accepts its outputs without executing anything. Its `step.started` and `step.accepted` events have `reused_from`, and the summary's `reused` counts the reused iterations of each step.
 
-```sh
-method run task.method --config runtime.json --from-run runs/example --reuse prepare,write
-```
-
-The fork gets a new run directory and a new bundle from the current files. It keeps the parent's inputs and initial state unless `--inputs` or `--state` supplies new values. Each listed step is reused only when all of these are true:
-
-- The parent accepted all of its iterations, or skipped it.
-- Every step it depends on is also listed.
-- Its definition is unchanged. `name` and `reading` are display text and do not count.
-- The `inputs`, `environment`, `state`, and `run` values that it references are equal. A step that reads state is not reused when any step changes state. A step that references `run.started_at` is not reused.
-- It does not change state or an external system.
-- Its model profiles, classification setup, tool definitions, script and tool entrypoint files, and runtime profiles are unchanged.
-
-Otherwise the run fails with `fork_mismatch` and gives the reason. The runner copies the declared file outputs of reused steps (and the assets of a `method-website` file) into the new `artifacts/` and checks their hashes. It does not copy files that a step wrote without declaring them.
-
-`run.started`, `checkpoint.json`, `manifest.json`, and the summary record `forked_from`: the parent run directory, execution ID, executor version, and Method hash; each reused step with its iteration count and output hash; and `changed_files`, the bundle files that differ from the parent. `file_evidence` is `bundle` when no bundle file changed. It is `entrypoints` when a file changed: the runner checked the entrypoints of the reused steps, but it does not trace the helper files that those entrypoints import. A `step.imported` event records each reused step and its outputs. Resume a stopped fork with `--resume` alone; it keeps its `forked_from` record.
-
+A step is never reused when it has `ask` or `effects`, changes state or an external system, or uses a tool with effects. A step that reads `run.started_at` gets new inputs on each run, so it runs again. `fresh: true` runs every step; `fresh: [STEP]` runs those steps again even when a match exists. A fix to one step therefore needs no special command: run the Method again, and the steps whose definition and inputs did not change are reused. Steps after a changed step are reused when their inputs are the same as before.
 
 ## Validation evidence
 

@@ -113,7 +113,8 @@ test('operation IDs distinguish phases and survive failed-check retry',async t=>
   assert.match(started[0].operation_id,/^mop_[a-f0-9]{64}$/);
   const g=await fixture(t,m,{'action.mjs':'console.log(JSON.stringify({id:process.env.METHOD_OPERATION_ID}))','check.mjs':"console.log(JSON.stringify({status:'pass',reason:'ok',evidence:[]}))"});
   const other=await g.run({inputs:{}});assert.notEqual(other.result,started[0].operation_id);
-  assert.throws(()=>validateConfig({runtimes:{node:{command:'node',version:'22',env:['METHOD_OPERATION_ID']}}}),/reserved/);
+  // The runtime sets METHOD_* variables for scripts; a secret cannot replace them.
+  assert.throws(()=>validateMethod({...m,secrets:{METHOD_OPERATION_ID:'Reserved.'}}));
 });
 
 test('explicit cancellation stops classification without accepting a late answer', async t=>{
@@ -136,4 +137,12 @@ test('script iterations receive distinct stable operation IDs',async t=>{
   const resumed=await f.run({resume:true,inputs:undefined});
   assert.deepEqual(resumed.result,result.result);
   assert.equal((await f.events()).filter(event=>event.event==='process.started').length,2);
+});
+test('a classification that the service briefly cannot answer is tried three times; a rejected one is not', async t=>{
+  const f=await fixture(t); let calls=0;
+  f.provider.evaluate=async()=>{ if(++calls<3) throw Object.assign(new Error('503: unavailable'),{status:503,code:'classification_unavailable'}); return answer(); };
+  assert.equal((await f.run()).status,'completed'); assert.equal(calls,3);
+  const g=await fixture(t); calls=0;
+  g.provider.evaluate=async()=>{ calls++; throw Object.assign(new Error('409: version'),{status:409,code:'classification_version_unavailable'}); };
+  assert.equal((await g.run()).status,'failed'); assert.equal(calls,1);
 });

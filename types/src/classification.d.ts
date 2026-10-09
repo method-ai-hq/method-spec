@@ -8,8 +8,8 @@ export function validateClassification(answer: any, options: any, identity: any)
  * @param {string} apiKeyEnv
  * @returns {import('./api-types.js').ClassificationProvider}
  */
-export function typesafeClassification(apiKeyEnv: string): import("./api-types.js").ClassificationProvider;
-/** One managed request; candidate checks and acceptance remain in the runner. */
+export function typesafeClassification(apiKeyEnv: string, secret?: (name: any) => string): import("./api-types.js").ClassificationProvider;
+/** One managed classification; candidate checks and acceptance remain in the runner. */
 export function executeClassification(execution: any, inputs: any, identity: any, provider: any, context: any): Promise<{
     choice: any;
     probabilities: any;

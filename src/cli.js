@@ -16,7 +16,6 @@ node src/cli.js case retire METHOD ID --reason TEXT [--by ID]
 node src/cli.js case list METHOD
 
 Resume: --run-dir DIR --resume [--retry STEP:ITERATION] [--human JSON].
-Fork: --from-run PARENT_DIR --reuse STEP[,STEP] starts a new run that reuses those accepted steps when nothing they depend on changed.
 Exit codes: 0 completed, 1 failed, 2 needs input, 3 unconfirmed (an external change could not be confirmed).
 observe runs the observations that are due for finished runs with open effects. It never repeats an action.
 test replays recorded cases: unchanged steps return their recorded outputs, changed steps run, and a changed step that acts on an external system makes the case unverifiable.
@@ -27,7 +26,7 @@ Use --version for the runtime version. Documentation: spec/method-3.md
 try {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
     agent: { type: 'string' }, help: { type: 'boolean' }, version: { type: 'boolean' }, config: { type: 'string' }, inputs: { type: 'string' }, state: { type: 'string' }, resume: { type: 'boolean' }, retry: { type: 'string', multiple: true }, human: { type: 'string' },
-    'run-dir': { type: 'string' }, 'from-run': { type: 'string' }, reuse: { type: 'string', multiple: true },
+    'run-dir': { type: 'string' },
     pending: { type: 'string', multiple: true }, case: { type: 'string', multiple: true }, baseline: { type: 'string' }, new: { type: 'string', multiple: true }, cases: { type: 'string' },
     run: { type: 'string' }, id: { type: 'string' }, note: { type: 'string' }, expect: { type: 'string' }, observations: { type: 'string' }, redact: { type: 'string' },
     runs: { type: 'string' }, 'min-pass': { type: 'string' }, rubric: { type: 'string', multiple: true }, ref: { type: 'string' }, context: { type: 'string', multiple: true }, 'passing-run': { type: 'string' }, supersedes: { type: 'string', multiple: true }, author: { type: 'string' }, reason: { type: 'string' }, by: { type: 'string' },
@@ -89,7 +88,7 @@ try {
     const stop = () => controller.abort(Object.assign(new Error('Interrupted by operator'), { code: 'interrupted' }));
     process.once('SIGINT', stop); process.once('SIGTERM', stop);
     const result = await runMethod(file, config, {
-      agent: values.agent, inputs: await json(values.inputs), state: await json(values.state), runDir: values['run-dir'], resume: values.resume, retry: values.retry, fromRun: values['from-run'], reuse: values.reuse?.flatMap(x => x.split(',')).map(x => x.trim()).filter(Boolean), human: await json(values.human), signal: controller.signal,
+      agent: values.agent, inputs: await json(values.inputs), state: await json(values.state), runDir: values['run-dir'], resume: values.resume, retry: values.retry, human: await json(values.human), signal: controller.signal,
     });
     process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
     console.log(JSON.stringify({ status: result.status, code: result.code, run_dir: result.run_dir, elapsed_ms: result.elapsed_ms, model_requests: result.model_requests, ...(result.effects ? { effects: { pending: result.effects.pending, confirmed: result.effects.confirmed, unrefuted: result.effects.unrefuted, contradicted: result.effects.contradicted, unknown: result.effects.unknown, next_observation_at: result.effects.next_observation_at } } : {}) }));
