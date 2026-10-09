@@ -15,3 +15,4 @@ export { parseDocumentValue, MethodValidationError, shapeErrors } from './docume
 
 export { effectiveOutputs } from './semantics.js';
 /** @typedef {import('./api-types.js').ClassificationProvider} ClassificationProvider */
+/** @typedef {import('./api-types.js').HostedModels} HostedModels */

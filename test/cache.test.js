@@ -57,13 +57,17 @@ test('a new run reuses unchanged accepted steps and runs the fixed one', async t
   assert.match(failed.fix, /Unchanged steps are reused/);
   await f.write('finish.mjs', fixed);
   const result = await f.run();
-  // finish.mjs is in the bundle, so the script step that shares it runs again; the model step does not.
+  // finish.mjs is only finish's entrypoint, so prepare and the model step are reused.
   assert.equal(result.status, 'completed'); assert.equal(result.result, 42);
   assert.equal(f.calls(), 1);
-  assert.deepEqual(result.reused, { write: 1 });
-  assert.deepEqual(await started(result.run_dir), ['prepare', 'finish']);
+  assert.deepEqual(result.reused, { prepare: 1, write: 1 });
+  assert.deepEqual(await started(result.run_dir), ['finish']);
+  // A helper file that is no step's entrypoint could be imported by any script, so script steps run again.
+  await f.write('helper.mjs', 'export const x = 1;');
+  const helper = await f.run({}, { ...method(), files: ['helper.mjs'] });
+  assert.deepEqual(helper.reused, { write: 1 });
   assert.equal(await readFile(join(result.run_dir, 'artifacts', 'note.txt'), 'utf8'), 'note');
-  const again = await f.run();
+  const again = await f.run({}, { ...method(), files: ['helper.mjs'] });
   assert.deepEqual(again.reused, { prepare: 1, write: 1, finish: 1 }); assert.equal(again.invocations, 0);
 });
 

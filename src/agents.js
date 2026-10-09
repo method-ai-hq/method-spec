@@ -23,7 +23,7 @@ export async function resolveModels(method, config, options = {}) {
   // executables are explicit configuration; resumed runs were returned above.
   const genericDefault = !profiles.default ||
     (['codex', 'claude'].includes(profiles.default.backend) && !profiles.default.command);
-  if (options.agent && genericDefault) profiles.default = profiles.default?.backend === backend ? { ...profiles.default } : { backend };
+  if (options.agent) profiles.default = profiles.default?.backend === backend ? { ...profiles.default } : { backend };
   // A signed-in host supplies a hosted model; it is used before a local agent that happens to be calling.
   else if (options.hostedModel && !profiles.default) profiles.default = { backend: 'method', model: options.hostedModel };
   else if (backend && genericDefault) profiles.default = profiles.default?.backend === backend ? { ...profiles.default } : { backend };
@@ -35,7 +35,7 @@ export async function resolveModels(method, config, options = {}) {
     if (!backend) {
       const found = [];
       for (const name of ['codex', 'claude']) { try { await executable(name); found.push(name); } catch {} }
-      if (found.length !== 1) fail(found.length ? 'Both Codex and Claude are available. Supply --agent codex or --agent claude.' : 'Sign in to Codex or Claude Code on this computer, then run again.', 'needs_input');
+      if (found.length !== 1) fail(found.length ? 'Both Codex and Claude are available. Supply --agent codex or --agent claude.' : 'Sign in to Method with method login to use hosted models, or sign in to Codex or Claude Code on this computer, then run again.', 'needs_input');
       backend = found[0];
     }
     selected = { backend };

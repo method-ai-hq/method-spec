@@ -17,22 +17,30 @@ export function cacheable(step, tools) {
   return [step.do, step.check].filter(exec => exec?.kind).every(exec => executionTools(exec, tools).every(name => !tools[name]?.effects?.length));
 }
 
-/**
- * Everything that determines what an iteration returns: its definition, its resolved inputs, and what it executes.
- * A script step's key covers every bundle file, because the runtime does not trace which files a script imports.
- */
-export function iterationKey({ step, bindings, iteration, profiles, config, runtimeInfo, manifest }) {
-  const tools = config.tools ?? {};
+/** Scripts that a step executes: its own run actions and checks, and the scripts of the tools it uses. */
+function stepScripts(step, tools) {
   const execs = [step.do, step.check].filter(exec => exec?.kind);
   const used = [...new Set(execs.flatMap(exec => executionTools(exec, tools)))].sort();
-  const scripts = [...execs.filter(exec => exec.kind === 'run'), ...used.map(name => tools[name].run).filter(Boolean)];
+  return { execs, used, scripts: [...execs.filter(exec => exec.kind === 'run'), ...used.map(name => tools[name].run).filter(Boolean)] };
+}
+
+/**
+ * Everything that determines what an iteration returns: its definition, its resolved inputs, and what it executes.
+ * A script step's key covers its own entrypoints and every bundle file that is not another step's entrypoint,
+ * because the runtime does not trace which helper files a script imports.
+ */
+export function iterationKey({ method, step, bindings, iteration, profiles, config, runtimeInfo, manifest }) {
+  const tools = config.tools ?? {};
+  const { execs, used, scripts } = stepScripts(step, tools);
+  const own = new Set(scripts.map(script => script.entrypoint));
+  const others = new Set(Object.values(method.steps).flatMap(other => stepScripts(other, tools).scripts.map(script => script.entrypoint)).filter(file => !own.has(file)));
   return hash({
     key: 'method-step/1', step: executable(step), bindings, iteration: step.each ? null : iteration,
     models: execs.filter(exec => exec.model).map(exec => profiles[exec.model]),
     classification: execs.some(exec => exec.kind === 'classify') ? config.classification ?? null : null,
     tools: used.map(name => [name, tools[name]]),
     runtimes: [...new Set(scripts.map(script => script.runtime))].sort().map(name => runtimeInfo[name] ?? null),
-    bundle: scripts.length ? manifest : null,
+    bundle: scripts.length ? Object.fromEntries(Object.entries(manifest).filter(([file]) => !others.has(file))) : null,
   });
 }
 

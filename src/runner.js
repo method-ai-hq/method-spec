@@ -294,7 +294,7 @@ async function executeRun(file, config, options) {
         }
         const bindings = Object.fromEntries(Object.entries(step.in ?? {}).map(([k, ref]) => [k, structuredClone(resolve(root, ref))]));
         if (eachEntry) bindings[eachEntry[0]] = collection[iteration];
-        const key = cacheable(step, tools) ? iterationKey({ step, bindings, iteration, profiles, config, runtimeInfo, manifest }) : null;
+        const key = cacheable(step, tools) ? iterationKey({ method, step, bindings, iteration, profiles, config, runtimeInfo, manifest }) : null;
         const hit = key && !fresh.has(id) ? cache.get(key) : undefined;
         if (hit) {
           // An earlier run accepted this exact iteration. Its outputs and files are reused; nothing executes.

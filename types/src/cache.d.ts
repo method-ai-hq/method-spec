@@ -6,9 +6,11 @@
 export function cacheable(step: any, tools: Record<string, any>): boolean;
 /**
  * Everything that determines what an iteration returns: its definition, its resolved inputs, and what it executes.
- * A script step's key covers every bundle file, because the runtime does not trace which files a script imports.
+ * A script step's key covers its own entrypoints and every bundle file that is not another step's entrypoint,
+ * because the runtime does not trace which helper files a script imports.
  */
-export function iterationKey({ step, bindings, iteration, profiles, config, runtimeInfo, manifest }: {
+export function iterationKey({ method, step, bindings, iteration, profiles, config, runtimeInfo, manifest }: {
+    method: any;
     step: any;
     bindings: any;
     iteration: any;

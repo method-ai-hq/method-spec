@@ -6,6 +6,7 @@ export type RuntimeConfig = import("./api-types.js").RuntimeConfig;
 export type RunOptions = import("./api-types.js").RunOptions;
 export type RunResult = import("./api-types.js").RunResult;
 export type ClassificationProvider = import("./api-types.js").ClassificationProvider;
+export type HostedModels = import("./api-types.js").HostedModels;
 export { parsePrompt, validatePrompt, renderPrompt } from "./prompt.js";
 export { observeRun, pendingRuns } from "./observe.js";
 export { createCase, retireCase, listCases, testCase, testSuite, outcomeOfRun, defaultCasesDir } from "./cases.js";
