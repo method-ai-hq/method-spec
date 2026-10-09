@@ -342,3 +342,12 @@ console.log(JSON.stringify({path:a.mode==="nothing"?"No new notes, nothing saved
   const nothing = await run('nothing');
   assert.equal(nothing.status, 'completed'); assert.equal(nothing.effects.unchanged, 1);
 });
+
+test('a returned folder counts as changed when a file inside it changed', async () => {
+  const { observeFiles } = await import('../src/effects.js');
+  const root = '/data/trials', at = new Date().toISOString();
+  const seen = observeFiles({ key: 'k', connection: 'trials', root, before: {}, after: { 't1/report.json': 'a' }, outputs: { trial: '/data/trials/t1' }, completedAt: at });
+  assert.equal(seen.verdict, 'confirmed');
+  const empty = observeFiles({ key: 'k', connection: 'trials', root, before: {}, after: { 't2/report.json': 'a' }, outputs: { trial: '/data/trials/t1' }, completedAt: at });
+  assert.equal(empty.verdict, 'contradicted');
+});

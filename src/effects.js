@@ -192,7 +192,8 @@ export function observeFiles({ key, connection, root, before, after, outputs, co
       if (rel && !rel.startsWith('..') && !isAbsolute(rel)) { claimed.push(rel.split(sep).join('/')); break; }
     }
   }
-  const missing = [...new Set(claimed)].filter(file => !touched.has(file));
+  // A returned folder counts as changed when a file inside it changed.
+  const missing = [...new Set(claimed)].filter(file => !touched.has(file) && ![...touched].some(path => path.startsWith(file + '/')));
   const list = changed.slice(0, 50);
   if (missing.length) return { ...base, verdict: 'contradicted', changed: list, evidence: missing,
     reason: `The step returned ${missing.join(', ')}, but ${missing.length === 1 ? 'that file' : 'those files'} did not change in ${connection}.` };
