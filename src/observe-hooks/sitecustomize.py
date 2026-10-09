@@ -107,6 +107,15 @@ def _method_observe():
         if path is not None:
             note('reads', path)
 
+    def list_path(args):
+        # Python's import system lists each folder on the import path; only the script's own listings count.
+        frame = sys._getframe(1)
+        while frame and frame.f_code.co_filename == __file__:
+            frame = frame.f_back
+        if frame and 'importlib' in frame.f_code.co_filename:
+            return
+        read_path(args)
+
     def copy(args):
         source, dest = path_of(args[0]), path_of(args[1])
         if source:
@@ -126,8 +135,8 @@ def _method_observe():
         'os.spawn': lambda a: note('runs', program(a[1], a[2])),
         'os.putenv': lambda a: note('env', os.fsdecode(a[0])),
         'os.unsetenv': lambda a: note('env', os.fsdecode(a[0])),
-        'os.listdir': read_path,
-        'os.scandir': read_path,
+        'os.listdir': list_path,
+        'os.scandir': list_path,
         'os.remove': write_path(0),
         'os.rmdir': write_path(0),
         'os.mkdir': write_path(0),

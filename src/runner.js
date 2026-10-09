@@ -310,6 +310,8 @@ async function executeRun(file, config, options) {
           if (hit.observed) (observed[id] ??= [])[iteration] = hit.observed;
           keys[key] = [id, iteration]; reused[id] = (reused[id] ?? 0) + 1;
           await record('step.started', { step: id, iteration, inputs: bindings, state_before: state, external_effects_possible: false, reused_from: hit.dir });
+          // The key covers the step and its inputs, so the prompt is the one that the earlier run sent. The run record shows it.
+          if (['call', 'agent'].includes(step.do?.kind)) await record('prompt.rendered', { step: id, iteration, phase: 'action', template: step.do.prompt, rendered: renderPrompt(step.do.prompt, bindings), reused_from: hit.dir });
           await record('step.accepted', { step: id, iteration, outputs: hit.outputs, state, check: { status: 'unchecked', reason: 'Reused from an earlier run', evidence: [] }, reused_from: hit.dir, ...(hit.observed ? { observed_effects: hit.observed } : {}) });
           if (eachEntry) for (const name of Object.keys(collected)) collected[name][iteration] = hit.outputs[name];
           else Object.assign(root, hit.outputs);

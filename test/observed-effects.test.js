@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -16,7 +16,7 @@ const record = { type: 'record', description: 'What the script saw.', fields: {
   argv: { type: 'list', description: 'Arguments.', items: { type: 'text', description: 'One argument.' } },
   hidden: { type: 'boolean', description: 'The observation variables are hidden.' }, token: { type: 'boolean', description: 'The secret was set.' } } };
 const method = (runtime, entrypoint, extra = {}) => ({
-  format: 'method/3.3', name: 'Observed', goal: 'Record what a script did.', files: ['data.txt'],
+  format: 'method/3.3', name: 'Observed', goal: 'Record what a script did.', files: ['data.txt', 'helpers/__init__.py', 'helpers/util.py'],
   secrets: { ARCHIVE_TOKEN: 'Read-only archive token.' },
   inputs: { port: { type: 'number', description: 'Local server port.' } },
   steps: { act: { name: 'Act', purpose: 'Read, write, call, and spawn.', in: { port: 'inputs.port' }, do: { kind: 'run', runtime, entrypoint, args: ['first', 'second'] }, out: { seen: record } } },
@@ -28,6 +28,7 @@ const config = {
 };
 const scripts = {
   'act.py': `import json, os, subprocess, sys, urllib.request
+from helpers import util
 port = json.load(sys.stdin)['port']
 open('data.txt').read()
 with open(os.path.join(os.environ['METHOD_OUTPUT_DIR'], 'reports', 'out.txt'), 'w') as f: f.write('x')
@@ -55,7 +56,8 @@ async function fixture(t) {
   const server = createServer((request, response) => response.end('ok')).listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
   t.after(async () => { server.close(); await rm(dir, { recursive: true, force: true }); });
-  for (const [name, source] of Object.entries({ ...scripts, 'data.txt': 'data' })) await writeFile(join(dir, name), source);
+  await mkdir(join(dir, 'helpers'), { recursive: true });
+  for (const [name, source] of Object.entries({ ...scripts, 'data.txt': 'data', 'helpers/__init__.py': '', 'helpers/util.py': 'X = 1\n' })) await writeFile(join(dir, name), source);
   const port = server.address().port;
   let runs = 0;
   const dirs = [];

@@ -62,6 +62,11 @@ test('a new run reuses unchanged accepted steps and runs the fixed one', async t
   assert.equal(f.calls(), 1);
   assert.deepEqual(result.reused, { prepare: 1, write: 1 });
   assert.deepEqual(await started(result.run_dir), ['finish']);
+  // The reused model step still shows the prompt that the earlier run sent.
+  const prompts = async dir => (await readFile(join(dir, 'events.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse)
+    .filter(e => e.event === 'prompt.rendered' && e.step === 'write').map(({ phase, template, rendered }) => ({ phase, template, rendered }));
+  assert.deepEqual(await prompts(result.run_dir), await prompts(failed.run_dir));
+  assert.equal((await prompts(result.run_dir)).length, 1);
   // A helper file that is no step's entrypoint could be imported by any script, so script steps run again.
   await f.write('helper.mjs', 'export const x = 1;');
   const helper = await f.run({}, { ...method(), files: ['helper.mjs'] });
