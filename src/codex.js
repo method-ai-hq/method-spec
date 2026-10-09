@@ -1,3 +1,4 @@
+import { modelName } from './semantics.js';
 import { startMethodTools } from './method-tools.js';
 export { startMethodTools } from './method-tools.js';
 import { mkdir, mkdtemp, readFile, writeFile, stat } from 'node:fs/promises';
@@ -7,7 +8,7 @@ import { fail, safeData, assertSchema } from './validate.js';
 import { codexProgress } from './progress.js';
 
 export async function executeCodex(execution, input, schema, context) {
-  const profile = context.models[execution.model];
+  const profile = context.models[modelName(execution)];
   const command = await executable(profile.command ?? 'codex');
   await mkdir(join(context.artifacts, 'codex'), { recursive: true, mode: 0o700 });
   const directory = await mkdtemp(join(context.artifacts, 'codex', 'attempt-'));

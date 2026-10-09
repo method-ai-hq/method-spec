@@ -1,7 +1,10 @@
 export { runMethod } from "./runner.js";
 export { judgeRubric } from "./rubric.js";
 export { readDocument } from "./io.js";
+export { methodProfiles } from "./agents.js";
 export { effectiveOutputs } from "./semantics.js";
+export type Issue = import("./api-types.js").Issue;
+export type IssueOptions = import("./api-types.js").IssueOptions;
 export type RuntimeConfig = import("./api-types.js").RuntimeConfig;
 export type RunOptions = import("./api-types.js").RunOptions;
 export type RunResult = import("./api-types.js").RunResult;
@@ -14,4 +17,4 @@ export { recordRun, stepKey } from "./replay.js";
 export { effectSummary, readLedger } from "./effects.js";
 export { validateMethod, validateConfig, dataSchema, outputSchema } from "./validate.js";
 export { methodSchema, configSchema } from "./schema.js";
-export { parseDocumentValue, MethodValidationError, shapeErrors } from "./document.js";
+export { parseDocumentValue, MethodValidationError, shapeErrors, methodIssues, documentForDigest } from "./document.js";

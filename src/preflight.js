@@ -1,28 +1,12 @@
+import { modelName } from './semantics.js';
 import { executionTools } from './tool-connections.js';
-import { resolveModels } from './agents.js';
+import { resolveModels, packageModels } from './agents.js';
 import { configuration } from './defaults.js';
 import { readFile, stat } from 'node:fs/promises';
 import { validateMethod, validateConfig, own, fail } from './validate.js';
 import { executable, hash, relativeFile, containedFile } from './io.js';
 import { fixtureFiles } from './effects.js';
 import { directBackends } from './model.js';
-
-// A script that calls a model hides prompts from the Method. These hosts and libraries are model APIs.
-const modelHosts = ['openrouter.ai', 'api.openai.com', 'api.anthropic.com', 'api.typesafe.ai', 'generativelanguage.googleapis.com',
-  'api.deepseek.com', 'api.groq.com', 'api.mistral.ai', 'api.together.xyz', 'api.fireworks.ai', 'api.cohere.com'];
-const modelImports = [
-  /^\s*(?:from|import)\s+(openai|anthropic|litellm|langchain[a-z_]*|google\.generativeai|mistralai|cohere|groq)\b/m,
-  /(?:from\s+|require\(\s*|import\(\s*)['"](openai|@anthropic-ai\/sdk|@openrouter\/[^'"]+|langchain|@langchain\/[^'"]+|@ai-sdk\/[^'"]+|@google\/generative-ai|groq-sdk)['"]/,
-];
-// A host counts only with a request endpoint, so a script that manages keys or reads usage is not refused.
-const modelEndpoint = /completions|\/messages|\/responses|systemone|generateContent|embeddings/;
-/** The first model API that a script file uses, or null. */
-export function modelCall(text) {
-  const host = modelHosts.find(name => text.includes(name));
-  if (host && modelEndpoint.test(text)) return host;
-  for (const pattern of modelImports) { const match = pattern.exec(text); if (match) return match[1]; }
-  return null;
-}
 
 /** A declared secret has a value in the host's store or the process environment. */
 const hasSecret = (options, name) => !!(options.secrets && own(options.secrets, name) ? options.secrets[name] : process.env[name]);
@@ -37,7 +21,8 @@ export async function preflight(method, config, sourceRoot, options = {}) {
   if (missingSecrets.length && !options.allowMissingSetup) fail(`Missing secrets: ${missingSecrets.join(', ')}.`, 'missing_secret', { missing: missingSecrets });
   if (missingSecrets.length) missingSetup.push(`Supply secrets: ${missingSecrets.join(', ')}`);
   let profiles;
-  try { profiles = await resolveModels(method, config, options); } catch (error) { if (!options.allowMissingSetup || error.code !== 'needs_input') throw error; missingSetup.push(error.message); profiles = {}; }
+  const saved = options.packageModels ?? await packageModels(method, sourceRoot);
+  try { profiles = await resolveModels(method, config, { ...options, packageModels: saved }); } catch (error) { if (!options.allowMissingSetup || error.code !== 'needs_input') throw error; missingSetup.push(error.message); profiles = {}; }
   const runtimeProfiles = config.runtimes ?? {}, tools = config.tools ?? {};
   const executions = [], usedTools = new Set();
   for (const step of Object.values(method.steps)) {
@@ -50,7 +35,7 @@ export async function preflight(method, config, sourceRoot, options = {}) {
         if (options.allowMissingSetup) missingSetup.push(message); else fail(message, 'needs_input');
       }
       if (['call', 'agent'].includes(exec.kind)) {
-        const profile = profiles[exec.model];
+        const profile = profiles[modelName(exec)];
         if (!profile && options.allowMissingSetup) { /* run resolves the agent */ }
         else if (['codex', 'claude'].includes(profile.backend)) {
           if (config.allow_local_processes !== true) fail('Local agents require allow_local_processes in operator configuration', 'preflight');
@@ -71,7 +56,7 @@ export async function preflight(method, config, sourceRoot, options = {}) {
           if(options.allowMissingSetup) missingSetup.push(`Connect tool: ${name}`);
           else fail(`Missing tool connection: ${tool.connection}`, 'needs_input');
         }
-        if(tool.connection && directBackends.includes(profiles[exec.model]?.backend)) fail('Connection browser tools require Codex or Claude; select an agent.', 'preflight');
+        if(tool.connection && directBackends.includes(profiles[modelName(exec)]?.backend)) fail('Connection browser tools require Codex or Claude; select an agent.', 'preflight');
         for (const effect of tool.effects) {
           if (phase === 'check') fail(`Checker cannot use effectful tool: ${name}`, 'preflight');
           if (!(step.changes ?? []).includes(`environment.${effect}`)) fail(`Undeclared tool effect: ${name} -> ${effect}`, 'preflight');
@@ -98,7 +83,6 @@ export async function preflight(method, config, sourceRoot, options = {}) {
   }
   const code = [...new Set([...(method.files ?? []), ...scripts.map(x => x.entrypoint)])];
   const files = [...new Set([...code, ...(options.checkFiles === false ? [] : await fixtureFiles(method, sourceRoot))])];
-  const modelCalls = [];
   for (const name of options.checkFiles === false ? [] : files) {
     relativeFile(name);
     let file;
@@ -107,11 +91,6 @@ export async function preflight(method, config, sourceRoot, options = {}) {
     const info = await stat(file);
     if (!info.isFile()) fail(`Method file is not a regular file: ${name}`, 'preflight');
     if (info.size > 20_000_000) fail(`Bundle file exceeds 20 MB: ${name}`, 'preflight');
-    const bytes = await readFile(file);
-    // Fixture data may quote a host; only the code that steps run is checked. Binary files are skipped.
-    const found = code.includes(name) && !bytes.includes(0) ? modelCall(bytes.toString('utf8')) : null;
-    if (found) modelCalls.push(`${name} uses ${found}`);
   }
-  if (modelCalls.length) fail(`A script calls a model API: ${modelCalls.slice(0, 5).join('; ')}. Make each model or classifier request its own call, agent, or classify step, with its prompt in the Method.`, 'model_call_in_script');
   return { scripts, runtimeInfo, files, missingSetup };
 }

@@ -7,8 +7,64 @@
       "enum": [
         "method/3.1",
         "method/3.2",
-        "method/3.3"
+        "method/3.3",
+        "method/3.4"
       ]
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^wf_[0-9a-f]{32}$"
+    },
+    "models": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]*$",
+        "maxLength": 80,
+        "not": {
+          "enum": [
+            "constructor",
+            "prototype",
+            "__proto__"
+          ]
+        }
+      },
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "string",
+            "pattern": "^[a-z0-9-]+/[A-Za-z0-9._:-]+$",
+            "maxLength": 200
+          },
+          {
+            "type": "object",
+            "properties": {
+              "model": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+/[A-Za-z0-9._:-]+$",
+                "maxLength": 200
+              },
+              "max_output_tokens": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "reasoning_effort": {
+                "enum": [
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              }
+            },
+            "required": [
+              "model"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
     },
     "name": {
       "type": "string",
@@ -417,16 +473,25 @@
               "const": "call"
             },
             "model": {
-              "type": "string",
-              "pattern": "^[a-z][a-z0-9_]*$",
-              "maxLength": 80,
-              "not": {
-                "enum": [
-                  "constructor",
-                  "prototype",
-                  "__proto__"
-                ]
-              }
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$",
+                  "maxLength": 80,
+                  "not": {
+                    "enum": [
+                      "constructor",
+                      "prototype",
+                      "__proto__"
+                    ]
+                  }
+                },
+                {
+                  "type": "string",
+                  "pattern": "^[a-z0-9-]+/[A-Za-z0-9._:-]+$",
+                  "maxLength": 200
+                }
+              ]
             },
             "prompt": {
               "type": "string",
@@ -436,7 +501,6 @@
           },
           "required": [
             "kind",
-            "model",
             "prompt"
           ],
           "additionalProperties": false
@@ -448,16 +512,25 @@
               "const": "agent"
             },
             "model": {
-              "type": "string",
-              "pattern": "^[a-z][a-z0-9_]*$",
-              "maxLength": 80,
-              "not": {
-                "enum": [
-                  "constructor",
-                  "prototype",
-                  "__proto__"
-                ]
-              }
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$",
+                  "maxLength": 80,
+                  "not": {
+                    "enum": [
+                      "constructor",
+                      "prototype",
+                      "__proto__"
+                    ]
+                  }
+                },
+                {
+                  "type": "string",
+                  "pattern": "^[a-z0-9-]+/[A-Za-z0-9._:-]+$",
+                  "maxLength": 200
+                }
+              ]
             },
             "prompt": {
               "type": "string",
@@ -487,7 +560,6 @@
           },
           "required": [
             "kind",
-            "model",
             "prompt"
           ],
           "additionalProperties": false
@@ -701,16 +773,25 @@
               "const": "agent"
             },
             "model": {
-              "type": "string",
-              "pattern": "^[a-z][a-z0-9_]*$",
-              "maxLength": 80,
-              "not": {
-                "enum": [
-                  "constructor",
-                  "prototype",
-                  "__proto__"
-                ]
-              }
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$",
+                  "maxLength": 80,
+                  "not": {
+                    "enum": [
+                      "constructor",
+                      "prototype",
+                      "__proto__"
+                    ]
+                  }
+                },
+                {
+                  "type": "string",
+                  "pattern": "^[a-z0-9-]+/[A-Za-z0-9._:-]+$",
+                  "maxLength": 200
+                }
+              ]
             },
             "prompt": {
               "type": "string",
@@ -740,7 +821,6 @@
           },
           "required": [
             "kind",
-            "model",
             "prompt"
           ],
           "additionalProperties": false
@@ -1365,6 +1445,20 @@
           },
           "required": [],
           "additionalProperties": false
+        },
+        "accept": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "maxLength": 80
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16000
+          },
+          "minProperties": 1
         }
       },
       "required": [],

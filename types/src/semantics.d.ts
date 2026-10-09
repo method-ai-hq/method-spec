@@ -22,3 +22,5 @@ export function validateSemantics(method: any, assertData: any): {
 };
 export function own(obj: any, key: any): boolean;
 export function effectConfirm(effect: any): any;
+export function modelName(exec: any): any;
+export function isModelId(model: any): boolean;

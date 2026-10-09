@@ -137,16 +137,25 @@
     "models": {
       "type": "object",
       "propertyNames": {
-        "type": "string",
-        "pattern": "^[a-z][a-z0-9_]*$",
-        "maxLength": 80,
-        "not": {
-          "enum": [
-            "constructor",
-            "prototype",
-            "__proto__"
-          ]
-        }
+        "anyOf": [
+          {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "maxLength": 80,
+            "not": {
+              "enum": [
+                "constructor",
+                "prototype",
+                "__proto__"
+              ]
+            }
+          },
+          {
+            "type": "string",
+            "pattern": "^[a-z0-9-]+/[A-Za-z0-9._:-]+$",
+            "maxLength": 200
+          }
+        ]
       },
       "additionalProperties": {
         "oneOf": [
@@ -309,6 +318,14 @@
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 2147483647
+              },
+              "reasoning_effort": {
+                "enum": [
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high"
+                ]
               }
             },
             "required": [

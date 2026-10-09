@@ -1,6 +1,6 @@
 import { readFile, copyFile, mkdir } from 'node:fs/promises';
 import { resolve as pathResolve, dirname, posix } from 'node:path';
-import { effectiveOutputs, shape } from './semantics.js';
+import { effectiveOutputs, shape, modelName } from './semantics.js';
 import { executionTools } from './tool-connections.js';
 import { hash, containedFile, relativeFile } from './io.js';
 
@@ -36,7 +36,7 @@ export function iterationKey({ method, step, bindings, iteration, profiles, conf
   const others = new Set(Object.values(method.steps).flatMap(other => stepScripts(other, tools).scripts.map(script => script.entrypoint)).filter(file => !own.has(file)));
   return hash({
     key: 'method-step/1', step: executable(step), bindings, iteration: step.each ? null : iteration,
-    models: execs.filter(exec => exec.model).map(exec => profiles[exec.model]),
+    models: execs.filter(exec => ['call', 'agent'].includes(exec.kind)).map(exec => profiles[modelName(exec)]),
     classification: execs.some(exec => exec.kind === 'classify') ? config.classification ?? null : null,
     tools: used.map(name => [name, tools[name]]),
     runtimes: [...new Set(scripts.map(script => script.runtime))].sort().map(name => runtimeInfo[name] ?? null),

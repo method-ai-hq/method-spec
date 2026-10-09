@@ -4,7 +4,6 @@ import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runMethod, validateMethod } from '../src/index.js';
-import { modelCall } from '../src/preflight.js';
 
 const config = { allow_local_processes: true, runtimes: { node: { command: process.execPath, version: process.version } } };
 const method = (extra = {}) => ({
@@ -33,15 +32,10 @@ test('a missing secret stops the run before any step and names the secret', asyn
   assert.throws(() => validateMethod(method({ secrets: { PATH: 'Not allowed.' } })));
 });
 
-test('a script that calls a model API is refused', async t => {
-  for (const source of ['fetch("https://openrouter.ai/api/v1/chat/completions")', 'import OpenAI from "openai";', 'import Anthropic from "@anthropic-ai/sdk";']) {
-    const f = await fixture(t, source);
-    await assert.rejects(f.run({ secrets: { ARCHIVE_TOKEN: 'x' } }), error => error.code === 'model_call_in_script' && /read\.mjs uses/.test(error.message));
-  }
-  assert.equal(modelCall('from openai import OpenAI'), 'openai');
-  assert.equal(modelCall('import os\nlinks = ["https://example.com/openai"]'), null);
-  // Managing keys is not a model request.
-  assert.equal(modelCall('url = "https://openrouter.ai/api/v1/keys/" + key_hash'), null);
+test('a script that names a model API runs; the runtime no longer scans script text', async t => {
+  const f = await fixture(t, 'const url = "https://openrouter.ai/api/v1/chat/completions"; console.log(JSON.stringify({length: url.length}))');
+  const result = await f.run({ secrets: { ARCHIVE_TOKEN: 'archive-secret-value' } });
+  assert.equal(result.status, 'completed');
 });
 
 test('an each item named again in in gets an error that says so', () => {

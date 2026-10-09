@@ -1,3 +1,4 @@
+import { modelName } from './semantics.js';
 import { mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { executable, executeProcess, writeJSON } from './io.js';
@@ -5,7 +6,7 @@ import { fail, safeData, assertSchema } from './validate.js';
 import { startMethodTools } from './method-tools.js';
 
 export async function executeClaude(execution, input, schema, context) {
-  const profile = context.models[execution.model];
+  const profile = context.models[modelName(execution)];
   const command = await executable(profile.command ?? 'claude');
   await mkdir(join(context.artifacts, 'claude'), { recursive: true, mode: 0o700 });
   const directory = await mkdtemp(join(context.artifacts, 'claude', 'attempt-'));

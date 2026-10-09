@@ -193,7 +193,7 @@ export function testCase(methodFile: string, config: any, testCaseValue: any, ru
         judge_calls: number;
         error?: string;
         code?: any;
-        run_status: "needs_input" | "completed" | "failed" | "unconfirmed";
+        run_status: "completed" | "unconfirmed" | "failed" | "needs_input";
         status: string;
         results: {
             criteria?: ({

@@ -2,15 +2,27 @@
 import { parseArgs } from 'node:util';
 import { readFile } from 'node:fs/promises';
 import packageInfo from '../package.json' with { type: 'json' };
-import {dirname,resolve} from 'node:path';
-import { runMethod, validateMethod, validateConfig, methodSchema, configSchema, readDocument, observeRun, pendingRuns, createCase, retireCase, listCases, testSuite } from './index.js';
+import { resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { formats } from './schema.js';
+import { executable } from './io.js';
+import { runMethod, validateMethod, methodIssues, methodSchema, configSchema, readDocument, observeRun, pendingRuns, createCase, retireCase, listCases, testSuite } from './index.js';
+/** The contributor harness's own settings: local scripts with node and python3 from PATH. */
+async function localConfig() {
+  const runtimes = { node: { command: process.execPath, version: process.version } };
+  try {
+    const command = await executable('python3');
+    runtimes.python = { command, version: execFileSync(command, ['--version'], { encoding: 'utf8' }).trim() };
+  } catch {}
+  return { allow_local_processes: true, runtimes };
+}
 const help = `Method — local executor
 
-node src/cli.js validate METHOD [--config CONFIG]
-node src/cli.js run METHOD [--config CONFIG] [--inputs JSON] [--state JSON] [--run-dir DIR]
+node src/cli.js validate METHOD
+node src/cli.js run METHOD [--inputs JSON] [--state JSON] [--run-dir DIR]
 node src/cli.js schema [method|config]
-node src/cli.js observe RUN_DIR... [--pending ROOT] [--config CONFIG]
-node src/cli.js test METHOD [--config CONFIG] [--case ID]... [--baseline OLD_METHOD] [--new ID]... [--cases DIR]
+node src/cli.js observe RUN_DIR... [--pending ROOT]
+node src/cli.js test METHOD [--case ID]... [--baseline OLD_METHOD] [--new ID]... [--cases DIR]
 node src/cli.js case new METHOD --id ID --note TEXT [--run BAD_RUN] [--passing-run GOOD_RUN] [--rubric SENTENCE]... [--ref outputs.NAME] [--context REF]... [--expect FILE] [--observations FILE] [--redact FILE] [--runs N] [--min-pass N] [--supersedes ID]... [--author TEXT]
 node src/cli.js case retire METHOD ID --reason TEXT [--by ID]
 node src/cli.js case list METHOD
@@ -19,13 +31,13 @@ Resume: --run-dir DIR --resume [--retry STEP:ITERATION] [--human JSON].
 Exit codes: 0 completed, 1 failed, 2 needs input, 3 unconfirmed (an external change could not be confirmed).
 observe runs the observations that are due for finished runs with open effects. It never repeats an action.
 test replays recorded cases: unchanged steps return their recorded outputs, changed steps run, and a changed step that acts on an external system makes the case unverifiable.
-run never retries a failed action. Local scripts require allow_local_processes in CONFIG.
-A supported local agent needs no config file. Use --agent codex or --agent claude to choose. Custom scripts, tools, and API models need configuration.
+run never retries a failed action. This harness reads no configuration file: it runs local scripts with node and python3 from PATH,
+hosted models need the SDK, and --agent codex or --agent claude chooses the local agent. Programs pass RuntimeConfig to runMethod.
 Use --version for the runtime version. Documentation: spec/method-3.md
 `;
 try {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
-    agent: { type: 'string' }, help: { type: 'boolean' }, version: { type: 'boolean' }, config: { type: 'string' }, inputs: { type: 'string' }, state: { type: 'string' }, resume: { type: 'boolean' }, retry: { type: 'string', multiple: true }, human: { type: 'string' },
+    agent: { type: 'string' }, help: { type: 'boolean' }, version: { type: 'boolean' }, inputs: { type: 'string' }, state: { type: 'string' }, resume: { type: 'boolean' }, retry: { type: 'string', multiple: true }, human: { type: 'string' },
     'run-dir': { type: 'string' },
     pending: { type: 'string', multiple: true }, case: { type: 'string', multiple: true }, baseline: { type: 'string' }, new: { type: 'string', multiple: true }, cases: { type: 'string' },
     run: { type: 'string' }, id: { type: 'string' }, note: { type: 'string' }, expect: { type: 'string' }, observations: { type: 'string' }, redact: { type: 'string' },
@@ -34,36 +46,31 @@ try {
   const [command, file, ...extra] = positionals;
   if (extra.length && !['observe', 'case'].includes(command)) throw new Error('Unexpected positional arguments');
   const json = async path => path ? JSON.parse(await readFile(path, 'utf8')) : undefined;
-  const optionalConfig = async () => values.config ? validateConfig(await readDocument(values.config)) : undefined;
-  const runConfig = async target => {
-    try { return await readDocument(values.config ?? resolve(dirname(target), 'runtime.json')); }
-    catch (error) { if (values.config || error.code !== 'ENOENT') throw error; return { allow_local_processes: true }; }
-  };
-  if (values.version) console.log(`${packageInfo.version} (method/3.1, method/3.2, method/3.3)`);
+  if (values.version) console.log(`${packageInfo.version} (${formats.join(', ')})`);
   else if (values.help || !command) console.log(help);
   else if (command === 'schema') {
     if (file && !['method', 'config'].includes(file)) throw new Error('Use schema method or schema config');
     console.log(JSON.stringify(file === 'config' ? configSchema : methodSchema, null, 2));
   } else if (command === 'validate') {
     if (!file) throw new Error('Supply a Method file');
-    const { order } = validateMethod(await readDocument(file));
-    if (values.config) validateConfig(await readDocument(values.config));
-    console.log(JSON.stringify({ valid: true, order, note: 'Runtime profiles and files are checked again before execution.' }));
+    const issues = methodIssues(await readFile(file, 'utf8'));
+    const valid = !issues.some(issue => issue.level === 'error');
+    console.log(JSON.stringify({ valid, ...(valid ? { order: validateMethod(await readDocument(file)).order } : {}), issues, note: 'Runtime profiles and files are checked again before execution.' }, null, 2));
+    if (!valid) process.exitCode = 1;
   } else if (command === 'observe') {
     const dirs = [...(file ? [file, ...extra] : [])];
     for (const root of values.pending ?? []) dirs.push(...await pendingRuns(root));
     if (!dirs.length && !values.pending) throw new Error('Supply run directories or --pending ROOT');
-    const config = await optionalConfig();
     const results = [];
     for (const dir of dirs) {
-      try { results.push(await observeRun(dir, { config })); }
+      try { results.push(await observeRun(dir)); }
       catch (error) { results.push({ run_dir: resolve(dir), error: error.message, code: error.code ?? 'observe_failed' }); }
     }
     console.log(JSON.stringify({ runs: results.map(({ run_dir, status, changed, observed, error, code, effects }) => ({ run_dir, status, changed, observed: observed?.map(e => ({ effect: e.effect, verdict: e.verdict, reason: e.reason })), next_observation_at: effects?.next_observation_at ?? null, ...(error ? { error, code } : {}) })) }, null, 2));
     if (results.some(r => r.error)) process.exitCode = 1;
   } else if (command === 'test') {
     if (!file) throw new Error('Supply a Method file');
-    const report = await testSuite(file, await runConfig(file), { casesDir: values.cases, ids: values.case, baseline: values.baseline, newIds: values.new ?? [], runOptions: { agent: values.agent } });
+    const report = await testSuite(file, await localConfig(), { casesDir: values.cases, ids: values.case, baseline: values.baseline, newIds: values.new ?? [], runOptions: { agent: values.agent } });
     console.log(JSON.stringify(report, null, 2));
     process.exitCode = report.passed ? 0 : 1;
   } else if (command === 'case') {
@@ -73,7 +80,7 @@ try {
       const integer = (value, name) => { if (value === undefined) return undefined; const n = Number(value); if (!Number.isSafeInteger(n)) throw new Error(`${name} must be an integer`); return n; };
       const created = await createCase({ methodFile: target, runDir: values.run, passingRun: values['passing-run'], rubric: values.rubric ?? [], ref: values.ref, context: values.context ?? [], id: values.id, note: values.note, author: values.author, expect: (await json(values.expect)) ?? [],
         observations: await json(values.observations), redact: await json(values.redact), runs: integer(values.runs, '--runs'), minPass: integer(values['min-pass'], '--min-pass'),
-        supersedes: values.supersedes ?? [], casesDir: values.cases, config: await runConfig(target) });
+        supersedes: values.supersedes ?? [], casesDir: values.cases, config: await localConfig() });
       console.log(JSON.stringify(created, null, 2));
     } else if (action === 'retire') {
       await retireCase(target, id, { by: values.by, reason: values.reason, casesDir: values.cases });
@@ -83,7 +90,7 @@ try {
     } else throw new Error('Use case new|retire|list METHOD');
   } else if (command === 'run') {
     if (!file) throw new Error('Supply a Method file');
-    const config = await runConfig(file);
+    const config = await localConfig();
     const controller = new AbortController();
     const stop = () => controller.abort(Object.assign(new Error('Interrupted by operator'), { code: 'interrupted' }));
     process.once('SIGINT', stop); process.once('SIGTERM', stop);

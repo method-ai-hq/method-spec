@@ -5,7 +5,7 @@ export type Script = {kind: 'run'; runtime: string; entrypoint: string; args?: s
 export type ModelProfile = {backend: 'codex' | 'claude'; command?: string; model?: string; reasoning_effort?: string} | {backend: 'openai-responses'; model: string; api_key_env: string; max_output_tokens: number; reasoning_effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'}
   | {backend: 'anthropic-messages'; model: string; api_key_env: string; max_output_tokens: number; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'}
   | {backend: 'openrouter-chat'; model: string; api_key_env: string; max_output_tokens: number; reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high'}
-  | {backend: 'method'; model: string; max_output_tokens?: number};
+  | {backend: 'method'; model: string; max_output_tokens?: number; reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high'};
 /** Sends an openrouter-chat request through the signed-in Method account and returns the provider's response. */
 export interface HostedModels {request(body: Record<string, any>, signal: AbortSignal): Promise<any>}
 /** One classify step's answer form: named options, yes or no, or 2-10 ordered levels (lowest first). */
@@ -70,3 +70,30 @@ export interface EffectSummary {
 /** completed: every step was accepted and no effect is contradicted or unconfirmed (effects.pending can be above zero).
  * unconfirmed: every step was accepted, but an observer could not confirm an external change by its horizon. */
 export type RunResult = RunSummary & {effects?: EffectSummary} & ({status: 'completed'; result: Json} | {status: 'unconfirmed'; result: Json; code: string; error: string; recovery: string} | {status: 'failed' | 'needs_input'; code: string; error: string; fix: string; recovery: string; failed_step?: string; iteration?: number; diagnostics?: string; missing?: string[]});
+/** One problem that a check found. message says what is wrong and fix says what to do, each in one sentence. */
+export type Issue = {
+  code: string;
+  level: 'error' | 'warning' | 'note';
+  step?: string; field?: string; file?: string; line?: number;
+  message: string;
+  fix: string;
+  evidence?: {probability?: number; check?: string; run_id?: string};
+  /** The reason, when the step accepts this code. Errors are never accepted. */
+  accepted?: string;
+};
+export interface IssueOptions {
+  /** Secret values to find by exact match (values shorter than 8 characters are skipped). A record names each secret in the message; the value never appears. */
+  secretValues?: string[] | Record<string, string>;
+  /** Files that will be uploaded with the Method, by package path, checked for secretValues. */
+  files?: Record<string, string | Uint8Array>;
+  /** Names of the secrets that have a value. Without it, missing secrets are not checked. */
+  availableSecrets?: string[];
+  /** run makes a missing secret an error; validate (the default) makes it a warning. */
+  phase?: 'validate' | 'run';
+  /** Operator tools, so that a tool with effects counts as one that changes things. */
+  tools?: RuntimeConfig['tools'];
+  /** Issues from other checks (for example model checks); accepts apply to them too. */
+  issues?: Issue[];
+  /** Codes that were not checked this time; an accept of one of them gives no accept_unused note. */
+  notChecked?: string[];
+}

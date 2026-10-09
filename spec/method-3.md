@@ -2,7 +2,7 @@
 
 Implemented by `@withmethod/runtime` 0.10.0. The full Method SDK uses this runtime at a pinned Git revision. New methods use this format under the same Method product and command.
 
-Use `format: method/3.3` for new documents. Existing `method/3.1` and `method/3.2` documents retain their validation rules. Method 3.3 adds effect contracts: an external change is confirmed by an observer, not by the action's receipt. The machine-readable grammar is [method-3.schema.json](method-3.schema.json). Operator configuration uses [runtime-config.schema.json](runtime-config.schema.json). The validator also checks references, dependencies, data declarations, loop conditions, and effects; JSON Schema alone is insufficient.
+Use `format: method/3.4` for new documents. Existing `method/3.1`, `method/3.2`, and `method/3.3` documents retain their validation rules and load unchanged. Method 3.3 adds effect contracts: an external change is confirmed by an observer, not by the action's receipt. Method 3.4 adds the Method ID, the Method's own `models`, model IDs on steps, and accepted warnings (see [Method 3.4](#method-34)). The machine-readable grammar is [method-3.schema.json](method-3.schema.json). Operator configuration uses [runtime-config.schema.json](runtime-config.schema.json). The validator also checks references, dependencies, data declarations, loop conditions, and effects; JSON Schema alone is insufficient.
 
 ## Installation and commands
 
@@ -19,23 +19,64 @@ Install the public SDK for the user command:
 ```sh
 npm install -g https://app.withmethod.ai/downloads/withmethod-sdk-latest.tgz
 method --version
-method validate example.method --config runtime.json
-method run example.method --config runtime.json --inputs inputs.json
+method validate example.method
+method run example.method --inputs inputs.json
 method schema method
 method schema config
 method observe RUN_DIR
 method test example.method
 ```
 
-The runtime package installs no command. Contributors can run `node src/cli.js` in this checkout. The contributor harness accepts `--agent codex|claude`; the SDK also supplies account commands, automatic setup, and background workers.
+The runtime package installs no command. Contributors can run `node src/cli.js` in this checkout. The contributor harness accepts `--agent codex|claude`, runs scripts with `node` and `python3` from PATH, and reads no configuration file; the SDK also supplies account commands, automatic setup, and background workers.
 
-`validate` checks the Method and, when supplied, the configuration grammar. `run` additionally resolves profiles, tools, capabilities, environment bindings, and bundle files. A validation pass alone does not establish executable setup or task correctness.
+`validate` checks the Method and prints its [issues](#issues). No command reads a configuration file: the SDK builds the runtime configuration (`RuntimeConfig`) and passes it to `runMethod`. `run` additionally resolves profiles, tools, capabilities, environment bindings, and bundle files. A validation pass alone does not establish executable setup or task correctness.
 
 `run` prints status, elapsed time, model request count, and the run directory. Read `result.json` in that directory for the result. Exit codes are 0 for completion, 1 for failure, 2 for a human-input request, and 3 for an unconfirmed run: every step finished, but an observer could not confirm an external change by its horizon. A new run needs a new directory. Use `--resume` to continue the same saved run.
 
+## Method 3.4
+
+```yaml
+format: method/3.4
+id: wf_3cfa2d6d2c00552ce5a4ab723a8248fe   # written once by the CLI; not part of the content digest
+models:                                    # what model names mean
+  writer: openai/gpt-6-luna
+  fields_writer: {model: deepseek/deepseek-v4.1-flash, max_output_tokens: 4000, reasoning_effort: low}
+steps:
+  write:
+    do: {kind: call, model: writer, prompt: ...}             # a name from models
+  intro:
+    do: {kind: call, model: openai/gpt-6-luna, prompt: ...}  # or a model ID
+  fields:
+    do: {kind: call, prompt: ...}                            # or nothing: the account default
+    accept: {prompt_multiple_tasks: "The user wants one combined field list."}
+```
+
+- `id` is the account Method's ID: `wf_` and 32 lowercase hex digits. The CLI writes it at the first signed-in save. The content digest leaves it out (`documentForDigest`), so a copy keeps its versions and an `id` written during a run does not stop its resume.
+- `models` maps a name to a model ID, or to `{model, max_output_tokens?, reasoning_effort?}` (reasoning effort: minimal, low, medium, high). Each is a hosted model (backend `method`).
+- A `call` or `agent` step's `model` (also an agent check's) is a `models` name, a model ID (`provider/model`, pattern `^[a-z0-9-]+/[A-Za-z0-9._:-]+$`), or absent (the account default). `default` keeps meaning the account default. When the document has `models`, any other plain name must be one of them (`unknown_model`). Without `models`, a plain name can name a caller-configured profile.
+- `accept: {CODE: reason}` on a step accepts that warning or note on that step. The issue stays in the list with `accepted` set to the reason. Errors cannot be accepted.
+- `id`, `models`, `accept`, a model ID, and an absent model require `format: method/3.4`.
+
+## Issues
+
+`methodIssues(document, options)` returns a list of issues. Each has `code`, `level` (`error`, `warning`, or `note`), optional `step`, `field`, `file`, and `line`, a one-sentence `message`, a one-sentence `fix`, optional `evidence`, and `accepted` (the reason, when the step accepts that code). A format error (the first one) is the only issue for a document that does not validate; it keeps the validation code. For a valid document the runtime adds these deterministic checks:
+
+| Code | Level | When |
+|---|---|---|
+| `secret_value` | error | The document or a file in `options.files` contains a value from `options.secretValues` (exact match, values of 8 or more characters). The value never appears in the issue. |
+| `missing_secret` | warning (error with `phase: 'run'`) | A declared secret is not in `options.availableSecrets`. |
+| `classify_without_threshold` | warning | A classify result is used by `when`, or by a step with `changes`, with no step between that applies a threshold. |
+| `untrusted_content_can_act` | warning | An agent with a `browser` can also change things: its `changes` name a connection that is not files, or it uses a tool whose declaration (in `options.tools`) has effects. Only declarations count, never tool names. |
+| `unused_output` | warning | No step, check, effect, result, or run label uses an output. |
+| `agent_without_tools` | note | An agent step has no tools and no browser. |
+| `check_repeats_output_type` | note | A `present` or unbounded `count` check confirms only what the declared types guarantee. |
+| `accept_unused` | note | A step accepts a code that no longer fires on it. |
+
+`options.issues` adds issues from other checks (for example the SDK's model checks); accepts apply to them too. `options.notChecked` lists codes that were not computed this time, so their accepts give no `accept_unused` note. `options.tools` supplies operator tools for the effects check. Issues are sorted errors first, then warnings, then notes.
+
 ## Document and data
 
-Root fields are `format`, `name`, `goal`, `inputs`, `state`, `environment`, `files`, `steps`, `result`, and optional plain-text `run_prompt` for the outside agent. `run_prompt` does not expand variables. Step `reading` fields provide display text and do not change execution. Only format, name, goal, steps, and result are required.
+Root fields are `format`, `id`, `models`, `name`, `goal`, `inputs`, `state`, `environment`, `files`, `steps`, `result`, and optional plain-text `run_prompt` for the outside agent. `run_prompt` does not expand variables. Step `reading` fields provide display text and do not change execution. Only format, name, goal, steps, and result are required.
 
 Inputs and state declarations have a type and optional description and default. Supply missing initial values through `--inputs` and `--state`, each pointing to a JSON object. Unknown or wrongly typed values fail before any operation. State is saved as one atomic `state.json` checkpoint in the run directory. Method 3 does not use Method 2's per-state `file` field.
 
@@ -127,7 +168,7 @@ The operator must set `allow_local_processes: true`. These are trusted local pro
 
 **Observed effects.** The runner records what each Python and Node script process did as `observed_effects: {network, reads, writes, env, runs}` on its `process.completed` or `process.failed` event; an action's value is also on `step.accepted`, and a reused iteration copies it from its source run. `network` lists hosts (never URLs or query strings), `reads` and `writes` list paths (bundle files relative to the bundle, output files as `$METHOD_OUTPUT_DIR/PATH`), `env` lists variable names that the script read or set (never values; `METHOD_*` names are left out), and `runs` lists program names (never arguments). Each list is sorted, unique, and at most 200 entries; `truncated: true` says that a list was cut. Interpreter, standard-library, `site-packages`, `node_modules`, `/dev`, and the run's own internal files are left out. Python is observed with an audit hook loaded through a `sitecustomize` module on `PYTHONPATH` (it runs any `sitecustomize` it hides); Node with a `--require` preload (`diagnostics_channel`, `fs`, `child_process`, and a `process.env` proxy). Both remove their variables before the script starts and write to a file at exit, never to standard output. Another runtime, a process that ends without exit handlers (a kill, `os._exit`), or Python with `-E`, `-I`, or `-S` gives `{unavailable: REASON}`; the step still runs. This is a record, not a sandbox: native extensions, raw system calls, and child processes' own effects are not observed.
 
-**Model requests are steps.** Each model or classifier request is its own `call`, `agent`, or `classify` step, with its prompt in the Method, so that it is recorded and can be changed and compared. Preflight refuses a Method whose script files (declared `files` and entrypoints) name a model API host together with a model request endpoint (`completions`, `/messages`, `/responses`, `systemone`, `generateContent`, `embeddings`) (hosts: `openrouter.ai`, `api.openai.com`, `api.anthropic.com`, `api.typesafe.ai`, `generativelanguage.googleapis.com`, `api.deepseek.com`, `api.groq.com`, `api.mistral.ai`, `api.together.xyz`, `api.fireworks.ai`, `api.cohere.com`) or import a model client library (`openai`, `anthropic`, `@anthropic-ai/sdk`, `litellm`, `langchain`, `@ai-sdk/*`, and similar), with code `model_call_in_script`. Fixture files are not checked. A host that a script builds at run time is not found; the check is not a sandbox.
+**Model requests are steps.** Each model or classifier request is its own `call`, `agent`, or `classify` step, with its prompt in the Method, so that it is recorded and can be changed and compared. The runtime does not scan script text for model requests; the SDK's model check `script_calls_model` does.
 
 #### Secrets
 
@@ -146,7 +187,7 @@ On timeout or process exit, the runner kills the process group on POSIX systems.
 
 ### Models and agents
 
-Explicit model profiles take priority. Missing profiles use an explicit `--agent`, the configured default, the host's hosted model (`hostedModel`), the identified calling coding agent, or the sole installed supported agent. If both Codex and Claude are available without a choice, execution requests input. Both use their normal sign-in. The selected profiles remain fixed on resume. Codex starts a fresh process with approval and sandbox prompts disabled; it is trusted local execution. A supplied configuration must allow local processes. Without a config file, the CLI enables that default local path.
+Profiles are resolved once, in this order. On resume, the saved profiles. `--agent codex|claude` (runtime option `agent`) runs every model step with that local agent. The Method's own `models` and the model IDs that steps name are hosted models (backend `method`). Then the caller's configured profiles (`config.models`), then the `models` of a saved package's `runtime.json` when the document has no `models`. A step without a profile uses `default`: the configured default, the host's hosted model (`hostedModel`, the account default), the identified calling coding agent, or the sole installed supported agent. If both Codex and Claude are available without a choice, execution requests input. Both use their normal sign-in. The selected profiles remain fixed on resume. Codex starts a fresh process with approval and sandbox prompts disabled; it is trusted local execution. A supplied configuration must allow local processes.
 
 The temporary Method MCP bridge exposes only the step's declared Method tools. Codex also retains its built-in and installed tools. Empty `tools` does not mean that Codex has no tools. Both `call` and `agent` use a Codex process with a structured final output on this backend. Internal Codex model requests and tools are not governed by Method's direct API request/turn counters.
 
@@ -161,7 +202,7 @@ Three direct providers are available. Each profile specifies the exact model ide
 | `openai-responses` | OpenAI Responses API | `reasoning_effort`: none, minimal, low, medium, high, xhigh |
 | `anthropic-messages` | Anthropic Messages API | `effort`: low, medium, high, xhigh, max |
 | `openrouter-chat` | OpenRouter chat completions | `reasoning_effort`: minimal, low, medium, high |
-| `method` | The host's `hostedModels.request`: the same request as `openrouter-chat`, sent through the signed-in Method account. It needs no key; `max_output_tokens` is optional (16000). | — |
+| `method` | The host's `hostedModels.request`: the same request as `openrouter-chat`, sent through the signed-in Method account. It needs no key; `max_output_tokens` is optional (16000). | `reasoning_effort`: minimal, low, medium, high |
 
 The output schema goes to each provider's strict structured output. OpenRouter requests require providers that support the requested parameters and name no fallback models. Anthropic tool turns keep the assistant content, including thinking blocks, unchanged. `model.request`, `model.response`, and `model.error` record the backend. Usage is recorded as input and output tokens; Anthropic input includes cache reads and writes. A response that reports `usage.cost` adds it to the summary's `usage.cost_usd`.
 
@@ -390,12 +431,12 @@ Generic run records are private local artifacts by default (directory mode 0700,
 Failures do not trigger automatic retries, except that a classification the service could not answer (HTTP 429 or 5xx, or an unavailable or timed-out service) is tried three times in all. A failed run's summary gives `code`, `error`, a `fix` sentence, and, when a step was running, `failed_step`, `iteration`, and the last 20 lines of its `diagnostics`. To continue the same run with its original files, resume:
 
 ```sh
-method run task.method --config runtime.json --run-dir runs/example --resume
+method run task.method --run-dir runs/example --resume
 # After inspecting an unfinished action and its external effects:
-method run task.method --config runtime.json --run-dir runs/example --resume --retry STEP:ITERATION
+method run task.method --run-dir runs/example --resume --retry STEP:ITERATION
 ```
 
-`checkpoint.json` saves the execution ID and device name, accepted iterations, typed state, inputs, runtime identity, active dispatch, and cumulative usage. Accepted work is reused, including each/repeat outputs. Method, configuration, runtime executable, and bundle hashes must match. Accepted file outputs are verified again. Run time excludes time while stopped; consumed execution time and request budgets do not reset. Completed runs return their saved result.
+`checkpoint.json` saves the execution ID and device name, accepted iterations, typed state, inputs, runtime identity, active dispatch, and cumulative usage. Accepted work is reused, including each/repeat outputs. Method (its content digest, which leaves out `id`), configuration, runtime executable, and bundle hashes must match. Accepted file outputs are verified again. Run time excludes time while stopped; consumed execution time and request budgets do not reset. Completed runs return their saved result.
 
 An unfinished invocation requires explicit retry. A stopped `ask` accepts `--human JSON` with `{steps: {"STEP:ITERATION": {outputs: {...}}}}`; checks still run. The runner does not guess whether an uncertain external action completed. Inspect the target first.
 
@@ -415,7 +456,7 @@ The test suite executes real local scripts and the complete model/tool orchestra
 
 ## Parsing and API contract
 
-The SDK and runtime use the same parser and document validator. Parsing permits bounded YAML aliases (maximum expansion count 20), rejects duplicate keys and documents over 2 MB, and preserves text whitespace. File values require exactly `path` and a lowercase 64-character `sha256`. Invalid documents throw `MethodValidationError` with `invalid_method` or `unsupported_format`.
+The SDK and runtime use the same parser and document validator. Parsing permits bounded YAML aliases (maximum expansion count 20), rejects duplicate keys and documents over 2 MB, and preserves text whitespace. File values require exactly `path` and a lowercase 64-character `sha256`. Invalid documents throw `MethodValidationError` with the code of the first error issue (for example `invalid_method`, `invalid_prompt`, `unknown_model`, or `unsupported_format`) and the issue itself as `issue`. `methodIssues(document, options)` returns every [issue](#issues); `validateMethod` throws its first error. `documentForDigest(document)` returns the document without `id`, for the content digest.
 
 The JavaScript API exports `RuntimeConfig`, `RunOptions`, and the status-based `RunResult` union. `runMethod(file, config, options)` returns completed, failed, or needs_input records. It does not perform the product CLI's account sync or automatic environment preparation.
 

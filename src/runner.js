@@ -1,8 +1,9 @@
 import { hostname } from 'node:os';
 import { executeClassification, typesafeClassification } from './classification.js';
-import { effectiveOutputs } from './semantics.js';
+import { effectiveOutputs, modelName } from './semantics.js';
 import { executionTools, validateToolResult } from './tool-connections.js';
-import { resolveModels } from './agents.js';
+import { resolveModels, packageModels } from './agents.js';
+import { documentForDigest } from './document.js';
 import { executorVersion, assertCheckpointExecutor } from './executor-version.js';
 import { executeClaude } from './claude.js';
 import { configuration } from './defaults.js';
@@ -82,7 +83,6 @@ export async function runMethod(file, config, options = {}) {
 export function fixFor(error) {
   const fixes = {
     missing_secret: `Supply ${error.missing?.join(', ') ?? 'the declared secrets'}, then run again. No step ran.`,
-    model_call_in_script: 'Make each model or classifier request its own call, agent, or classify step, then run again.',
     process_failed: 'Read diagnostics, fix the script, and run again. Unchanged steps are reused.',
     invalid_output: 'Make the step return its declared outputs, then run again. Unchanged steps are reused.',
     classification_unavailable: 'The classification service did not answer after 3 attempts. Run again; unchanged steps are reused.',
@@ -103,14 +103,15 @@ async function executeRun(file, config, options) {
   const suppliedConfig = config;
   config = configuration(config);
   const sourceRoot = await realpath(options.sourceRoot ?? dirname(pathResolve(file)));
-  if (saved && (saved.method_sha256 !== hash(method) || saved.config_sha256 !== hash(suppliedConfig))) fail('Method or configuration changed. Resume needs the original version.', 'resume_mismatch');
+  if (saved && (saved.method_sha256 !== hash(documentForDigest(method)) || saved.config_sha256 !== hash(suppliedConfig))) fail('Method or configuration changed. Resume needs the original version.', 'resume_mismatch');
   if (saved && (options.inputs || options.state)) fail('Resume uses saved inputs and state; omit --inputs and --state.', 'resume_mismatch');
   const inputs = saved?.root.inputs ?? initialValues(method.inputs, options.inputs);
   let state = saved?.root.state ?? initialValues(method.state, options.state);
   if (saved && !saved.models) fail('The checkpoint is missing its selected model profiles. Resume needs the original run records.', 'resume_mismatch');
-  config.models = await resolveModels(method, config, { ...options, savedModels: saved?.models });
+  const packaged = await packageModels(method, sourceRoot);
+  config.models = await resolveModels(method, config, { ...options, packageModels: packaged, savedModels: saved?.models });
   const profiles = config.models, runtimeProfiles = config.runtimes ?? {}, tools = config.tools ?? {};
-  const { runtimeInfo, files } = await preflight(method, config, sourceRoot, { ...options, checkFiles: !saved });
+  const { runtimeInfo, files } = await preflight(method, config, sourceRoot, { ...options, packageModels: packaged, checkFiles: !saved });
   const bundle = pathResolve(runDir, 'bundle');
   if (!saved) await mkdir(bundle, { mode: 0o700 });
   const artifacts = pathResolve(runDir, 'artifacts');
@@ -138,7 +139,7 @@ async function executeRun(file, config, options) {
   // Every run file is redacted: a secret value never reaches the run folder, so a resumed run sees [REDACTED] in its place.
   const checkpoint = () => writeJSON(pathResolve(runDir, 'checkpoint.json'), redact({
     executor_version: executorVersion, execution_id: executionId, device_name: deviceName,
-    models: profiles, method_sha256: hash(method), config_sha256: hash(suppliedConfig), runtime_sha256: hash(runtimeInfo),
+    models: profiles, method_sha256: hash(documentForDigest(method)), config_sha256: hash(suppliedConfig), runtime_sha256: hash(runtimeInfo),
     started_at: startedAt, elapsed_ms: performance.now() - started, sequence, invocations, requests, toolCalls, knownUsage, inputTokens, outputTokens,
     root, accepted, skipped, active, collections, cache: keys, reused, observed, costUsd, codexProcesses, codexInputTokens, codexOutputTokens, codexUsageReports,
   }));
@@ -179,7 +180,7 @@ async function executeRun(file, config, options) {
   let manifest;
   try {
     manifest = saved ? JSON.parse(await readFile(pathResolve(runDir, 'manifest.json'), 'utf8')).files : await snapshotBundle(sourceRoot, files, bundle);
-    await writeJSON(pathResolve(runDir, 'manifest.json'), { executor_version: executorVersion, method_sha256: hash(method), config_sha256: hash(suppliedConfig), files: manifest, runtime_profiles: runtimeInfo, models: profiles });
+    await writeJSON(pathResolve(runDir, 'manifest.json'), { executor_version: executorVersion, method_sha256: hash(documentForDigest(method)), config_sha256: hash(suppliedConfig), files: manifest, runtime_profiles: runtimeInfo, models: profiles });
     await writeJSON(pathResolve(runDir, 'method.json'), method);
     await writeJSON(pathResolve(runDir, 'state.json'), redact(state));
     const verifyBundle = async () => {
@@ -398,8 +399,8 @@ async function executeRun(file, config, options) {
           const phaseContext = { ...context, record: (event, data) => scopedRecord(event, { phase, ...data }) };
           const result = exec.kind === 'classify' ? {[step.out]: await executeClassification(exec, input, config.classification, classifier, phaseContext)}
             : exec.kind === 'run' ? await executeScript(exec, input, bound.signal, phaseContext.record, operationId(phase), phase === 'action' ? value => { actionObserved = value; } : undefined)
-            : profiles[exec.model].backend === 'codex' ? await executeCodex(exec, input, schema, phaseContext)
-            : profiles[exec.model].backend === 'claude' ? await executeClaude(exec, input, schema, phaseContext)
+            : profiles[modelName(exec)].backend === 'codex' ? await executeCodex(exec, input, schema, phaseContext)
+            : profiles[modelName(exec)].backend === 'claude' ? await executeClaude(exec, input, schema, phaseContext)
             : await executeModel(exec, input, schema, phaseContext);
           guard(); assertSchema(schema, result, `${phase} output`);
           return result;

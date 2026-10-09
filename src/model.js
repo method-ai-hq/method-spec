@@ -1,3 +1,4 @@
+import { modelName } from './semantics.js';
 import { assertSchema, fail, safeData } from './validate.js';
 
 function abortable(operation, signal) {
@@ -152,7 +153,7 @@ async function providerRequest(body, profile, adapter, context) {
 }
 
 export async function executeModel(execution, input, schema, context) {
-  const profile = context.models[execution.model];
+  const profile = context.models[modelName(execution)];
   const adapter = adapters[profile.backend];
   const messages = [{ role: 'user', content: json(input) }];
   const tools = execution.kind === 'agent' ? (execution.tools ?? []).map(name => context.toolDefinition(name)) : [];

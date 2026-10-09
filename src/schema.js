@@ -16,8 +16,17 @@ const shapeProperties = {
   description: text, fields: map({ $ref: '#/$defs/shape' }), items: { $ref: '#/$defs/shape' }, format: text,
 };
 const run = object({ kind: { const: 'run' }, runtime: name, entrypoint: path, args: { type: 'array', items: { type: 'string' } } }, ['kind', 'runtime', 'entrypoint']);
-const call = object({ kind: { const: 'call' }, model: name, prompt: text });
-const agent = object({ kind: { const: 'agent' }, model: name, prompt: text, tools: list(name), browser: ref }, ['kind', 'model', 'prompt']);
+// A model ID names a hosted model directly, for example openai/gpt-6-luna.
+export const modelIdPattern = '^[a-z0-9-]+/[A-Za-z0-9._:-]+$';
+const modelId = { type: 'string', pattern: modelIdPattern, maxLength: 200 };
+// A step model is a name from models (or a configured profile), a model ID, or absent: the account default.
+const stepModel = { anyOf: [name, modelId] };
+const call = object({ kind: { const: 'call' }, model: stepModel, prompt: text }, ['kind', 'prompt']);
+const agent = object({ kind: { const: 'agent' }, model: stepModel, prompt: text, tools: list(name), browser: ref }, ['kind', 'prompt']);
+// What a models name means: a hosted model ID, or one with its output limit and reasoning effort.
+const methodModel = { anyOf: [modelId, object({ model: modelId, max_output_tokens: positive, reasoning_effort: { enum: ['minimal', 'low', 'medium', 'high'] } }, ['model'])] };
+// An accepted warning: the issue code and the reason the author accepts it on this step.
+const accept = { type: 'object', propertyNames: { type: 'string', pattern: '^[a-z][a-z0-9_]*$', maxLength: 80 }, additionalProperties: text, minProperties: 1 };
 // A classify step has one answer form: named options, yes or no, or 2–10 ordered levels (lowest first).
 const classify = { ...object({ kind: { const: 'classify' }, question: text, options: { ...map(text), minProperties: 2, maxProperties: 255 },
   answer: { const: 'yes_no' }, levels: { type: 'array', items: name, minItems: 2, maxItems: 10, uniqueItems: true } }, ['kind', 'question']),
@@ -43,12 +52,17 @@ const exact = [
   object({ count: object({ value: ref, min: { type: 'integer', minimum: 0 }, max: { type: 'integer', minimum: 0 } }, ['value']) }),
   object({ present: ref }), object({ file: ref }),
 ];
+export const formats = ['method/3.1', 'method/3.2', 'method/3.3', 'method/3.4'];
 /** @type {Record<string, any>} */
 export const methodSchema = {
   $schema: 'http://json-schema.org/draft-07/schema#',
   $id: 'https://github.com/method-ai-hq/method-spec/raw/main/spec/method-3.schema.json',
   ...object({
-    format: { enum: ['method/3.1', 'method/3.2', 'method/3.3'] }, name: text, goal: text, run_prompt: text, run_label: ref,
+    format: { enum: formats },
+    // The account Method's ID. The CLI writes it once; the document digest leaves it out.
+    id: { type: 'string', pattern: '^wf_[0-9a-f]{32}$' },
+    models: map(methodModel),
+    name: text, goal: text, run_prompt: text, run_label: ref,
     files: list(path), inputs: map({ $ref: '#/$defs/input' }), state: map({ $ref: '#/$defs/input' }),
     // Names and purposes only. The host supplies values to every script step; they never appear in the Method.
     secrets: { type: 'object', propertyNames: secretName, additionalProperties: text, maxProperties: 50 },
@@ -72,6 +86,7 @@ export const methodSchema = {
         repeat: object({ max_iterations: positive, until: ref }, ['max_iterations']), when: ref,
         after: { anyOf: [name, list(name)] }, changes: list(ref), effects: { ...map(effect), minProperties: 1 }, no_effect_reason: text,
         limits: object({ timeout_ms: positive, max_agent_turns: positive, max_model_requests: positive }, []),
+        accept,
       }, []),
       oneOf: [{ required: ['do'], not: { required: ['ask'] } }, { required: ['ask'], not: { required: ['do'] } }],
       not: { required: ['each', 'repeat'] },
@@ -91,13 +106,14 @@ export const configSchema = {
     classification: object({ provider: {const: 'typesafe'}, model: text, api_key_env: keyEnv }, ['provider', 'model']),
     runtimes: map(object({ command: text, args: { type: 'array', items: { type: 'string' } }, version: text }, ['command', 'version'])),
     // Direct API backends: each one has a fixed endpoint, so a profile cannot send its key to another host.
-    models: map({ oneOf: [
+    // Keyed by what a step names: a profile name, or a model ID (resolved profiles of a method/3.4 document).
+    models: { type: 'object', propertyNames: stepModel, additionalProperties: { oneOf: [
       object({ backend: { const: 'openai-responses' }, model: text, api_key_env: keyEnv, max_output_tokens: positive, reasoning_effort: { enum: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] } }, ['backend', 'model', 'api_key_env', 'max_output_tokens']),
       object({ backend: { const: 'anthropic-messages' }, model: text, api_key_env: keyEnv, max_output_tokens: positive, effort: { enum: ['low', 'medium', 'high', 'xhigh', 'max'] } }, ['backend', 'model', 'api_key_env', 'max_output_tokens']),
       object({ backend: { const: 'openrouter-chat' }, model: text, api_key_env: keyEnv, max_output_tokens: positive, reasoning_effort: { enum: ['minimal', 'low', 'medium', 'high'] } }, ['backend', 'model', 'api_key_env', 'max_output_tokens']),
       object({ backend: { enum: ['codex', 'claude'] }, command: text, model: text, reasoning_effort: text }, ['backend']),
       // A hosted model through the signed-in Method account. The host supplies the transport; there is no key.
-      object({ backend: { const: 'method' }, model: text, max_output_tokens: positive }, ['backend', 'model'])] }),
+      object({ backend: { const: 'method' }, model: text, max_output_tokens: positive, reasoning_effort: { enum: ['minimal', 'low', 'medium', 'high'] } }, ['backend', 'model'])] } },
     tools: map({oneOf: [object({ description: text, in: map({ $ref: `${methodSchema.$id}#/$defs/data` }), out: map({ $ref: `${methodSchema.$id}#/$defs/data` }), run, effects: list(name) }), object({description: text, connection: name, tool: text, parameters: {type:'object'}, effects: list(name)})]}),
     environment: map({ type: 'string' }),
     rubric: object({ judge_runs: { type: 'integer', minimum: 1, maximum: 9 }, classify_threshold: { type: 'number', minimum: 0.5, maximum: 1 }, max_value_bytes: positive }, []),

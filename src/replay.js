@@ -1,3 +1,5 @@
+import { modelName } from './semantics.js';
+import { documentForDigest } from './document.js';
 import { readFile } from 'node:fs/promises';
 import { resolve as pathResolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -15,7 +17,7 @@ export function stepKey(step, { files = {}, profiles = {}, tools = {} }) {
   const { name, reading, purpose, effects, ...definition } = step;
   const parts = [definition];
   for (const exec of [step.do, step.check]) if (exec?.kind) {
-    if (exec.model) parts.push(['model', exec.model, profiles[exec.model] ?? null]);
+    if (['call', 'agent'].includes(exec.kind)) parts.push(['model', modelName(exec), profiles[modelName(exec)] ?? null]);
     if (exec.kind === 'run') parts.push(['file', exec.entrypoint, files[exec.entrypoint] ?? null]);
     for (const tool of executionTools(exec, tools)) {
       parts.push(['tool', tool, tools[tool] ?? null]);
@@ -61,7 +63,7 @@ export async function recordRun(runDir) {
     observations[entry.effect] = (await read(entry.observations)).observations;
   }
   return {
-    format: 'method-recording/1', method_sha256: hash(method), execution_id: started.execution_id,
+    format: 'method-recording/1', method_sha256: hash(documentForDigest(method)), execution_id: started.execution_id,
     inputs: started.inputs ?? {}, initial_state: started.initial_state ?? {}, environment: started.config?.environment ?? {}, keys, iterations, observations, method,
   };
 }
