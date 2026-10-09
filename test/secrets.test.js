@@ -49,3 +49,16 @@ test('an each item named again in in gets an error that says so', () => {
     steps: { score: { name: 'Score', each: { text: 'inputs.items' }, in: { text: 'text' }, do: { kind: 'classify', question: 'Is it long?', options: { yes: 'Long.', no: 'Short.' } }, out: 'score' } }, result: 'score' };
   assert.throws(() => validateMethod(doc), /text is the each item, and the step receives it already/);
 });
+
+test('a secret value that a step returns is redacted in every run file, checkpoint.json too', async t => {
+  const { readdir } = await import('node:fs/promises');
+  const f = await fixture(t, 'console.log(JSON.stringify({length:process.env.ARCHIVE_TOKEN.length,echo:process.env.ARCHIVE_TOKEN}))');
+  const doc = method();
+  doc.steps.read.out = { length: { type: 'number', description: 'Length.' }, echo: { type: 'text', description: 'The token, returned by mistake.' } };
+  const result = await f.run({ secrets: { ARCHIVE_TOKEN: 'archive-secret-value' } }, doc);
+  assert.equal(result.status, 'completed');
+  const files = (await readdir(result.run_dir, { recursive: true, withFileTypes: true })).filter(e => e.isFile()).map(e => join(e.parentPath, e.name));
+  assert.ok(files.some(file => file.endsWith('checkpoint.json')));
+  for (const file of files) assert.equal((await readFile(file, 'utf8')).includes('archive-secret-value'), false, file);
+  assert.match(await readFile(join(result.run_dir, 'checkpoint.json'), 'utf8'), /\[REDACTED\]/);
+});

@@ -135,12 +135,13 @@ async function executeRun(file, config, options) {
   const cache = options.replay || options.fresh === true ? new Map() : await readCache(options.cacheFrom ?? []);
   const fresh = new Set(Array.isArray(options.fresh) ? options.fresh : []);
   if (active && !(options.retry ?? []).includes(active) && !(method.steps[active.split(':')[0]]?.ask && options.human?.steps?.[active])) fail(`Inspect the trace and external state, then use --retry ${active} to authorize another attempt.`, 'recovery_required');
-  const checkpoint = () => writeJSON(pathResolve(runDir, 'checkpoint.json'), {
+  // Every run file is redacted: a secret value never reaches the run folder, so a resumed run sees [REDACTED] in its place.
+  const checkpoint = () => writeJSON(pathResolve(runDir, 'checkpoint.json'), redact({
     executor_version: executorVersion, execution_id: executionId, device_name: deviceName,
     models: profiles, method_sha256: hash(method), config_sha256: hash(suppliedConfig), runtime_sha256: hash(runtimeInfo),
     started_at: startedAt, elapsed_ms: performance.now() - started, sequence, invocations, requests, toolCalls, knownUsage, inputTokens, outputTokens,
     root, accepted, skipped, active, collections, cache: keys, reused, observed, costUsd, codexProcesses, codexInputTokens, codexOutputTokens, codexUsageReports,
-  });
+  }));
   // An operator's own classification key takes precedence over a provider supplied by the host.
   const classifier = config.classification?.api_key_env ? typesafeClassification(config.classification.api_key_env, name => secretValue(options, name)) : options.classification;
   const secrets = [...new Set([
@@ -180,7 +181,7 @@ async function executeRun(file, config, options) {
     manifest = saved ? JSON.parse(await readFile(pathResolve(runDir, 'manifest.json'), 'utf8')).files : await snapshotBundle(sourceRoot, files, bundle);
     await writeJSON(pathResolve(runDir, 'manifest.json'), { executor_version: executorVersion, method_sha256: hash(method), config_sha256: hash(suppliedConfig), files: manifest, runtime_profiles: runtimeInfo, models: profiles });
     await writeJSON(pathResolve(runDir, 'method.json'), method);
-    await writeJSON(pathResolve(runDir, 'state.json'), state);
+    await writeJSON(pathResolve(runDir, 'state.json'), redact(state));
     const verifyBundle = async () => {
       for (const [file, expected] of Object.entries(manifest)) {
         if (hash(await readFile(await containedFile(bundle, file))) !== expected) fail(`Bundle changed during execution: ${file}`, 'bundle_changed');
@@ -258,7 +259,7 @@ async function executeRun(file, config, options) {
       const entry = options.replay && !replay
         ? { effect: data.key, token: data.token, inputs: data.inputs, action_outcome: data.actionOutcome, attempt: data.attempt, observed_at: new Date().toISOString(), verdict: 'not_replayed', reason: 'The case supplies no observations for this effect.', evidence: [], final: true, completed_at: data.completedAt, horizon_at: horizonAt(spec, data.completedAt), next_observation_at: null }
         : await observeEffect({ ...data, effect: spec, runDir, replay, final: options.replay ? false : undefined, previous: options.replay ? [] : await previousObservations(runDir, data.key), run: (exec, input, role) => observerScript(exec, input, role, data.token, signal) });
-      await appendLedger(runDir, entry);
+      await appendLedger(runDir, redact(entry));
       await record('effect.observed', entry);
       return entry;
     };
@@ -484,7 +485,7 @@ async function executeRun(file, config, options) {
                 entry.copies[change.path] = copy;
               } catch { /* A file that disappeared again has no copy. */ }
             }
-            await appendLedger(runDir, entry);
+            await appendLedger(runDir, redact(entry));
             await record('effect.observed', entry);
             if (entry.verdict === 'contradicted') fail(`Effect ${entry.effect} was contradicted: ${entry.reason}`, 'effect_contradicted');
           }
@@ -510,10 +511,10 @@ async function executeRun(file, config, options) {
           for (const { data, spec } of registered) {
             const entry = { effect: data.key, token, inputs: data.inputs, action_outcome: 'ok', attempt: 0, registered_at: completedAt, verdict: 'pending', reason: 'Not yet observed.', final: false,
               completed_at: completedAt, horizon_at: horizonAt(spec, completedAt), next_observation_at: nextObservation(spec, completedAt, new Date(0).toISOString()) };
-            await appendLedger(runDir, entry);
+            await appendLedger(runDir, redact(entry));
           }
           guard();
-          await writeJSON(pathResolve(runDir, 'state.json'), nextState);
+          await writeJSON(pathResolve(runDir, 'state.json'), redact(nextState));
           state = nextState; root.state = state;
           (accepted[id] ??= [])[iteration] = outputs;
           if (actionObserved) (observed[id] ??= [])[iteration] = actionObserved;
