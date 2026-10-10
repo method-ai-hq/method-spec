@@ -15,7 +15,7 @@ const hasSecret = (options, name) => !!(options.secrets && own(options.secrets, 
 export async function preflight(method, config, sourceRoot, options = {}) {
   validateMethod(method);
   validateConfig(config);
-  config = configuration(config);
+  config = configuration(config, method);
   const missingSetup = [];
   const missingSecrets = Object.keys(method.secrets ?? {}).filter(name => !hasSecret(options, name));
   if (missingSecrets.length && !options.allowMissingSetup) fail(`Missing secrets: ${missingSecrets.join(', ')}.`, 'missing_secret', { missing: missingSecrets });

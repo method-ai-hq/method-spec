@@ -176,7 +176,7 @@ function validateModels(method) {
     .filter(([, exec]) => ['call', 'agent'].includes(exec?.kind)).map(([phase, exec]) => [id, phase, exec]));
   if (formatRank(method.format) < 4) {
     const later = { fix: 'Set format to method/3.4.' };
-    for (const field of ['id', 'models']) if (method[field] !== undefined) fail(`${field} requires method/3.4`, 'validation', { ...later, field });
+    for (const field of ['id', 'models', 'limits', 'tools']) if (method[field] !== undefined) fail(`${field} requires method/3.4`, 'validation', { ...later, field });
     for (const [id, step] of Object.entries(method.steps)) if (step.accept) fail(`${id}.accept requires method/3.4`, 'validation', { ...later, step: id, field: 'accept' });
     for (const [id, phase, exec] of executions) {
       if (exec.model === undefined) fail(`${id}.${phase}.model: name a model profile, or use method/3.4 for the account default`, 'validation', { fix: 'Add model, or set format to method/3.4.', step: id, field: `${phase}.model` });
@@ -214,6 +214,7 @@ export function validateSemantics(method, assertData) {
 
   const validateDefs = (defs = {}) => { for (const def of Object.values(defs)) { dataSchema(def); if (own(def, 'default')) assertData(def, def.default); } };
   validateDefs(method.inputs); validateDefs(method.state);
+  for (const tool of Object.values(method.tools ?? {})) { validateDefs(tool.in); validateDefs(tool.out); }
   if (method.run_label !== undefined) runLabelType(method);
   const definitions = {
     inputs: { type: 'record', fields: method.inputs ?? {} }, state: { type: 'record', fields: method.state ?? {} },

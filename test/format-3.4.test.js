@@ -144,3 +144,30 @@ test('the contributor harness reads no configuration file and has no --config', 
   assert.equal(report.valid, true);
   assert.deepEqual(report.issues.map(issue => issue.code), ['unused_output', 'accept_unused']);
 });
+
+test('method/3.4 holds limits, limits.step, and tools; the document comes before the configuration', async () => {
+  const { configuration } = await import('../src/defaults.js');
+  const tool = { description: 'Double a number.', in: { n: { type: 'number' } }, out: { doubled: { type: 'number' } }, run: { kind: 'run', runtime: 'node', entrypoint: 'double.mjs' }, effects: [] };
+  const method = newsletter(m => { m.limits = { max_model_requests: 3, step: { timeout_ms: 5000 } }; m.tools = { double: tool }; });
+  validateMethod(method);
+  const config = configuration({ limits: { max_model_requests: 50, max_tool_calls: 7 }, step_defaults: { timeout_ms: 1, max_agent_turns: 4 }, tools: { double: { ...tool, description: 'Old.' }, other: tool } }, method);
+  assert.equal(config.limits.max_model_requests, 3); assert.equal(config.limits.max_tool_calls, 7);
+  assert.deepEqual([config.step_defaults.timeout_ms, config.step_defaults.max_agent_turns], [5000, 4]);
+  assert.equal(config.tools.double.description, 'Double a number.'); assert.ok(config.tools.other);
+  assert.throws(() => validateMethod(newsletter(m => { m.limits = { effect_wait_ms: 1 }; })), /limits/);
+  assert.throws(() => validateMethod(newsletter(m => { m.format = 'method/3.3'; delete m.id; delete m.models; delete m.steps.fields.accept; m.limits = { timeout_ms: 1 }; })), /limits requires method\/3.4|requires method\/3.4/);
+});
+
+test('a run uses the document limits and tools without configuration', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'method-34-limits-'));
+  try {
+    const method = { format: 'method/3.4', name: 'Limits', goal: 'Stop at the document cap.', limits: { max_invocations: 1 },
+      steps: { a: { name: 'A', purpose: 'Return one; changes nothing.', do: { kind: 'run', runtime: 'node', entrypoint: 'one.mjs' }, out: { one: { type: 'number', description: 'One.' } } },
+        b: { name: 'B', purpose: 'Return two; changes nothing.', after: 'a', do: { kind: 'run', runtime: 'node', entrypoint: 'one.mjs' }, out: { two: { type: 'number', description: 'Two.' } } } }, result: 'two' };
+    await writeFile(join(root, 'task.method'), JSON.stringify(method));
+    await writeFile(join(root, 'one.mjs'), 'for await (const c of process.stdin) {}; console.log(JSON.stringify({one: 1, two: 2}));');
+    const result = await runMethod(join(root, 'task.method'), { allow_local_processes: true, runtimes: { node: { command: process.execPath, version: 'test' } } }, { runDir: join(root, 'run') });
+    assert.notEqual(result.status, 'completed');
+    assert.match(JSON.stringify(result), /invocation/i);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

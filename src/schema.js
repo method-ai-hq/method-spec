@@ -26,6 +26,9 @@ const agent = object({ kind: { const: 'agent' }, model: stepModel, prompt: text,
 // What a models name means: a hosted model ID, or one with its output limit and reasoning effort.
 const methodModel = { anyOf: [modelId, object({ model: modelId, max_output_tokens: positive, reasoning_effort: { enum: ['minimal', 'low', 'medium', 'high'] } }, ['model'])] };
 // An accepted warning: the issue code and the reason the author accepts it on this step.
+const runLimits = { timeout_ms: positive, max_model_requests: { type: 'integer', minimum: 0 }, max_invocations: positive, max_tool_calls: { type: 'integer', minimum: 0 }, max_output_bytes: positive, max_request_bytes: positive, max_concurrency: width };
+const stepLimits = { timeout_ms: positive, max_agent_turns: positive, max_model_requests: positive };
+const tool = (data) => ({oneOf: [object({ description: text, in: map({ $ref: data }), out: map({ $ref: data }), run, effects: list(name) }), object({description: text, connection: name, tool: text, parameters: {type:'object'}, effects: list(name)})]});
 const accept = { type: 'object', propertyNames: { type: 'string', pattern: '^[a-z][a-z0-9_]*$', maxLength: 80 }, additionalProperties: text, minProperties: 1 };
 // A classify step has one answer form: named options, yes or no, or 2–10 ordered levels (lowest first).
 const classify = { ...object({ kind: { const: 'classify' }, question: text, options: { ...map(text), minProperties: 2, maxProperties: 255 },
@@ -62,6 +65,10 @@ export const methodSchema = {
     // The account Method's ID. The CLI writes it once; the document digest leaves it out.
     id: { type: 'string', pattern: '^wf_[0-9a-f]{32}$' },
     models: map(methodModel),
+    // Run limits, and limits.step for every step without its own (method/3.4). They come before the host's limits.
+    limits: object({ ...runLimits, step: object(stepLimits, []) }, []),
+    // Tools that agent steps list by name (method/3.4).
+    tools: map(tool('#/$defs/data')),
     name: text, goal: text, run_prompt: text, run_label: ref,
     files: list(path), inputs: map({ $ref: '#/$defs/input' }), state: map({ $ref: '#/$defs/input' }),
     // Names and purposes only. The host supplies values to every script step; they never appear in the Method.
@@ -99,8 +106,8 @@ export const methodSchema = {
 export const configSchema = {
   $schema: 'http://json-schema.org/draft-07/schema#',
   ...object({
-    limits: object({ timeout_ms: positive, max_model_requests: { type: 'integer', minimum: 0 }, max_invocations: positive, max_tool_calls: { type: 'integer', minimum: 0 }, max_output_bytes: positive, max_request_bytes: positive, effect_wait_ms: { type: 'integer', minimum: 0 }, max_concurrency: width }, []),
-    step_defaults: object({ timeout_ms: positive, max_agent_turns: positive, max_model_requests: positive }, []),
+    limits: object({ ...runLimits, effect_wait_ms: { type: 'integer', minimum: 0 } }, []),
+    step_defaults: object(stepLimits, []),
     allow_local_processes: { type: 'boolean' },
     // With api_key_env the runtime calls Jev through OpenRouter directly with the operator's own key.
     classification: object({ provider: {const: 'typesafe'}, model: text, api_key_env: keyEnv }, ['provider', 'model']),
@@ -114,7 +121,7 @@ export const configSchema = {
       object({ backend: { enum: ['codex', 'claude'] }, command: text, model: text, reasoning_effort: text }, ['backend']),
       // A hosted model through the signed-in Method account. The host supplies the transport; there is no key.
       object({ backend: { const: 'method' }, model: text, max_output_tokens: positive, reasoning_effort: { enum: ['minimal', 'low', 'medium', 'high'] } }, ['backend', 'model'])] } },
-    tools: map({oneOf: [object({ description: text, in: map({ $ref: `${methodSchema.$id}#/$defs/data` }), out: map({ $ref: `${methodSchema.$id}#/$defs/data` }), run, effects: list(name) }), object({description: text, connection: name, tool: text, parameters: {type:'object'}, effects: list(name)})]}),
+    tools: map(tool(`${methodSchema.$id}#/$defs/data`)),
     environment: map({ type: 'string' }),
     rubric: object({ judge_runs: { type: 'integer', minimum: 1, maximum: 9 }, classify_threshold: { type: 'number', minimum: 0.5, maximum: 1 }, max_value_bytes: positive }, []),
   }, []),

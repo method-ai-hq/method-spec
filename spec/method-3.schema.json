@@ -66,6 +66,248 @@
         ]
       }
     },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "max_model_requests": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_invocations": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "max_tool_calls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_output_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "max_request_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "max_concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        },
+        "step": {
+          "type": "object",
+          "properties": {
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            },
+            "max_agent_turns": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            },
+            "max_model_requests": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "tools": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]*$",
+        "maxLength": 80,
+        "not": {
+          "enum": [
+            "constructor",
+            "prototype",
+            "__proto__"
+          ]
+        }
+      },
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 16000
+              },
+              "in": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$",
+                  "maxLength": 80,
+                  "not": {
+                    "enum": [
+                      "constructor",
+                      "prototype",
+                      "__proto__"
+                    ]
+                  }
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/data"
+                }
+              },
+              "out": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$",
+                  "maxLength": 80,
+                  "not": {
+                    "enum": [
+                      "constructor",
+                      "prototype",
+                      "__proto__"
+                    ]
+                  }
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/data"
+                }
+              },
+              "run": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "run"
+                  },
+                  "runtime": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$",
+                    "maxLength": 80,
+                    "not": {
+                      "enum": [
+                        "constructor",
+                        "prototype",
+                        "__proto__"
+                      ]
+                    }
+                  },
+                  "entrypoint": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  },
+                  "args": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "kind",
+                  "runtime",
+                  "entrypoint"
+                ],
+                "additionalProperties": false
+              },
+              "effects": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$",
+                  "maxLength": 80,
+                  "not": {
+                    "enum": [
+                      "constructor",
+                      "prototype",
+                      "__proto__"
+                    ]
+                  }
+                },
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "description",
+              "in",
+              "out",
+              "run",
+              "effects"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 16000
+              },
+              "connection": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*$",
+                "maxLength": 80,
+                "not": {
+                  "enum": [
+                    "constructor",
+                    "prototype",
+                    "__proto__"
+                  ]
+                }
+              },
+              "tool": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 16000
+              },
+              "parameters": {
+                "type": "object"
+              },
+              "effects": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$",
+                  "maxLength": 80,
+                  "not": {
+                    "enum": [
+                      "constructor",
+                      "prototype",
+                      "__proto__"
+                    ]
+                  }
+                },
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "description",
+              "connection",
+              "tool",
+              "parameters",
+              "effects"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
     "name": {
       "type": "string",
       "minLength": 1,

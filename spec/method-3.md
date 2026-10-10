@@ -2,7 +2,7 @@
 
 Implemented by `@withmethod/runtime` 0.10.0. The full Method SDK uses this runtime at a pinned Git revision. New methods use this format under the same Method product and command.
 
-Use `format: method/3.4` for new documents. Existing `method/3.1`, `method/3.2`, and `method/3.3` documents retain their validation rules and load unchanged. Method 3.3 adds effect contracts: an external change is confirmed by an observer, not by the action's receipt. Method 3.4 adds the Method ID, the Method's own `models`, model IDs on steps, and accepted warnings (see [Method 3.4](#method-34)). The machine-readable grammar is [method-3.schema.json](method-3.schema.json). Operator configuration uses [runtime-config.schema.json](runtime-config.schema.json). The validator also checks references, dependencies, data declarations, loop conditions, and effects; JSON Schema alone is insufficient.
+Use `format: method/3.4` for new documents. Existing `method/3.1`, `method/3.2`, and `method/3.3` documents retain their validation rules and load unchanged. Method 3.3 adds effect contracts: an external change is confirmed by an observer, not by the action's receipt. Method 3.4 adds the Method ID, the Method's own `models`, `limits`, and `tools`, model IDs on steps, and accepted warnings (see [Method 3.4](#method-34)). The machine-readable grammar is [method-3.schema.json](method-3.schema.json). Operator configuration uses [runtime-config.schema.json](runtime-config.schema.json). The validator also checks references, dependencies, data declarations, loop conditions, and effects; JSON Schema alone is insufficient.
 
 ## Installation and commands
 
@@ -49,13 +49,18 @@ steps:
   fields:
     do: {kind: call, prompt: ...}                            # or nothing: the account default
     accept: {prompt_multiple_tasks: "The user wants one combined field list."}
+limits: {timeout_ms: 600000, max_model_requests: 20, step: {timeout_ms: 120000}}   # run limits; step: per-step defaults
+tools:                                     # tools that agent steps list by name
+  calculate: {description: ..., in: {...}, out: {...}, run: {kind: run, runtime: python, entrypoint: calc.py}}
 ```
 
 - `id` is the account Method's ID: `wf_` and 32 lowercase hex digits. The CLI writes it at the first signed-in save. The content digest leaves it out (`documentForDigest`), so a copy keeps its versions and an `id` written during a run does not stop its resume.
 - `models` maps a name to a model ID, or to `{model, max_output_tokens?, reasoning_effort?}` (reasoning effort: minimal, low, medium, high). Each is a hosted model (backend `method`).
 - A `call` or `agent` step's `model` (also an agent check's) is a `models` name, a model ID (`provider/model`, pattern `^[a-z0-9-]+/[A-Za-z0-9._:-]+$`), or absent (the account default). `default` keeps meaning the account default. When the document has `models`, any other plain name must be one of them (`unknown_model`). Without `models`, a plain name can name a caller-configured profile.
 - `accept: {CODE: reason}` on a step accepts that warning or note on that step. The issue stays in the list with `accepted` set to the reason. Errors cannot be accepted.
-- `id`, `models`, `accept`, a model ID, and an absent model require `format: method/3.4`.
+- `limits` sets run limits (`timeout_ms`, `max_model_requests`, `max_invocations`, `max_tool_calls`, `max_output_bytes`, `max_request_bytes`, `max_concurrency`); `limits.step` sets the defaults for steps without their own limits (`timeout_ms`, `max_agent_turns`, `max_model_requests`; it replaces configuration `step_defaults`). Document limits come before configuration limits.
+- `tools` defines the tools that agent steps name in `tools:`, with the same form as configuration `tools`. A document tool comes before a configuration tool with the same name. Script tools are part of the saved package.
+- `id`, `models`, `accept`, `limits`, `tools`, a model ID, and an absent model require `format: method/3.4`.
 
 ## Issues
 
@@ -412,7 +417,7 @@ Repeated inputs bound to state are refreshed each iteration. Other upstream valu
 
 Operator configuration can override the finite default run limits: one hour, 100 model requests, 100 step invocations, 200 tool calls, 16 MiB each for input and output, and 8 concurrent items per step. A missing configuration uses the local Codex agent as model `default`. Custom scripts, tools, and models still require their configuration. Model requests and tool calls may be zero. A Method cannot increase those caps.
 
-A model-using step can override `max_model_requests`; an agent-using step can also override `max_agent_turns`. Configuration `step_defaults` can change the defaults. Action and check share these limits and `timeout_ms` for each invocation. For the direct API backend, one agent turn is one model response. Repeated invocations share the run caps. For a direct API agent, the runner does not dispatch a tool when no follow-up model request or agent turn remains.
+A model-using step can override `max_model_requests`; an agent-using step can also override `max_agent_turns`. A method/3.4 document's `limits.step` (or configuration `step_defaults`) can change the defaults; document `limits` set the run caps before configuration limits. Action and check share these limits and `timeout_ms` for each invocation. For the direct API backend, one agent turn is one model response. Repeated invocations share the run caps. For a direct API agent, the runner does not dispatch a tool when no follow-up model request or agent turn remains.
 
 Direct API provider calls have no automatic retries. Codex manages its own internal requests; script-internal provider calls are also outside this accounting. Usage from completed provider responses is recorded; unavailable usage remains unknown. `cost_usd` is null because this release does not calculate prices or enforce a monetary budget. Request counts and output-token limits are resource caps, not a dollar guarantee. The operator must decide the spending allowance before live runs.
 

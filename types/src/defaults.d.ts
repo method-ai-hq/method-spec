@@ -1,4 +1,9 @@
-export function configuration(config?: {}): {
+/**
+ * The effective configuration. A method/3.4 document's own limits, limits.step, and tools come before the host's
+ * configuration: they are part of the Method.
+ */
+export function configuration(config?: {}, method?: {}): {
+    tools?: any;
     limits: any;
     step_defaults: any;
     models: any;

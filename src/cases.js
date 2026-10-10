@@ -362,7 +362,7 @@ async function changedFirst(methodFile, config, cases) {
   for (const step of Object.values(method.steps)) for (const exec of [step.do, step.check]) if (exec?.kind === 'run') {
     try { files[exec.entrypoint] = hash(await readFile(join(root, exec.entrypoint))); } catch { /* the run reports a missing file */ }
   }
-  const keys = Object.fromEntries(Object.entries(method.steps).map(([id, step]) => [id, stepKey(step, { files, profiles: config.models ?? {}, tools: config.tools ?? {} })]));
+  const keys = Object.fromEntries(Object.entries(method.steps).map(([id, step]) => [id, stepKey(step, { files, profiles: config.models ?? {}, tools: { ...config.tools, ...method.tools } })]));
   const touched = [];
   for (const item of cases) {
     const recorded = (await readJSON(join(item.dir, 'recording.json'))).keys;
