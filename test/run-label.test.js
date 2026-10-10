@@ -10,7 +10,6 @@ test('labels select declared scalar inputs or nested step outputs', () => {
   for (const run_label of ['inputs.missing','steps.missing.outputs.plan.date','steps.prepare.outputs.plan','steps.prepare.outputs.plan.missing','state.target','steps.prepare.inputs.target','inputs.constructor']) {
     assert.throws(() => validateMethod({...method,run_label}));
   }
-  assert.throws(() => validateMethod({...method,run_label_input:'target'}));
   for (const extra of [{each:{target:'inputs.target'}},{repeat:{max_iterations:2,until:'plan.date'}}]) {
     assert.throws(() => validateMethod({...method,steps:{prepare:{...method.steps.prepare,...extra}},run_label:'steps.prepare.outputs.plan.date'}), /repeated step/);
   }
@@ -24,7 +23,8 @@ test('input labels use recorded values, never defaults or arbitrary object seria
   for (const [type,value] of [['number',0],['boolean',false]]) {
     assert.equal(runLabel({...current,inputs:{target:{type}}},{inputs:{target:value}}),String(value));
   }
-  assert.equal(runLabel(current,{inputs:{target:'x'.repeat(200)}}).length,160);
+  // A long label is shortened.
+  assert.ok(runLabel(current,{inputs:{target:'x'.repeat(10_000)}}).length < 10_000);
 });
 test('past runs with blank target use the date saved by preparation', () => {
   const current = {...method,run_label:'steps.prepare.outputs.plan.date'};

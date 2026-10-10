@@ -1,4 +1,5 @@
 import { hostname } from 'node:os';
+import { callerVariables } from './schema.js';
 import { executeClassification, typesafeClassification } from './classification.js';
 import { effectiveOutputs, modelName } from './semantics.js';
 import { executionTools, validateToolResult } from './tool-connections.js';
@@ -216,7 +217,7 @@ async function executeRun(file, config, options) {
       const profile = runtimeInfo[exec.runtime];
       // Scripts are the user's own processes: they get the basic environment that tools such as git, npx or wrangler need
       // to find the user's own sign-ins, and nothing else of the caller's environment.
-      const basic = Object.fromEntries(['HOME', 'USER', 'TMPDIR'].flatMap(name => process.env[name] ? [[name, process.env[name]]] : []));
+      const basic = Object.fromEntries(callerVariables.flatMap(name => process.env[name] ? [[name, process.env[name]]] : []));
       const environment = { ...basic, PATH: options.processPath ?? process.env.PATH ?? '', LANG: 'C.UTF-8', METHOD_OUTPUT_DIR: artifacts, METHOD_ENVIRONMENT: JSON.stringify(connectionsFor(method, config.environment)) };
       if (operationId) environment.METHOD_OPERATION_ID = operationId;
       // Preflight checked that every declared secret has a value.

@@ -7,7 +7,7 @@ This public MIT repository contains two parts:
 - **Format and validator:** JSON Schema plus semantic checks for references, types, effects, and dependency cycles.
 - **Executor (`@withmethod/runtime` 0.9.1):** local script, model, and agent execution; checks; state; run records; and checkpoint resume.
 
-New methods use `format: method/3.3`. Existing `method/3.1` and `method/3.2` documents keep their validation rules. Method 3.3 adds effect contracts (observed external results) and recorded cases (`method test`).
+New methods use `format: method/3.4`. Existing `method/3.1`, `method/3.2`, and `method/3.3` documents load and run unchanged. Method 3.3 adds effect contracts (observed external results) and recorded cases (`method test`).
 
 The full [Method SDK and CLI](https://docs.withmethod.ai/sdk/overview) uses a pinned revision of this runtime and adds authoring, account access, saved versions, and dashboard uploads. The SDK source and releases are public at [method-sdk](https://github.com/method-ai-hq/method-sdk). The hosted application repository is private. The YAML format itself does not require an account or a hosted service.
 
@@ -39,7 +39,7 @@ Scripts and local coding agents are trusted local processes, not an OS sandbox. 
 | Document | Purpose |
 | --- | --- |
 | [Current reference](spec/method-3.md) | Implemented syntax, execution, limits, and recovery. |
-| [JSON Schema](spec/method-3.schema.json) | Method 3.1, 3.2 and 3.3 grammar. |
+| [JSON Schema](spec/method-3.schema.json) | Method 3.1 to 3.4 grammar. |
 | [Configuration schema](spec/runtime-config.schema.json) | Operator runtime, model, tool, and limit settings. |
 | [Product documentation](https://docs.withmethod.ai) | Full CLI, JavaScript/Python SDKs, API, and MCP. |
 | [Validation record](VALIDATION.md) | Checked behavior and limits of the evidence. |
@@ -50,4 +50,4 @@ Game controls, policies, and measured game results belong in [method-factorio](h
 
 `src/schema.js` defines the grammar. `npm run schema` generates JSON schemas and static shape validators. `src/document.js` owns browser-safe YAML parsing, typed document errors, default values, and document validation. It preserves text and permits bounded YAML aliases. `src/semantics.js` owns shapes, references, and dependency rules. The product imports these public definitions at a pinned commit; it does not maintain a second current runtime.
 
-Method 3.2 requires script names, purposes, output descriptions, and script-check descriptions. Limit overrides remain optional. `src/defaults.js` supplies finite defaults. Run `npm run check` before release and `npm run types` after a change that affects exported types. No private application source or history is included.
+Step names, purposes, output descriptions, and limit overrides are optional. `src/defaults.js` supplies finite defaults. Run `npm run check` before release and `npm run types` after a change that affects exported types. No private application source or history is included.

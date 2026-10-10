@@ -1,3 +1,5 @@
+export const callerVariables: string[];
+export const scriptVariables: string[];
 export function object(properties: any, required?: string[]): {
     type: string;
     properties: any;

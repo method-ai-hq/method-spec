@@ -130,13 +130,14 @@ function validateEffects(method, id, step, globalRef, outputs) {
   const needsObserver = environmentChanges.filter(ref => !isFiles(method, ref));
   if (step.no_effect_reason !== undefined) {
     // A declared waiver: the run report lists it, so a person can see which changes nobody observes.
+    // On a step that changes only files, the waiver is redundant and has no effect.
     requiredText(step.no_effect_reason, `${id}.no_effect_reason`, 'Say why no observer confirms this change.');
-    if (!needsObserver.length) fail(`${id}: no_effect_reason applies only to a step that changes a connection other than files; files connections are observed automatically`, 'validation', { fix: 'Remove no_effect_reason from this step.' });
     if (step.effects) fail(`${id}: use effects or no_effect_reason, not both`, 'validation', { fix: 'Keep effects or no_effect_reason, and remove the other.' });
     return;
   }
   if (!step.effects) {
-    if (needsObserver.length) fail(`${id}: ${needsObserver.join(', ')} needs an effect that says how to confirm the intended result, or a no_effect_reason sentence that says why nothing can confirm it.`, 'validation', { fix: 'Add an effect that observes the change, or a no_effect_reason sentence.' });
+    // Documents saved before method/3.3 have no effects; they still run.
+    if (needsObserver.length && formatRank(method.format) >= 3) fail(`${id}: ${needsObserver.join(', ')} needs an effect that says how to confirm the intended result, or a no_effect_reason sentence that says why nothing can confirm it.`, 'validation', { fix: 'Add an effect that observes the change, or a no_effect_reason sentence.' });
     return;
   }
   if (!environmentChanges.length) fail(`${id}: effects describe external changes; declare the changed connection in changes`, 'validation', { fix: 'Add the changed connection to changes, or remove effects.' });
@@ -172,18 +173,10 @@ export const modelName = exec => exec.model ?? 'default';
 export const isModelId = model => typeof model === 'string' && new RegExp(modelIdPattern).test(model);
 /** Method 3.4 fields: id, models (hosted or a local agent), accept, a step model that is a model ID or absent. */
 function validateModels(method) {
+  // Documents saved before method/3.4 name configured profiles (or a saved package's runtime.json models), so they still run.
+  if (formatRank(method.format) < 4) return;
   const executions = Object.entries(method.steps).flatMap(([id, step]) => [['do', step.do], ['check', step.check]]
     .filter(([, exec]) => ['call', 'agent'].includes(exec?.kind)).map(([phase, exec]) => [id, phase, exec]));
-  if (formatRank(method.format) < 4) {
-    const later = { fix: 'Set format to method/3.4.' };
-    for (const field of ['id', 'models', 'limits', 'tools']) if (method[field] !== undefined) fail(`${field} requires method/3.4`, 'validation', { ...later, field });
-    for (const [id, step] of Object.entries(method.steps)) if (step.accept) fail(`${id}.accept requires method/3.4`, 'validation', { ...later, step: id, field: 'accept' });
-    for (const [id, phase, exec] of executions) {
-      if (exec.model === undefined) fail(`${id}.${phase}.model: name a model profile, or use method/3.4 for the account default`, 'validation', { fix: 'Add model, or set format to method/3.4.', step: id, field: `${phase}.model` });
-      if (isModelId(exec.model)) fail(`${id}.${phase}.model: a model ID requires method/3.4`, 'validation', { ...later, step: id, field: `${phase}.model` });
-    }
-    return;
-  }
   // A plain name must be in models (with or without a models block); default keeps meaning the account default.
   for (const [id, phase, exec] of executions) {
     const model = modelName(exec);
@@ -205,12 +198,7 @@ function inStep(id, check) {
 }
 export function validateSemantics(method, assertData) {
   safeData(method);
-  const current = formatRank(method.format) >= 3;
   validateModels(method);
-  if (!current) {
-    if (Object.values(method.steps).some(step => step.effects || step.no_effect_reason !== undefined)) fail('effects and no_effect_reason require method/3.3', 'validation', { fix: 'Set format to method/3.3 or later.' });
-    if (Object.values(method.environment ?? {}).some(env => env.role)) fail('Environment roles require method/3.3', 'validation', { fix: 'Set format to method/3.3 or later.' });
-  }
 
   const validateDefs = (defs = {}) => { for (const def of Object.values(defs)) { dataSchema(def); if (own(def, 'default')) assertData(def, def.default); } };
   validateDefs(method.inputs); validateDefs(method.state);
@@ -225,17 +213,7 @@ export function validateSemantics(method, assertData) {
   for (const [id, step] of Object.entries(method.steps)) inStep(id, () => {
     if (reserved.has(id)) fail(`Reserved step name: ${id}`, 'validation', { fix: 'Rename the step.' });
     const outputs = effectiveOutputs(step);
-    if (method.format !== 'method/3.1') {
-      if (step.do?.kind === 'run') {
-        requiredText(step.name, `${id}.name`, 'Give this script step a name.');
-        requiredText(step.purpose, `${id}.purpose`, "Describe this script's rules, result, and external changes.");
-        for (const [name, def] of Object.entries(outputs)) requiredText(def.description, `${id}.out.${name}.description`, 'Describe the returned value.');
-      }
-      if (step.check?.kind === 'run') requiredText(step.reading?.check, `${id}.reading.check`, 'Describe what this script checks.');
-    }
     if (step.do?.kind === 'classify') {
-      if (method.format === 'method/3.1') fail(`${id}: classify requires method/3.2 or later`, 'validation', { fix: 'Set format to method/3.2 or later.' });
-      requiredText(step.name, `${id}.name`, 'Give this classification step a name.');
       requiredText(step.do.question, `${id}.do.question`, 'Write the classification question.');
       if ([step.do.options, step.do.answer, step.do.levels].filter(value => value !== undefined).length !== 1)
         fail(`${id}.do: give exactly one of options, answer: yes_no, or levels`, 'validation', { fix: 'Keep one of options, answer: yes_no, or levels.' });
@@ -290,11 +268,9 @@ export function validateSemantics(method, assertData) {
       const match = /^environment\.([a-z][a-z0-9_]*)$/.exec(exec.browser);
       if (!match || method.environment?.[match[1]]?.type !== 'browser') fail('Agent browser must refer to a browser environment', 'validation', { fix: 'Set browser to environment.NAME of a browser environment.' });
     }
-    if (current) {
-      const observed = observers(method);
-      for (const ref of [...Object.values(step.in ?? {}), ...Object.values(step.each ?? {}), ...changes]) if (observed.has(ref)) fail(`${id}: only effect observers can use ${ref}`, 'validation', { fix: 'Remove the observer environment from this step; only an effect may read it.' });
-      validateEffects(method, id, step, globalRef, outputs);
-    } else if (changes.some(x => x.startsWith('environment.')) && !step.check) fail('External changes require a check', 'validation', { fix: 'Add a check, or use method/3.3 or later with an effect.' });
+    const observed = observers(method);
+    for (const ref of [...Object.values(step.in ?? {}), ...Object.values(step.each ?? {}), ...changes]) if (observed.has(ref)) fail(`${id}: only effect observers can use ${ref}`, 'validation', { fix: 'Remove the observer environment from this step; only an effect may read it.' });
+    validateEffects(method, id, step, globalRef, outputs);
     const validate = (prompt, definitions, location) => {
       try { validatePrompt(prompt, definitions, typeAt); }
       catch (error) { fail(`${id}.${location}: ${error.message}`, 'invalid_prompt', { fix: 'Refer in the prompt only to names that the step receives in in or each.' }); }

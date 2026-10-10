@@ -5,15 +5,22 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {runMethod} from '../src/runner.js';
 import {validateMethod} from '../src/validate.js';
-import {executionTools,toolContent} from '../src/tool-connections.js';
+import {toolContent} from '../src/tool-connections.js';
+import {preflight} from '../src/preflight.js';
 const doc=()=>({format:'method/3.1',name:'Browser',goal:'Read',environment:{browser:{type:'browser',description:'Browser'}},steps:{read:{changes:['environment.browser'],do:{kind:'agent',model:'default',browser:'environment.browser',prompt:'Read'},out:{value:{type:'text'}},check:{present:'value'}}},result:'value'});
 const definition={description:'Open page',connection:'browser',tool:'browser_navigate',parameters:{type:'object',properties:{url:{type:'string'}},required:['url'],additionalProperties:false},effects:['browser']};
-test('browser reference and automatic controls; omitted custom tools; collision',()=>{
+test('browser reference and automatic controls; omitted custom tools; collision',async()=>{
  validateMethod(doc());
- assert.deepEqual(executionTools(doc().steps.read.do,{browser_navigate:definition}),['browser_navigate']);
- assert.deepEqual(executionTools({kind:'agent'}, {browser_navigate:definition}),[]);
- assert.throws(()=>executionTools({...doc().steps.read.do,tools:['browser_navigate']},{browser_navigate:definition}),/Duplicate/);
- const m=doc();m.steps.read.do.browser='environment.missing';assert.throws(()=>validateMethod(m),/browser environment/);
+ const cfg={allow_local_processes:true,tools:{browser_navigate:definition},environment:{browser:'b'}};
+ const check=method=>preflight(method,cfg,tmpdir(),{allowMissingSetup:true,agent:'codex'});
+ // A browser step gets the connection's controls without listing them; they need the connection.
+ assert.ok((await check(doc())).missingSetup.some(item=>item.includes('browser_navigate')));
+ // Without a browser, the browser controls are not given.
+ const plain=doc();delete plain.steps.read.do.browser;delete plain.environment;plain.steps.read.changes=[];delete cfg.environment;
+ assert.ok(!(await check(plain)).missingSetup.some(item=>item.includes('browser_navigate')));
+ cfg.environment={browser:'b'};
+ const both=doc();both.steps.read.do.tools=['browser_navigate'];await assert.rejects(check(both));
+ const m=doc();m.steps.read.do.browser='environment.missing';assert.throws(()=>validateMethod(m));
 });
 for(const backend of ['codex','claude'])test(`${backend} receives text and images through the normal bridge; private call data stays out of journal`,async t=>{
  const root=await mkdtemp(join(tmpdir(),'method-browser-'));t.after(()=>rm(root,{recursive:true,force:true}));

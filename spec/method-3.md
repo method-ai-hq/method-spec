@@ -2,7 +2,7 @@
 
 Implemented by `@withmethod/runtime` 0.10.0. The full Method SDK uses this runtime at a pinned Git revision. New methods use this format under the same Method product and command.
 
-Use `format: method/3.4` for new documents. Existing `method/3.1`, `method/3.2`, and `method/3.3` documents retain their validation rules and load unchanged. Method 3.3 adds effect contracts: an external change is confirmed by an observer, not by the action's receipt. Method 3.4 adds the Method ID, the Method's own `models`, `limits`, and `tools`, model IDs on steps, and accepted warnings (see [Method 3.4](#method-34)). The machine-readable grammar is [method-3.schema.json](method-3.schema.json). Operator configuration uses [runtime-config.schema.json](runtime-config.schema.json). The validator also checks references, dependencies, data declarations, loop conditions, and effects; JSON Schema alone is insufficient.
+Use `format: method/3.4` for new documents. Existing `method/3.1`, `method/3.2`, and `method/3.3` documents load and run unchanged. All formats share one set of rules, with two exceptions that keep saved documents running: before `method/3.3`, an external change needs no effect; before `method/3.4`, a plain model name can name a configured profile (or a saved package's `runtime.json` model). Method 3.3 adds effect contracts: an external change is confirmed by an observer, not by the action's receipt. Method 3.4 adds the Method ID, the Method's own `models`, `limits`, and `tools`, model IDs on steps, and accepted warnings (see [Method 3.4](#method-34)). The machine-readable grammar is [method-3.schema.json](method-3.schema.json). Operator configuration uses [runtime-config.schema.json](runtime-config.schema.json). The validator also checks references, dependencies, data declarations, loop conditions, and effects; JSON Schema alone is insufficient.
 
 ## Installation and commands
 
@@ -57,11 +57,10 @@ tools:                                     # tools that agent steps list by name
 
 - `id` is the account Method's ID: `wf_` and 32 lowercase hex digits. The CLI writes it at the first signed-in save. The content digest leaves it out (`documentForDigest`), so a copy keeps its versions and an `id` written during a run does not stop its resume.
 - `models` maps a name to a model ID, or to `{model, max_output_tokens?, reasoning_effort?}` (reasoning effort: minimal, low, medium, high), each a hosted model (backend `method`), or to `{agent: codex | claude, model?, reasoning_effort?}`: a step that names it runs as a local-agent model step (backend `codex` or `claude`, with that agent's own model name and reasoning effort) wherever the Method runs. That agent must be installed and the configuration must allow local processes.
-- A `call` or `agent` step's `model` (also an agent check's) is a `models` name, a model ID (`provider/model`, pattern `^[a-z0-9-]+/[A-Za-z0-9._:-]+$`), or absent (the account default). `default` keeps meaning the account default. When the document has `models`, any other plain name must be one of them (`unknown_model`). Without `models`, a plain name can name a caller-configured profile.
+- A `call` or `agent` step's `model` (also an agent check's) is a `models` name, a model ID (`provider/model`, pattern `^[a-z0-9-]+/[A-Za-z0-9._:-]+$`), or absent (the account default). `default` keeps meaning the account default. In `method/3.4`, any other plain name must be one of `models` (`unknown_model`). In earlier formats, a plain name names a caller-configured profile.
 - `accept: {CODE: reason}` on a step accepts that warning or note on that step. The issue stays in the list with `accepted` set to the reason. Errors cannot be accepted.
 - `limits` sets run limits (`timeout_ms`, `max_model_requests`, `max_invocations`, `max_tool_calls`, `max_output_bytes`, `max_request_bytes`, `max_concurrency`); `limits.step` sets the defaults for steps without their own limits (`timeout_ms`, `max_agent_turns`, `max_model_requests`; it replaces configuration `step_defaults`). Document limits come before configuration limits.
 - `tools` defines the tools that agent steps name in `tools:`, with the same form as configuration `tools`. A document tool comes before a configuration tool with the same name. Script tools are part of the saved package.
-- `id`, `models`, `accept`, `limits`, `tools`, a model ID, and an absent model require `format: method/3.4`.
 
 ## Issues
 
@@ -71,11 +70,8 @@ tools:                                     # tools that agent steps list by name
 |---|---|---|
 | `secret_value` | error | The document or a file in `options.files` contains a value from `options.secretValues` (exact match, values of 8 or more characters). The value never appears in the issue. |
 | `missing_secret` | warning (error with `phase: 'run'`) | A declared secret is not in `options.availableSecrets`. |
-| `classify_without_threshold` | warning | A classify result is used by `when`, or by a step with `changes`, with no step between that applies a threshold. |
 | `untrusted_content_can_act` | warning | An agent with a `browser` can also change things: its `changes` name a connection that is not files, or it uses a tool whose declaration (in `options.tools`) has effects. Only declarations count, never tool names. |
 | `unused_output` | warning | No step, check, effect, result, or run label uses an output. |
-| `agent_without_tools` | note | An agent step has no tools and no browser. |
-| `check_repeats_output_type` | note | A `present` or unbounded `count` check confirms only what the declared types guarantee. |
 | `accept_unused` | note | A step accepts a code that no longer fires on it. |
 
 `options.issues` adds issues from other checks (for example the SDK's model checks); accepts apply to them too. `options.notChecked` lists codes that were not computed this time, so their accepts give no `accept_unused` note. `options.tools` supplies operator tools for the effects check. Issues are sorted errors first, then warnings, then notes.
@@ -94,7 +90,7 @@ The `environment` declarations describe connections. Operator configuration supp
 
 ## Executable steps
 
-Script actions require a nonempty `name` and `purpose` in Method 3.2. Other step purposes and all limit overrides are optional. Default step limits are ten minutes and 32 model requests or agent turns; explicit limits override these values. Use exactly one of `do` or `ask`. The `do` forms are:
+Step names, purposes, output descriptions, and `reading` text are optional, and all limit overrides are optional. Default step limits are ten minutes and 32 model requests or agent turns; explicit limits override these values. Use exactly one of `do` or `ask`. The `do` forms are:
 
 ```yaml
 do:
@@ -123,7 +119,7 @@ do:
 
 ### Classification
 
-Classification is available in Method 3.2:
+Classification:
 
 ```yaml
 name: Classify message
@@ -156,11 +152,11 @@ Embedded callers supply `config.classification: {provider: 'typesafe', model: '<
 
 To use your own OpenRouter key, add `api_key_env` to that configuration, for example `{provider: 'typesafe', model: 'jev-1.13.0', api_key_env: 'OPENROUTER_API_KEY'}`. The runtime then calls Typesafe's Jev at `https://openrouter.ai/api/v1/systemone` directly with that key. OpenRouter names the pinned release without its patch number (`jev-1.13`) and answers with a dated name such as `typesafe/jev-1.13-20260917`; the runtime accepts that answer as the pinned version. It does not use a supplied provider or the Method account, and the key is redacted from run records. A missing variable fails preflight.
 
-Each invocation reserves one model request and calls the provider once. Requests and responses are bounded to 64 KiB or the smaller configured byte limit. The invocation deadline and cancellation apply. Responses must match the saved provider and model. Invalid responses fail without repair or automatic retry. The result follows the existing candidate, check, and acceptance path. `model.request` and `model.response` carry `kind: classify`, request ID, provider, and model; the response adds confidence, usage, and duration. A reported `usage.cost` adds to the run's `cost_usd`. Missing usage remains unknown.
+Each attempt reserves one model request. A service that is briefly unavailable (HTTP 429 or 5xx, or an unavailable or timed-out service) is tried three times in all, with a growing wait; model calls use the same policy. Requests and responses are bounded to 64 KiB or the smaller configured byte limit. The invocation deadline and cancellation apply. Responses must match the saved provider and model. Invalid responses fail without repair or retry. The result follows the existing candidate, check, and acceptance path. `model.request` and `model.response` carry `kind: classify`, request ID, provider, and model; the response adds confidence, usage, and duration. A reported `usage.cost` adds to the run's `cost_usd`. Missing usage remains unknown.
 
 ### Scripts
 
-In Method 3.2, give each script action a name and purpose that describe its rules, result, and external changes. Describe each top-level output. Describe script checks in `reading.check` and script tools in their configured `description`. Review these descriptions whenever behavior changes.
+Give each script action a name and purpose that describe its rules, result, and external changes. Describe each top-level output. Describe script checks in `reading.check` and script tools in their configured `description`. Readers show these descriptions; validation does not require them. Review them whenever behavior changes.
 
 Split scripts where retrying one operation could repeat another completed action. Keep calculations together when they serve one decision. Return the decision rule or external receipt as inspectable output. For external writes, describe how to check uncertain completion and use the service's duplicate-prevention key when available.
 
@@ -185,7 +181,7 @@ secrets:
   ARCHIVE_TOKEN: Read-only token for the post archive.
 ```
 
-Names use capital letters, digits, and underscores. `PATH`, `LANG`, `HOME`, and names that begin with `METHOD_` are reserved. The host supplies the values (runtime option `secrets`); without it, the process environment does. Every script step receives every declared secret. A missing value fails preflight with `missing_secret` and lists the names in `missing`; no step runs. Model profiles and classification find `api_key_env` in the same way.
+Names use capital letters, digits, and underscores. The variables that the runtime sets for scripts are reserved: `PATH`, `LANG`, `HOME`, `USER`, `TMPDIR`, and names that begin with `METHOD_`. The host supplies the values (runtime option `secrets`); without it, the process environment does. Every script step receives every declared secret. A missing value fails preflight with `missing_secret` and lists the names in `missing`; no step runs. Model profiles and classification find `api_key_env` in the same way.
 
 `run_data: account` (the default) or `run_data: device` tells a signed-in host where to keep run content. The runtime keeps all run records locally either way.
 
@@ -212,7 +208,7 @@ Three direct providers are available. Each profile specifies the exact model ide
 
 The output schema goes to each provider's strict structured output. OpenRouter requests require providers that support the requested parameters and name no fallback models. Anthropic tool turns keep the assistant content, including thinking blocks, unchanged. `model.request`, `model.response`, and `model.error` record the backend. Usage is recorded as input and output tokens; Anthropic input includes cache reads and writes. A response that reports `usage.cost` adds it to the summary's `usage.cost_usd`.
 
-`call` sends one request with a strict JSON output schema and no tools. The runner validates the response locally. It does not issue repair calls or transport retries.
+`call` sends one request with a strict JSON output schema and no tools. The runner validates the response locally. It does not issue repair calls. A rate limit (HTTP 429) or server error (5xx) is retried as for classification: three attempts in all, each one a model request.
 
 `agent` uses a fresh conversation and an explicit function-tool loop. The allowed tools are operator-configured scripts with typed inputs and outputs. The runner validates tool arguments, invokes the allowed script, validates its result, and sends the result back to the model. Reasoning items are retained between requests. Unknown tools, malformed arguments, refusal, or incomplete responses stop the operation.
 
@@ -253,7 +249,7 @@ They return exactly:
 
 Status is `pass`, `fail`, or `unknown`. Evidence entries are string references, not automatic proofs. The incoming evidence list is empty in this release; observations can be bound as data or obtained through a trusted read tool. Script checks run as trusted local code and are not isolated from the action's filesystem.
 
-Output types are always checked. An omitted task check is recorded as `unchecked`, not `pass`. In `method/3.1` and `method/3.2`, an external `changes: [environment.game]` declaration requires an explicit check. In `method/3.3` it requires effects (next section); a check then covers only outputs and state. A check of an action's completion does not establish that it was strategically useful.
+Output types are always checked. An omitted task check is recorded as `unchecked`, not `pass`. An external `changes: [environment.game]` declaration requires effects (next section); a check covers only outputs and state. Documents saved before `method/3.3` need no effect. A check of an action's completion does not establish that it was strategically useful.
 
 ## Effect contracts
 
@@ -302,10 +298,10 @@ steps:
         blocking: false
 ```
 
-Rules in `method/3.3`:
+Rules:
 
 - `changes` defaults to none. It is a declaration: the runtime cannot see what a trusted local script does.
-- A step that changes a connection other than `files` has at least one effect, or a `no_effect_reason`: a plain sentence that says why no observer confirms the change, for example "Reads pages only; submits and posts nothing." for a browser step. The run records each waiver (`effects.waived` event and `unobserved_changes` in the result), so a reader sees which external changes nobody observed. Use one of the two, not both. A waiver for a step that changes only files connections is refused, because those are observed automatically.
+- A step that changes a connection other than `files` has at least one effect, or a `no_effect_reason`: a plain sentence that says why no observer confirms the change, for example "Reads pages only; submits and posts nothing." for a browser step. The run records each waiver (`effects.waived` event and `unobserved_changes` in the result), so a reader sees which external changes nobody observed. Use one of the two, not both. A step that changes only files connections needs no waiver, because those are observed automatically; a waiver there has no effect.
 - Defaults: `schedule` is one reading at once with a 1-minute horizon; `confirm` is `positive`; a built-in observer reads the connection that the step changes (read-only), or must name one when the step changes several.
 - An environment with `role: observer` is visible only to effect observers. Actions cannot bind it, change it, or see its configured value in `METHOD_ENVIRONMENT`. Give observers separate, read-only credentials through their runtime profile.
 - An effect's `in` cannot reference its own step's outputs. An observer never sees the receipt. It receives the **correlation token**: the action's `METHOD_OPERATION_ID`. Put the token where the changed system keeps a reference (a message header, an idempotency key, a note field). For an `agent` action with effects, the runtime adds the token to the prompt.
@@ -406,7 +402,7 @@ Each expectation can carry `text`, a plain-language statement for people. A case
 
 - `when` references a boolean. False skips the entire step. Skipped outputs do not exist; a consumer fails if it requests one.
 - `each: {item: inputs.items}` runs once per item, in order. One collection alias is supported. Each output becomes a list in the original item order. An empty collection produces empty output lists.
-- `concurrency: N` (1–32) with `each` runs up to N items at once; the configuration limit `max_concurrency` (default 8) caps it. The step cannot use `ask`, `changes`, or `effects`. Outputs keep item order. The first failure stops the other running items and fails the step; items accepted before it stay in the checkpoint, and resume (with `--retry` for the failed item) runs only the unfinished items.
+- `concurrency: N` (1 or more) with `each` runs up to N items at once; the configuration limit `max_concurrency` (default 8) caps it. The step cannot use `ask`, `changes`, or `effects`. Outputs keep item order. The first failure stops the other running items and fails the step; items accepted before it stay in the checkpoint, and resume (with `--retry` for the failed item) runs only the unfinished items.
 - `repeat: {max_iterations: 5}` performs exactly five accepted invocations.
 - `repeat: {max_iterations: 5, until: done}` checks a boolean step output after each accepted invocation. It stops when true. Reaching the limit without true fails the step. The last accepted state remains in the checkpoint.
 
@@ -420,7 +416,7 @@ Operator configuration can override the finite default run limits: one hour, 100
 
 A model-using step can override `max_model_requests`; an agent-using step can also override `max_agent_turns`. A method/3.4 document's `limits.step` (or configuration `step_defaults`) can change the defaults; document `limits` set the run caps before configuration limits. Action and check share these limits and `timeout_ms` for each invocation. For the direct API backend, one agent turn is one model response. Repeated invocations share the run caps. For a direct API agent, the runner does not dispatch a tool when no follow-up model request or agent turn remains.
 
-Direct API provider calls have no automatic retries. Codex manages its own internal requests; script-internal provider calls are also outside this accounting. Usage from completed provider responses is recorded; unavailable usage remains unknown. `cost_usd` is null because this release does not calculate prices or enforce a monetary budget. Request counts and output-token limits are resource caps, not a dollar guarantee. The operator must decide the spending allowance before live runs.
+Direct API provider calls retry a rate limit or server error up to three attempts in all; each attempt is a model request. Codex manages its own internal requests; script-internal provider calls are also outside this accounting. Usage from completed provider responses is recorded; unavailable usage remains unknown. `cost_usd` is null because this release does not calculate prices or enforce a monetary budget. Request counts and output-token limits are resource caps, not a dollar guarantee. The operator must decide the spending allowance before live runs.
 
 Run `elapsed_ms` starts after document/configuration validation, initial-value checks, and runtime resolution. It includes bundle capture, execution, checks, and recording. Measure CLI wall-clock time separately when comparing full startup overhead. Game time and pause settings belong to the game adapter; this runner does not control or pause simulation.
 
@@ -434,7 +430,7 @@ File outputs use `{path, sha256}`. Write them beneath `METHOD_OUTPUT_DIR`; paths
 
 Generic run records are private local artifacts by default (directory mode 0700, files 0600). Known configured environment-secret values are redacted from traces and result files when at least four characters long. This is a convenience, not a comprehensive secret detector. State checkpoints contain actual state values; keep state and inputs free of credentials. Do not publish raw run directories without review.
 
-Failures do not trigger automatic retries, except that a classification the service could not answer (HTTP 429 or 5xx, or an unavailable or timed-out service) is tried three times in all. A failed run's summary gives `code`, `error`, a `fix` sentence, and, when a step was running, `failed_step`, `iteration`, and the last 20 lines of its `diagnostics`. To continue the same run with its original files, resume:
+Failures do not trigger automatic retries, except that a classification or model request that the service could not answer (HTTP 429 or 5xx, or an unavailable or timed-out classification service) is tried three times in all. A failed run's summary gives `code`, `error`, a `fix` sentence, and, when a step was running, `failed_step`, `iteration`, and the last 20 lines of its `diagnostics`. To continue the same run with its original files, resume:
 
 ```sh
 method run task.method --run-dir runs/example --resume

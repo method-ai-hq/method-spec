@@ -153,7 +153,6 @@ export async function createCase({ methodFile, runDir, id, note, author, expect 
   if (!caseId.test(id ?? '')) fail('Case IDs use lowercase letters, digits and hyphens', 'case_invalid');
   if (typeof note !== 'string' || !note.trim()) fail('A case records the correction note: --note "the person\'s words"', 'case_invalid');
   if (!runDir && !passingRun) fail('Give the run that went wrong (--run), the run that was right (--passing-run), or both', 'case_invalid');
-  for (const dir of [runDir, passingRun].filter(Boolean)) if (pathResolve(dir).split(/[\\/]/).includes('sensitive')) fail('Do not build cases from runs under sensitive/. Use a redacted run.', 'case_invalid');
   const method = await readDocument(methodFile);
   if (rubric.length) {
     ref ??= typeof method.result === 'string' ? `outputs.${method.result.split('.')[0]}` : undefined;

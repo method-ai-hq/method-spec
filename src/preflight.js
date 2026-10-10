@@ -51,7 +51,6 @@ export async function preflight(method, config, sourceRoot, options = {}) {
       if (exec.kind === 'agent') for (const name of executionTools(exec, tools)) {
         if (!own(tools, name)) fail(`Unknown tool: ${name}`, 'preflight');
         const tool = tools[name]; usedTools.add(name);
-        if (method.format !== 'method/3.1' && tool.run && !tool.description.trim()) fail(`Tool ${name}: describe its operation and effects.`);
         if (tool.connection && !options.connections?.[tool.connection]) {
           if(options.allowMissingSetup) missingSetup.push(`Connect tool: ${name}`);
           else fail(`Missing tool connection: ${tool.connection}`, 'needs_input');

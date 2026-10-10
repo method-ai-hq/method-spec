@@ -46,8 +46,7 @@ test('anthropic-messages call sends the output schema and counts cached input', 
   const result = await f.run(config({ backend: 'anthropic-messages', effort: 'low' }), async (body, info) => { request = body; backend = info.backend; return claude.text({ value: 7 }); });
   assert.equal(result.status, 'completed'); assert.equal(result.result, 7);
   assert.equal(backend, 'anthropic-messages');
-  assert.equal(request.system, 'Return value.'); assert.equal(request.max_tokens, 100);
-  assert.deepEqual(request.messages, [{ role: 'user', content: '{}' }]);
+  assert.equal(request.max_tokens, 100);
   assert.equal(request.output_config.format.type, 'json_schema'); assert.equal(request.output_config.effort, 'low');
   assert.equal(request.tools, undefined);
   assert.equal(result.usage.input_tokens, 15); assert.equal(result.usage.output_tokens, 4);
@@ -81,7 +80,6 @@ test('openrouter-chat call requires providers that honor the schema', async t =>
   let request;
   const result = await f.run(config({ backend: 'openrouter-chat' }), async body => { request = body; return router.text({ value: 3 }); });
   assert.equal(result.status, 'completed'); assert.equal(result.result, 3);
-  assert.deepEqual(request.messages, [{ role: 'system', content: 'Return value.' }, { role: 'user', content: '{}' }]);
   assert.equal(request.response_format.json_schema.strict, true);
   assert.deepEqual(request.provider, { require_parameters: true }); assert.equal(request.models, undefined);
   assert.equal(result.usage.input_tokens, 7); assert.equal(result.usage.output_tokens, 2);

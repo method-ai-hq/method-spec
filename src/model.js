@@ -1,5 +1,6 @@
 import { modelName } from './semantics.js';
 import { assertSchema, fail, safeData } from './validate.js';
+import { withRetries, transientStatus } from './retry.js';
 
 function abortable(operation, signal) {
   if (signal.aborted) return Promise.reject(signal.reason);
@@ -118,7 +119,13 @@ adapters.method = { ...adapters['openrouter-chat'], url: null, headers: () => ({
 export const directBackends = Object.keys(adapters);
 const hostedOutputTokens = 16_000;
 
-async function providerRequest(body, profile, adapter, context) {
+/** A rate limit or a server error is retried like a classification; any other failure stops the step. */
+function providerRequest(body, profile, adapter, context) {
+  return withRetries(() => providerRequestOnce(body, profile, adapter, context),
+    { transient: error => transientStatus(error.status), signal: context.signal, canRetry: () => context.canRequest?.() ?? true, beforeRetry: () => context.guard() });
+}
+
+async function providerRequestOnce(body, profile, adapter, context) {
   const text = json(body);
   if (Buffer.byteLength(text) > context.maxRequestBytes) fail('Model input exceeds request limit', 'input_limit');
   const hosted = profile.backend === 'method';
@@ -136,7 +143,7 @@ async function providerRequest(body, profile, adapter, context) {
           method: 'POST', headers: { ...adapter.headers(key), 'content-type': 'application/json' },
           body: text, signal: context.signal, redirect: 'error',
         });
-        if (!response.ok) { await response.body?.cancel(); fail(`${profile.backend} HTTP ${response.status}`, 'provider_error'); }
+        if (!response.ok) { await response.body?.cancel(); fail(`${profile.backend} HTTP ${response.status}`, 'provider_error', { status: response.status }); }
         return boundedJSON(response, context.maxOutputBytes);
       })(), context.signal);
     safeData(data);

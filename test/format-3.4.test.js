@@ -45,29 +45,17 @@ test('a plain model name must be in models; default keeps meaning the account de
   assert.equal(missing.code, 'unknown_model'); assert.equal(missing.step, 'write');
 });
 
-test('the 3.4 fields need format method/3.4', () => {
-  const older = change => newsletter(m => { m.format = 'method/3.3'; delete m.id; delete m.models; m.steps.write.do.model = 'writer'; m.steps.intro.do.model = 'writer'; m.steps.fields.do.model = 'writer'; delete m.steps.fields.accept; change(m); });
-  validateMethod(older(() => {}));
-  for (const [change, pattern] of [
-    [m => { m.id = 'wf_3cfa2d6d2c00552ce5a4ab723a8248fe'; }, /id requires method\/3\.4/],
-    [m => { m.models = { writer: 'openai/gpt-6-luna' }; }, /models requires method\/3\.4/],
-    [m => { m.steps.fields.accept = { unused_output: 'Kept for later.' }; }, /fields\.accept requires method\/3\.4/],
-    [m => { delete m.steps.fields.do.model; }, /fields\.do\.model/],
-    [m => { m.steps.intro.do.model = 'openai/gpt-6-luna'; }, /model ID requires method\/3\.4/],
-  ]) assert.throws(() => validateMethod(older(change)), pattern);
-});
-
-test('a method/3.3 file validates unchanged', async () => {
-  for (const file of ['examples/counter.method', 'examples/model-tools.method', 'examples/factory-decision.method']) {
+test('every example validates with no errors and is not changed by validation', async () => {
+  const { readdir } = await import('node:fs/promises');
+  const examples = (await readdir('examples')).filter(name => name.endsWith('.method'));
+  assert.ok(examples.length > 0);
+  for (const file of examples.map(name => join('examples', name))) {
     const doc = await readDocument(file);
     const before = JSON.stringify(doc);
     validateMethod(doc);
     assert.equal(JSON.stringify(doc), before);
     assert.equal(methodIssues(doc).filter(issue => issue.level === 'error').length, 0, file);
   }
-  const current = { format: 'method/3.3', name: 'Count words', goal: 'Count the words in a text.', inputs: { text: { type: 'text' } },
-    steps: { count: { in: { text: 'inputs.text' }, do: { kind: 'call', model: 'default', prompt: 'Count the words in {{text}}.' }, out: { words: { type: 'number' } } } }, result: 'words' };
-  assert.deepEqual(validateMethod(current).order, ['count']);
 });
 
 test('the document digest leaves out id', () => {
@@ -133,17 +121,14 @@ test('a 3.4 run sends each step to its hosted model, and resume survives an id w
   assert.equal(hash(documentForDigest(await readDocument(file))), checkpoint.method_sha256);
 });
 
-test('the contributor harness reads no configuration file and has no --config', async t => {
-  const help = execFileSync(process.execPath, ['src/cli.js', '--help'], { encoding: 'utf8' });
-  assert.equal(help.includes('--config'), false);
-  assert.match(execFileSync(process.execPath, ['src/cli.js', '--version'], { encoding: 'utf8' }), /method\/3\.4/);
+test('the contributor harness validates a document without a configuration file', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'method-cli-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const file = join(dir, 'newsletter.method');
   await writeFile(file, JSON.stringify(newsletter(m => { m.steps.write.out.draft_notes = { type: 'text' }; })));
   const report = JSON.parse(execFileSync(process.execPath, ['src/cli.js', 'validate', file], { encoding: 'utf8' }));
   assert.equal(report.valid, true);
-  assert.deepEqual(report.issues.map(issue => issue.code), ['unused_output', 'accept_unused']);
+  assert.deepEqual(report.issues.map(issue => issue.code).sort(), ['accept_unused', 'unused_output']);
 });
 
 test('method/3.4 holds limits, limits.step, and tools; the document comes before the configuration', async () => {
@@ -156,7 +141,6 @@ test('method/3.4 holds limits, limits.step, and tools; the document comes before
   assert.deepEqual([config.step_defaults.timeout_ms, config.step_defaults.max_agent_turns], [5000, 4]);
   assert.equal(config.tools.double.description, 'Double a number.'); assert.ok(config.tools.other);
   assert.throws(() => validateMethod(newsletter(m => { m.limits = { effect_wait_ms: 1 }; })), /limits/);
-  assert.throws(() => validateMethod(newsletter(m => { m.format = 'method/3.3'; delete m.id; delete m.models; delete m.steps.fields.accept; m.limits = { timeout_ms: 1 }; })), /limits requires method\/3.4|requires method\/3.4/);
 });
 
 test('a run uses the document limits and tools without configuration', async () => {
@@ -164,12 +148,12 @@ test('a run uses the document limits and tools without configuration', async () 
   try {
     const method = { format: 'method/3.4', name: 'Limits', goal: 'Stop at the document cap.', limits: { max_invocations: 1 },
       steps: { a: { name: 'A', purpose: 'Return one; changes nothing.', do: { kind: 'run', runtime: 'node', entrypoint: 'one.mjs' }, out: { one: { type: 'number', description: 'One.' } } },
-        b: { name: 'B', purpose: 'Return two; changes nothing.', after: 'a', do: { kind: 'run', runtime: 'node', entrypoint: 'one.mjs' }, out: { two: { type: 'number', description: 'Two.' } } } }, result: 'two' };
+        b: { name: 'B', purpose: 'Return two; changes nothing.', after: 'a', do: { kind: 'run', runtime: 'node', entrypoint: 'two.mjs' }, out: { two: { type: 'number', description: 'Two.' } } } }, result: 'two' };
     await writeFile(join(root, 'task.method'), JSON.stringify(method));
-    await writeFile(join(root, 'one.mjs'), 'for await (const c of process.stdin) {}; console.log(JSON.stringify({one: 1, two: 2}));');
+    await writeFile(join(root, 'one.mjs'), 'for await (const c of process.stdin) {}; console.log(JSON.stringify({one: 1}));');
+    await writeFile(join(root, 'two.mjs'), 'for await (const c of process.stdin) {}; console.log(JSON.stringify({two: 2}));');
     const result = await runMethod(join(root, 'task.method'), { allow_local_processes: true, runtimes: { node: { command: process.execPath, version: 'test' } } }, { runDir: join(root, 'run') });
-    assert.notEqual(result.status, 'completed');
-    assert.match(JSON.stringify(result), /invocation/i);
+    assert.equal(result.code, 'invocation_limit');
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -196,7 +180,6 @@ test('a models entry can name a local agent; other agent fields are refused', ()
   assert.throws(() => validateMethod(mixed(m => { m.models.drafter = { agent: 'gemini' }; })), /models/);
   assert.throws(() => validateMethod(mixed(m => { m.models.drafter = { agent: 'codex', max_output_tokens: 10 }; })), /models/);
   assert.throws(() => validateMethod(mixed(m => { m.models.drafter = { agent: 'codex', model: 'x', command: '/bin/sh' }; })), /models/);
-  assert.throws(() => validateMethod(mixed(m => { m.format = 'method/3.3'; })), /models requires method\/3\.4/);
 });
 
 test('model resolution: an agent entry is a local-agent profile; --agent still runs every step', async () => {

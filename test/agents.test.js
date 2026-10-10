@@ -36,12 +36,6 @@ test('ambiguous callers with both agents require a choice even with an old prefe
  await assert.rejects(resolveModels(method,{}, {env:{},preference:'claude'}), {code:'needs_input'});
 });
 
-test('an explicit agent selects unconfigured profiles ahead of caller and configured default',async()=>{
- assert.equal((await resolveModels(method,{models:{default:{backend:'codex'}}},{agent:'claude',env:{CODEX_THREAD_ID:'outer'}})).writer.backend,'claude');
- assert.equal((await resolveModels(method,{models:{default:{backend:'claude'}}},{env:{CODEX_THREAD_ID:'outer'}})).writer.backend,'codex');
- await assert.rejects(resolveModels(method,{}, {agent:'other'}),{code:'needs_input'});
-});
-
 test('uses the only available agent and requests setup when none is available',async t=>{
  await installed(t,['claude']);
  assert.equal((await resolveModels(method,{}, {env:{}})).writer.backend,'claude');
@@ -54,15 +48,12 @@ test('never replaces a known caller with another installed agent',async t=>{
  assert.equal((await resolveModels(method,{}, {env:{CLAUDECODE:'1'}})).writer.backend,'claude');
 });
 
-test('an incomplete saved selection cannot select a new provider',async()=>{
- await assert.rejects(resolveModels(method,{}, {savedModels:{},agent:'codex'}),{code:'resume_mismatch'});
-});
-
- test('the default model follows the caller even when already configured',async()=>{
+ test('the default model follows the caller even when already configured, and an explicit agent comes first',async()=>{
  const m={steps:{work:{do:{kind:'agent',model:'default'}}}};
  assert.equal((await resolveModels(m,{models:{default:{backend:'claude'}}},{env:{CODEX_THREAD_ID:'task'}})).default.backend,'codex');
  assert.equal((await resolveModels(m,{models:{default:{backend:'codex'}}},{env:{CLAUDECODE:'1'}})).default.backend,'claude');
  assert.equal((await resolveModels(m,{models:{default:{backend:'claude'}}},{agent:'codex',env:{CLAUDECODE:'1'}})).default.backend,'codex');
+ await assert.rejects(resolveModels(m,{}, {agent:'other'}),{code:'needs_input'});
  });
 
  test('classification and scripts do not prepare an unused agent', async () => {

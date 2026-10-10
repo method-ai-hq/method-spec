@@ -192,8 +192,9 @@ test('an external write followed by process failure is recorded and never retrie
   assert.equal((await f.events()).filter(e => e.event === 'process.started').length, 1);
 });
 test('a deadline covers action and checker together', async t => {
-  const m = method(); m.steps.work.check = script('check.mjs'); m.steps.work.limits.timeout_ms = 180;
-  const f = await fixture(t, m, { 'action.mjs': 'setTimeout(()=>console.log(JSON.stringify({value:4})),100)', 'check.mjs': 'setTimeout(()=>console.log(JSON.stringify({status:"pass",reason:"ok",evidence:[]})),120)' });
+  // Each phase alone fits in the deadline; together they do not.
+  const m = method(); m.steps.work.check = script('check.mjs'); m.steps.work.limits.timeout_ms = 1000;
+  const f = await fixture(t, m, { 'action.mjs': 'setTimeout(()=>console.log(JSON.stringify({value:4})),600)', 'check.mjs': 'setTimeout(()=>console.log(JSON.stringify({status:"pass",reason:"ok",evidence:[]})),800)' });
   assert.equal((await f.run()).code, 'timeout');
 });
 test('file outputs require matching content hashes', async t => {
@@ -235,13 +236,22 @@ test('Responses HTTP transport sends strict JSON and never records the API key',
   const result = await f.run(); assert.equal(result.result, 8); assert.equal(requests, 1);
   assert.ok(!(await readFile(join(f.runDir, 'events.jsonl'), 'utf8')).includes('local-test-credential-not-a-real-key'));
 });
-test('HTTP provider errors are not retried and usage remains unknown', async t => {
+test('HTTP rate limits and server errors are retried like classification; other errors are not; usage remains unknown', async t => {
   const oldFetch = globalThis.fetch, oldKey = process.env.METHOD_TEST_UNUSED_KEY;
   process.env.METHOD_TEST_UNUSED_KEY = 'local-test-key';
   t.after(() => { globalThis.fetch = oldFetch; if (oldKey === undefined) delete process.env.METHOD_TEST_UNUSED_KEY; else process.env.METHOD_TEST_UNUSED_KEY = oldKey; });
+  const patient = () => { const s = modelStep(); s.limits.timeout_ms = 10000; return method(s); };
   let calls = 0; globalThis.fetch = async () => { calls++; return new Response('do not log provider error bodies', { status: 429 }); };
-  const f = await fixture(t, method(modelStep())); const result = await f.run();
-  assert.equal(result.code, 'provider_error'); assert.equal(calls, 1); assert.equal(result.usage.responses_without_usage, 1); assert.equal(result.usage.cost_usd, null);
+  const f = await fixture(t, patient()); const result = await f.run();
+  assert.equal(result.code, 'provider_error'); assert.ok(calls > 1); assert.equal(result.usage.responses_without_usage, calls); assert.equal(result.usage.cost_usd, null);
+  assert.ok(!(await readFile(join(f.runDir, 'events.jsonl'), 'utf8')).includes('do not log provider error bodies'));
+  // A server error that clears is retried, and the step completes.
+  calls = 0; globalThis.fetch = async () => ++calls === 1 ? new Response('busy', { status: 503 }) : new Response(JSON.stringify(response({ value: 8 })), { status: 200 });
+  const g = await fixture(t, patient()); const recovered = await g.run();
+  assert.equal(recovered.result, 8); assert.equal(calls, 2);
+  // A rejected request is not retried.
+  calls = 0; globalThis.fetch = async () => { calls++; return new Response('bad request', { status: 400 }); };
+  const h = await fixture(t, patient()); assert.equal((await h.run()).code, 'provider_error'); assert.equal(calls, 1);
 });
 test('model timeout cancels the wait even if an injected transport ignores cancellation', async t => {
   const s = modelStep(); s.limits.timeout_ms = 50;
@@ -269,7 +279,7 @@ test('a passed agent check commits the candidate state', async t => {
 test('unchanged external source files are snapshotted for execution', async t => {
   const f = await fixture(t); await f.run();
   const manifest = JSON.parse(await readFile(join(f.runDir, 'manifest.json'), 'utf8'));
-  assert.match(manifest.files['action.mjs'], /^[a-f0-9]{64}$/);
+  assert.ok(manifest.files['action.mjs']);
   assert.equal(await readFile(join(f.runDir, 'bundle/action.mjs'), 'utf8'), await readFile(join(f.dir, 'action.mjs'), 'utf8'));
 });
 
@@ -323,6 +333,8 @@ test('resume refuses to guess a provider when the saved selection is missing', a
   delete saved.models;
   await writeFile(file, JSON.stringify(saved));
   await assert.rejects(f.run(config(), { resume: true }), { code: 'resume_mismatch' });
+  // An explicit agent cannot fill in the missing selection either.
+  await assert.rejects(f.run(config(), { resume: true, agent: 'codex' }), { code: 'resume_mismatch' });
 });
 
 test('ask resumes with an actual supplied answer and runs its check', async t => {

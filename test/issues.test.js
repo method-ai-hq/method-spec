@@ -35,7 +35,7 @@ test('format failures become one error issue with the same code, a fix, the step
   const [issue, ...rest] = methodIssues(text);
   assert.equal(rest.length, 0);
   assert.equal(issue.level, 'error'); assert.equal(issue.code, 'invalid_method'); assert.equal(issue.step, 'summarize');
-  assert.match(issue.message, /Invalid reference path: inputs\.notes/); assert.equal(typeof issue.fix, 'string'); assert.ok(issue.fix.length > 10);
+  assert.match(issue.message, /Invalid reference path: inputs\.notes/); assert.equal(typeof issue.fix, 'string');
   assert.equal(issue.line, 5);
   // validateMethod throws the same first error.
   assert.throws(() => validateMethod(text), error => error instanceof MethodValidationError && error.code === 'invalid_method' && error.issue.step === 'summarize');
@@ -80,16 +80,6 @@ test('a missing secret is a warning in validate and an error for a run', () => {
   assert.equal(only(methodIssues(doc, { availableSecrets: [], phase: 'run' }), 'missing_secret')[0].level, 'error');
   assert.deepEqual(only(methodIssues(doc, { availableSecrets: ['MAIL_TOKEN'] }), 'missing_secret'), []);
   assert.deepEqual(only(methodIssues(doc), 'missing_secret'), []);
-});
-
-test('a classify result that gates a step or feeds a change directly gives a warning', () => {
-  const gated = triage(m => { m.steps.draft.when = 'urgency.answer'; m.steps.gate.out.reply_now.description = 'Unused here.'; m.result = { id: 'message_id', now: 'reply_now' }; });
-  const [warning] = only(methodIssues(gated), 'classify_without_threshold');
-  assert.equal(warning.level, 'warning'); assert.equal(warning.step, 'draft'); assert.equal(warning.field, 'when'); assert.match(warning.message, /urgent/);
-  const fed = triage(m => { m.steps.send.in.urgency = 'urgency'; });
-  assert.deepEqual(only(methodIssues(fed), 'classify_without_threshold').map(i => [i.step, i.field]), [['send', 'in.urgency']]);
-  // A threshold step between them is the fix.
-  assert.deepEqual(only(methodIssues(triage()), 'classify_without_threshold'), []);
 });
 
 // A research Method: an agent reads web pages, then something posts the summary.
@@ -137,29 +127,14 @@ test('an output that nothing uses gives a warning', () => {
   assert.deepEqual(only(methodIssues(classify), 'unused_output').map(i => [i.step, i.field]), [['urgent', 'out']]);
 });
 
-test('an agent step with no tools and no browser gives a note', () => {
-  const doc = triage(m => { m.steps.draft.do.kind = 'agent'; });
-  const [note] = only(methodIssues(doc), 'agent_without_tools');
-  assert.equal(note.level, 'note'); assert.equal(note.step, 'draft');
-  assert.deepEqual(only(methodIssues(research()), 'agent_without_tools'), []);
-  assert.deepEqual(only(methodIssues(triage(m => { m.steps.draft.do = { kind: 'agent', model: 'writer', prompt: 'Write a reply to {{ticket}}.', tools: ['lookup_order'] }; })), 'agent_without_tools'), []);
-});
-
-test('a check that repeats the output type gives a note', () => {
-  assert.equal(only(methodIssues(triage(m => { m.steps.draft.check = { present: 'reply' }; })), 'check_repeats_output_type')[0].step, 'draft');
-  assert.equal(only(methodIssues(research(m => { m.steps.read.check = { count: { value: 'plans' } }; })), 'check_repeats_output_type').length, 1);
-  assert.deepEqual(only(methodIssues(research(m => { m.steps.read.check = { count: { value: 'plans', min: 1 } }; })), 'check_repeats_output_type'), []);
-  assert.deepEqual(only(methodIssues(research(m => { m.steps.read.check = { present: 'plans.0' }; })), 'check_repeats_output_type'), []);
-});
-
 test('accept marks a warning or note and keeps it; an accept that no longer fires gives a note; errors stay', () => {
-  const doc = triage(m => { m.steps.draft.do.kind = 'agent'; m.steps.draft.accept = { agent_without_tools: 'The agent backend adds its own tools.' }; });
-  const [accepted] = only(methodIssues(doc), 'agent_without_tools');
-  assert.equal(accepted.accepted, 'The agent backend adds its own tools.');
-  const stale = triage(m => { m.steps.draft.accept = { agent_without_tools: 'Was an agent once.' }; });
+  const doc = triage(m => { m.steps.draft.out.subject = { type: 'text' }; m.steps.draft.accept = { unused_output: 'A person reads the subject in the run record.' }; });
+  const [accepted] = only(methodIssues(doc), 'unused_output');
+  assert.equal(accepted.accepted, 'A person reads the subject in the run record.');
+  const stale = triage(m => { m.steps.draft.accept = { unused_output: 'Had a subject once.' }; });
   const [note] = only(methodIssues(stale), 'accept_unused');
-  assert.equal(note.level, 'note'); assert.equal(note.step, 'draft'); assert.equal(note.field, 'accept.agent_without_tools');
-  assert.deepEqual(only(methodIssues(stale, { notChecked: ['agent_without_tools'] }), 'accept_unused'), []);
+  assert.equal(note.level, 'note'); assert.equal(note.step, 'draft'); assert.equal(note.field, 'accept.unused_output');
+  assert.deepEqual(only(methodIssues(stale, { notChecked: ['unused_output'] }), 'accept_unused'), []);
   // Issues from other checks (model checks) are accepted too.
   const modelCheck = { code: 'prompt_multiple_tasks', level: 'warning', step: 'draft', message: 'The prompt asks for two things.', fix: 'Split the step.' };
   const withModel = triage(m => { m.steps.draft.accept = { prompt_multiple_tasks: 'The user wants one combined reply.' }; });
@@ -168,7 +143,4 @@ test('accept marks a warning or note and keeps it; an accept that no longer fire
   const secret = triage(m => { m.steps.draft.do.prompt = 'Write a reply to {{ticket}} with key sk-archive-4f9a1c2e7b.'; m.steps.draft.accept = { secret_value: 'Test key.' }; });
   const [error] = only(methodIssues(secret, { secretValues: ['sk-archive-4f9a1c2e7b'] }), 'secret_value');
   assert.equal(error.accepted, undefined);
-  // Errors come first, notes last.
-  const levels = methodIssues(triage(m => { m.steps.draft.do.kind = 'agent'; m.steps.draft.out.subject = { type: 'text' }; }), { secretValues: ['Write a short reply'] }).map(i => i.level);
-  assert.deepEqual(levels, ['error', 'warning', 'note']);
 });

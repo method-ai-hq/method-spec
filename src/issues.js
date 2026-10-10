@@ -47,23 +47,6 @@ function missingSecretIssues(method, options) {
       `Run method secret find to look for ${name} on this computer, or method secret set ${name} to enter it.`, { field: `secrets.${name}` }));
 }
 
-/** A classifier's most likely answer gates a step or feeds a change, with no step that applies a threshold. */
-function thresholdIssues(method) {
-  const classified = {};
-  for (const [id, step] of Object.entries(method.steps)) if (step.do?.kind === 'classify') classified[step.out] = id;
-  const found = [];
-  for (const [id, step] of Object.entries(method.steps)) {
-    const uses = [];
-    if (step.when && classified[head(step.when)]) uses.push(['when', step.when]);
-    if (step.changes?.length) for (const [kind, refs] of [['in', step.in], ['each', step.each]])
-      for (const [alias, ref] of Object.entries(refs ?? {})) if (classified[head(ref)]) uses.push([`${kind}.${alias}`, ref]);
-    for (const [field, ref] of uses) found.push(issue('classify_without_threshold', 'warning',
-      `${id} ${field === 'when' ? 'runs only when' : 'changes something from'} ${ref}, the unthresholded result of classify step ${classified[head(ref)]}.`,
-      'Add a step that compares the probability with a threshold you choose, and use that step\'s result here.', { step: id, field }));
-  }
-  return found;
-}
-
 /**
  * An agent with a browser (untrusted content) that can also change a connection other than files: through its
  * own changes, or through a tool whose declaration has effects. Only declarations count, never names.
@@ -109,35 +92,11 @@ function unusedOutputIssues(method) {
   return found;
 }
 
-/** An agent step with no tools and no browser does what a call step does. */
-function toollessAgentIssues(method) {
-  return Object.entries(method.steps).filter(([, step]) => step.do?.kind === 'agent' && !step.do.tools?.length && !step.do.browser)
-    .map(([id]) => issue('agent_without_tools', 'note', `${id} is an agent step with no tools and no browser.`,
-      'Use a call step, or give the agent the tools that it needs.', { step: id, field: 'do' }));
-}
-
-/** A check that only confirms what the declared output types already guarantee. */
-function repeatedTypeIssues(method) {
-  const found = [];
-  for (const [id, step] of Object.entries(method.steps)) {
-    const check = step.check;
-    if (!check || check.kind) continue;
-    // A list index can be absent, so a present check on one says more than the type.
-    const indexed = ref => ref.split('.').some(part => /^[0-9]+$/.test(part));
-    const repeats = check.present !== undefined ? !indexed(check.present)
-      : check.count ? !check.count.min && check.count.max === undefined : false;
-    if (repeats) found.push(issue('check_repeats_output_type', 'note',
-      `${id}.check only confirms what the declared types already guarantee.`,
-      'Remove the check, or check something that the type does not say, such as a minimum count or an expected value.', { step: id, field: 'check' }));
-  }
-  return found;
-}
-
 /** Code checks on a Method that passed validation. */
 export function codeIssues(method, options = {}) {
   return [
-    ...secretValueIssues(method, options), ...missingSecretIssues(method, options), ...thresholdIssues(method),
-    ...untrustedAgentIssues(method, options), ...unusedOutputIssues(method), ...toollessAgentIssues(method), ...repeatedTypeIssues(method),
+    ...secretValueIssues(method, options), ...missingSecretIssues(method, options),
+    ...untrustedAgentIssues(method, options), ...unusedOutputIssues(method),
   ];
 }
 

@@ -1,5 +1,6 @@
 import { fail, safeData } from './semantics.js';
 import { boundedJSON } from './model.js';
+import { withRetries, transientStatus } from './retry.js';
 
 export const classificationByteLimit = 65_536;
 const margin = 1e-6;
@@ -126,23 +127,15 @@ export function typesafeClassification(apiKeyEnv, secret = name => process.env[n
   };
 }
 
-// A service that is briefly unavailable gets three attempts in all. A rejected request is not retried.
-const attempts = 3;
-const transient = error => error.code !== 'classification_daily_limit' && (error.status === 429 || error.status >= 500
+const transient = error => error.code !== 'classification_daily_limit' && (transientStatus(error.status)
   || ['classification_unavailable', 'classification_timeout'].includes(error.code) || error.name === 'TimeoutError');
 
 /** One managed classification; candidate checks and acceptance remain in the runner. */
 export async function executeClassification(execution, inputs, identity, provider, context) {
   const request = { request_id: crypto.randomUUID(), model: identity.model, question: execution.question, ...classificationForm(execution), inputs };
   if (new TextEncoder().encode(JSON.stringify(request)).length > Math.min(classificationByteLimit, context.maxRequestBytes)) fail('Classification input exceeds request limit', 'input_limit');
-  for (let attempt = 1; ; attempt++) {
-    try { return await classifyOnce(request, execution, identity, provider, context); }
-    catch (error) {
-      if (attempt >= attempts || context.signal.aborted || !transient(error)) throw error;
-      await new Promise(resolve => setTimeout(resolve, 1000 * attempt * (1 + Math.random() / 4)));
-      context.guard();
-    }
-  }
+  return withRetries(() => classifyOnce(request, execution, identity, provider, context),
+    { transient, signal: context.signal, canRetry: () => context.canRequest?.() ?? true, beforeRetry: () => context.guard() });
 }
 
 async function classifyOnce(request, execution, identity, provider, context) {

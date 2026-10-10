@@ -20,7 +20,6 @@
       "propertyNames": {
         "type": "string",
         "pattern": "^[a-z][a-z0-9_]*$",
-        "maxLength": 80,
         "not": {
           "enum": [
             "constructor",
@@ -74,13 +73,11 @@
               },
               "model": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 16000
+                "minLength": 1
               },
               "reasoning_effort": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 16000
+                "minLength": 1
               }
             },
             "required": [
@@ -125,7 +122,7 @@
         "max_concurrency": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 32
+          "maximum": 2147483647
         },
         "step": {
           "type": "object",
@@ -158,7 +155,6 @@
       "propertyNames": {
         "type": "string",
         "pattern": "^[a-z][a-z0-9_]*$",
-        "maxLength": 80,
         "not": {
           "enum": [
             "constructor",
@@ -174,15 +170,13 @@
             "properties": {
               "description": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 16000
+                "minLength": 1
               },
               "in": {
                 "type": "object",
                 "propertyNames": {
                   "type": "string",
                   "pattern": "^[a-z][a-z0-9_]*$",
-                  "maxLength": 80,
                   "not": {
                     "enum": [
                       "constructor",
@@ -200,7 +194,6 @@
                 "propertyNames": {
                   "type": "string",
                   "pattern": "^[a-z][a-z0-9_]*$",
-                  "maxLength": 80,
                   "not": {
                     "enum": [
                       "constructor",
@@ -222,7 +215,6 @@
                   "runtime": {
                     "type": "string",
                     "pattern": "^[a-z][a-z0-9_]*$",
-                    "maxLength": 80,
                     "not": {
                       "enum": [
                         "constructor",
@@ -233,8 +225,7 @@
                   },
                   "entrypoint": {
                     "type": "string",
-                    "minLength": 1,
-                    "maxLength": 500
+                    "minLength": 1
                   },
                   "args": {
                     "type": "array",
@@ -255,7 +246,6 @@
                 "items": {
                   "type": "string",
                   "pattern": "^[a-z][a-z0-9_]*$",
-                  "maxLength": 80,
                   "not": {
                     "enum": [
                       "constructor",
@@ -281,13 +271,11 @@
             "properties": {
               "description": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 16000
+                "minLength": 1
               },
               "connection": {
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9_]*$",
-                "maxLength": 80,
                 "not": {
                   "enum": [
                     "constructor",
@@ -298,8 +286,7 @@
               },
               "tool": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 16000
+                "minLength": 1
               },
               "parameters": {
                 "type": "object"
@@ -309,7 +296,6 @@
                 "items": {
                   "type": "string",
                   "pattern": "^[a-z][a-z0-9_]*$",
-                  "maxLength": 80,
                   "not": {
                     "enum": [
                       "constructor",
@@ -335,18 +321,15 @@
     },
     "name": {
       "type": "string",
-      "minLength": 1,
-      "maxLength": 16000
+      "minLength": 1
     },
     "goal": {
       "type": "string",
-      "minLength": 1,
-      "maxLength": 16000
+      "minLength": 1
     },
     "run_prompt": {
       "type": "string",
-      "minLength": 1,
-      "maxLength": 16000
+      "minLength": 1
     },
     "run_label": {
       "type": "string",
@@ -356,8 +339,7 @@
       "type": "array",
       "items": {
         "type": "string",
-        "minLength": 1,
-        "maxLength": 500
+        "minLength": 1
       },
       "uniqueItems": true
     },
@@ -366,7 +348,6 @@
       "propertyNames": {
         "type": "string",
         "pattern": "^[a-z][a-z0-9_]*$",
-        "maxLength": 80,
         "not": {
           "enum": [
             "constructor",
@@ -384,7 +365,6 @@
       "propertyNames": {
         "type": "string",
         "pattern": "^[a-z][a-z0-9_]*$",
-        "maxLength": 80,
         "not": {
           "enum": [
             "constructor",
@@ -402,14 +382,15 @@
       "propertyNames": {
         "type": "string",
         "pattern": "^[A-Z][A-Z0-9_]*$",
-        "maxLength": 80,
         "not": {
           "anyOf": [
             {
               "enum": [
                 "PATH",
                 "LANG",
-                "HOME"
+                "HOME",
+                "USER",
+                "TMPDIR"
               ]
             },
             {
@@ -420,10 +401,8 @@
       },
       "additionalProperties": {
         "type": "string",
-        "minLength": 1,
-        "maxLength": 16000
-      },
-      "maxProperties": 50
+        "minLength": 1
+      }
     },
     "run_data": {
       "enum": [
@@ -436,7 +415,6 @@
       "propertyNames": {
         "type": "string",
         "pattern": "^[a-z][a-z0-9_]*$",
-        "maxLength": 80,
         "not": {
           "enum": [
             "constructor",
@@ -459,8 +437,7 @@
           },
           "description": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 16000
+            "minLength": 1
           },
           "role": {
             "const": "observer"
@@ -478,7 +455,6 @@
       "propertyNames": {
         "type": "string",
         "pattern": "^[a-z][a-z0-9_]*$",
-        "maxLength": 80,
         "not": {
           "enum": [
             "constructor",
@@ -503,7 +479,6 @@
           "propertyNames": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]*$",
-            "maxLength": 80,
             "not": {
               "enum": [
                 "constructor",
@@ -556,15 +531,13 @@
             },
             "description": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 16000
+              "minLength": 1
             },
             "fields": {
               "type": "object",
               "propertyNames": {
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9_]*$",
-                "maxLength": 80,
                 "not": {
                   "enum": [
                     "constructor",
@@ -582,8 +555,7 @@
             },
             "format": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 16000
+              "minLength": 1
             }
           },
           "required": [
@@ -608,15 +580,13 @@
         },
         "description": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 16000
+          "minLength": 1
         },
         "fields": {
           "type": "object",
           "propertyNames": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]*$",
-            "maxLength": 80,
             "not": {
               "enum": [
                 "constructor",
@@ -634,8 +604,7 @@
         },
         "format": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 16000
+          "minLength": 1
         }
       },
       "required": [
@@ -658,15 +627,13 @@
         },
         "description": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 16000
+          "minLength": 1
         },
         "fields": {
           "type": "object",
           "propertyNames": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]*$",
-            "maxLength": 80,
             "not": {
               "enum": [
                 "constructor",
@@ -684,8 +651,7 @@
         },
         "format": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 16000
+          "minLength": 1
         },
         "default": {}
       },
@@ -705,7 +671,6 @@
             "runtime": {
               "type": "string",
               "pattern": "^[a-z][a-z0-9_]*$",
-              "maxLength": 80,
               "not": {
                 "enum": [
                   "constructor",
@@ -716,8 +681,7 @@
             },
             "entrypoint": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 500
+              "minLength": 1
             },
             "args": {
               "type": "array",
@@ -744,7 +708,6 @@
                 {
                   "type": "string",
                   "pattern": "^[a-z][a-z0-9_]*$",
-                  "maxLength": 80,
                   "not": {
                     "enum": [
                       "constructor",
@@ -762,8 +725,7 @@
             },
             "prompt": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 16000
+              "minLength": 1
             }
           },
           "required": [
@@ -783,7 +745,6 @@
                 {
                   "type": "string",
                   "pattern": "^[a-z][a-z0-9_]*$",
-                  "maxLength": 80,
                   "not": {
                     "enum": [
                       "constructor",
@@ -801,15 +762,13 @@
             },
             "prompt": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 16000
+              "minLength": 1
             },
             "tools": {
               "type": "array",
               "items": {
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9_]*$",
-                "maxLength": 80,
                 "not": {
                   "enum": [
                     "constructor",
@@ -839,15 +798,13 @@
             },
             "question": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 16000
+              "minLength": 1
             },
             "options": {
               "type": "object",
               "propertyNames": {
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9_]*$",
-                "maxLength": 80,
                 "not": {
                   "enum": [
                     "constructor",
@@ -858,8 +815,7 @@
               },
               "additionalProperties": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 16000
+                "minLength": 1
               },
               "minProperties": 2,
               "maxProperties": 255
@@ -872,7 +828,6 @@
               "items": {
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9_]*$",
-                "maxLength": 80,
                 "not": {
                   "enum": [
                     "constructor",
@@ -1005,7 +960,6 @@
             "runtime": {
               "type": "string",
               "pattern": "^[a-z][a-z0-9_]*$",
-              "maxLength": 80,
               "not": {
                 "enum": [
                   "constructor",
@@ -1016,8 +970,7 @@
             },
             "entrypoint": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 500
+              "minLength": 1
             },
             "args": {
               "type": "array",
@@ -1044,7 +997,6 @@
                 {
                   "type": "string",
                   "pattern": "^[a-z][a-z0-9_]*$",
-                  "maxLength": 80,
                   "not": {
                     "enum": [
                       "constructor",
@@ -1062,15 +1014,13 @@
             },
             "prompt": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 16000
+              "minLength": 1
             },
             "tools": {
               "type": "array",
               "items": {
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9_]*$",
-                "maxLength": 80,
                 "not": {
                   "enum": [
                     "constructor",
@@ -1099,46 +1049,38 @@
       "properties": {
         "name": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 16000
+          "minLength": 1
         },
         "purpose": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 16000
+          "minLength": 1
         },
         "reading": {
           "type": "object",
           "properties": {
             "inputs": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 16000
+              "minLength": 1
             },
             "outputs": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 16000
+              "minLength": 1
             },
             "output_name": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 16000
+              "minLength": 1
             },
             "condition": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 16000
+              "minLength": 1
             },
             "check": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 16000
+              "minLength": 1
             },
             "check_name": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 16000
+              "minLength": 1
             }
           },
           "required": [],
@@ -1149,7 +1091,6 @@
           "propertyNames": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]*$",
-            "maxLength": 80,
             "not": {
               "enum": [
                 "constructor",
@@ -1168,7 +1109,6 @@
             {
               "type": "string",
               "pattern": "^[a-z][a-z0-9_]*$",
-              "maxLength": 80,
               "not": {
                 "enum": [
                   "constructor",
@@ -1182,7 +1122,6 @@
               "propertyNames": {
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9_]*$",
-                "maxLength": 80,
                 "not": {
                   "enum": [
                     "constructor",
@@ -1202,8 +1141,7 @@
         },
         "ask": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 16000
+          "minLength": 1
         },
         "check": {
           "$ref": "#/$defs/check"
@@ -1213,7 +1151,6 @@
           "propertyNames": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]*$",
-            "maxLength": 80,
             "not": {
               "enum": [
                 "constructor",
@@ -1232,7 +1169,7 @@
         "concurrency": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 32
+          "maximum": 2147483647
         },
         "repeat": {
           "type": "object",
@@ -1261,7 +1198,6 @@
             {
               "type": "string",
               "pattern": "^[a-z][a-z0-9_]*$",
-              "maxLength": 80,
               "not": {
                 "enum": [
                   "constructor",
@@ -1275,7 +1211,6 @@
               "items": {
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9_]*$",
-                "maxLength": 80,
                 "not": {
                   "enum": [
                     "constructor",
@@ -1301,7 +1236,6 @@
           "propertyNames": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]*$",
-            "maxLength": 80,
             "not": {
               "enum": [
                 "constructor",
@@ -1315,15 +1249,13 @@
             "properties": {
               "intent": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 16000
+                "minLength": 1
               },
               "in": {
                 "type": "object",
                 "propertyNames": {
                   "type": "string",
                   "pattern": "^[a-z][a-z0-9_]*$",
-                  "maxLength": 80,
                   "not": {
                     "enum": [
                       "constructor",
@@ -1348,7 +1280,6 @@
                       "runtime": {
                         "type": "string",
                         "pattern": "^[a-z][a-z0-9_]*$",
-                        "maxLength": 80,
                         "not": {
                           "enum": [
                             "constructor",
@@ -1359,8 +1290,7 @@
                       },
                       "entrypoint": {
                         "type": "string",
-                        "minLength": 1,
-                        "maxLength": 500
+                        "minLength": 1
                       },
                       "args": {
                         "type": "array",
@@ -1385,7 +1315,6 @@
                       "connection": {
                         "type": "string",
                         "pattern": "^[a-z][a-z0-9_]*$",
-                        "maxLength": 80,
                         "not": {
                           "enum": [
                             "constructor",
@@ -1396,8 +1325,7 @@
                       },
                       "path": {
                         "type": "string",
-                        "minLength": 1,
-                        "maxLength": 16000
+                        "minLength": 1
                       },
                       "expect": {
                         "type": "object",
@@ -1407,13 +1335,11 @@
                           },
                           "contains": {
                             "type": "string",
-                            "minLength": 1,
-                            "maxLength": 16000
+                            "minLength": 1
                           },
                           "sha256": {
                             "type": "string",
-                            "minLength": 1,
-                            "maxLength": 16000
+                            "minLength": 1
                           }
                         },
                         "required": [],
@@ -1435,7 +1361,6 @@
                       "connection": {
                         "type": "string",
                         "pattern": "^[a-z][a-z0-9_]*$",
-                        "maxLength": 80,
                         "not": {
                           "enum": [
                             "constructor",
@@ -1446,20 +1371,17 @@
                       },
                       "database": {
                         "type": "string",
-                        "minLength": 1,
-                        "maxLength": 16000
+                        "minLength": 1
                       },
                       "query": {
                         "type": "string",
-                        "minLength": 1,
-                        "maxLength": 16000
+                        "minLength": 1
                       },
                       "params": {
                         "type": "object",
                         "propertyNames": {
                           "type": "string",
                           "pattern": "^[a-z][a-z0-9_]*$",
-                          "maxLength": 80,
                           "not": {
                             "enum": [
                               "constructor",
@@ -1512,7 +1434,6 @@
                       "connection": {
                         "type": "string",
                         "pattern": "^[a-z][a-z0-9_]*$",
-                        "maxLength": 80,
                         "not": {
                           "enum": [
                             "constructor",
@@ -1523,8 +1444,7 @@
                       },
                       "path": {
                         "type": "string",
-                        "minLength": 1,
-                        "maxLength": 16000
+                        "minLength": 1
                       },
                       "method": {
                         "enum": [
@@ -1604,7 +1524,6 @@
                   "runtime": {
                     "type": "string",
                     "pattern": "^[a-z][a-z0-9_]*$",
-                    "maxLength": 80,
                     "not": {
                       "enum": [
                         "constructor",
@@ -1615,8 +1534,7 @@
                   },
                   "entrypoint": {
                     "type": "string",
-                    "minLength": 1,
-                    "maxLength": 500
+                    "minLength": 1
                   },
                   "args": {
                     "type": "array",
@@ -1634,8 +1552,7 @@
               },
               "fixtures": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 500
+                "minLength": 1
               },
               "schedule": {
                 "type": "object",
@@ -1649,8 +1566,7 @@
                     "items": {
                       "type": "string",
                       "pattern": "^(0|[1-9][0-9]{0,6})(s|m|h|d)$"
-                    },
-                    "maxItems": 20
+                    }
                   },
                   "horizon": {
                     "type": "string",
@@ -1688,8 +1604,7 @@
         },
         "no_effect_reason": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 16000
+          "minLength": 1
         },
         "limits": {
           "type": "object",
@@ -1717,13 +1632,11 @@
           "type": "object",
           "propertyNames": {
             "type": "string",
-            "pattern": "^[a-z][a-z0-9_]*$",
-            "maxLength": 80
+            "pattern": "^[a-z][a-z0-9_]*$"
           },
           "additionalProperties": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 16000
+            "minLength": 1
           },
           "minProperties": 1
         }
@@ -1785,7 +1698,6 @@
               "out": {
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9_]*$",
-                "maxLength": 80,
                 "not": {
                   "enum": [
                     "constructor",
@@ -1803,7 +1715,6 @@
                 "propertyNames": {
                   "type": "string",
                   "pattern": "^[a-z][a-z0-9_]*$",
-                  "maxLength": 80,
                   "not": {
                     "enum": [
                       "constructor",

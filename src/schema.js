@@ -1,16 +1,17 @@
-const text = { type: 'string', minLength: 1, maxLength: 16000 };
-const name = { type: 'string', pattern: '^[a-z][a-z0-9_]*$', maxLength: 80, not: { enum: ['constructor', 'prototype', '__proto__'] } };
+const text = { type: 'string', minLength: 1 };
+const name = { type: 'string', pattern: '^[a-z][a-z0-9_]*$', not: { enum: ['constructor', 'prototype', '__proto__'] } };
 const ref = { type: 'string', pattern: '^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*|\\.[0-9]+)*$' };
 const positive = { type: 'integer', minimum: 1, maximum: 2147483647 };
-// How many items of an each step may run at once.
-const width = { type: 'integer', minimum: 1, maximum: 32 };
 const keyEnv = { type: 'string', pattern: '^[A-Z_][A-Z0-9_]*$' };
+// Variables that a script gets from the caller's environment, and every variable the runtime sets for a script.
+export const callerVariables = ['HOME', 'USER', 'TMPDIR'];
+export const scriptVariables = ['PATH', 'LANG', ...callerVariables];
 // A secret name is an environment variable name. Names that the runtime sets for scripts are reserved.
-const secretName = { type: 'string', pattern: '^[A-Z][A-Z0-9_]*$', maxLength: 80, not: { anyOf: [{ enum: ['PATH', 'LANG', 'HOME'] }, { pattern: '^METHOD_' }] } };
+const secretName = { type: 'string', pattern: '^[A-Z][A-Z0-9_]*$', not: { anyOf: [{ enum: scriptVariables }, { pattern: '^METHOD_' }] } };
 export const object = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
 const map = (value) => ({ type: 'object', propertyNames: name, additionalProperties: value });
 const list = (items) => ({ type: 'array', items, uniqueItems: true });
-const path = { type: 'string', minLength: 1, maxLength: 500 };
+const path = { type: 'string', minLength: 1 };
 const shapeProperties = {
   type: { enum: ['text', 'number', 'boolean', 'record', 'list', 'file'] },
   description: text, fields: map({ $ref: '#/$defs/shape' }), items: { $ref: '#/$defs/shape' }, format: text,
@@ -28,10 +29,10 @@ const agent = object({ kind: { const: 'agent' }, model: stepModel, prompt: text,
 const methodModel = { anyOf: [modelId, object({ model: modelId, max_output_tokens: positive, reasoning_effort: { enum: ['minimal', 'low', 'medium', 'high'] } }, ['model']),
   object({ agent: { enum: ['codex', 'claude'] }, model: text, reasoning_effort: text }, ['agent'])] };
 // An accepted warning: the issue code and the reason the author accepts it on this step.
-const runLimits = { timeout_ms: positive, max_model_requests: { type: 'integer', minimum: 0 }, max_invocations: positive, max_tool_calls: { type: 'integer', minimum: 0 }, max_output_bytes: positive, max_request_bytes: positive, max_concurrency: width };
+const runLimits = { timeout_ms: positive, max_model_requests: { type: 'integer', minimum: 0 }, max_invocations: positive, max_tool_calls: { type: 'integer', minimum: 0 }, max_output_bytes: positive, max_request_bytes: positive, max_concurrency: positive };
 const stepLimits = { timeout_ms: positive, max_agent_turns: positive, max_model_requests: positive };
 const tool = (data) => ({oneOf: [object({ description: text, in: map({ $ref: data }), out: map({ $ref: data }), run, effects: list(name) }), object({description: text, connection: name, tool: text, parameters: {type:'object'}, effects: list(name)})]});
-const accept = { type: 'object', propertyNames: { type: 'string', pattern: '^[a-z][a-z0-9_]*$', maxLength: 80 }, additionalProperties: text, minProperties: 1 };
+const accept = { type: 'object', propertyNames: { type: 'string', pattern: '^[a-z][a-z0-9_]*$' }, additionalProperties: text, minProperties: 1 };
 // A classify step has one answer form: named options, yes or no, or 2–10 ordered levels (lowest first).
 const classify = { ...object({ kind: { const: 'classify' }, question: text, options: { ...map(text), minProperties: 2, maxProperties: 255 },
   answer: { const: 'yes_no' }, levels: { type: 'array', items: name, minItems: 2, maxItems: 10, uniqueItems: true } }, ['kind', 'question']),
@@ -49,7 +50,7 @@ const builtin = [
 // An effect contract: an observer reads the changed system and a judge decides what the observations show.
 const effect = object({
   intent: text, in: map(ref), observe: { oneOf: [run, ...builtin] }, judge: run, fixtures: path,
-  schedule: object({ first: duration, then: { type: 'array', items: duration, maxItems: 20 }, horizon: duration }, ['horizon']),
+  schedule: object({ first: duration, then: { type: 'array', items: duration }, horizon: duration }, ['horizon']),
   confirm: { enum: ['positive', 'unrefuted_at_horizon'] }, retry: { enum: ['never', 'idempotent'] }, blocking: { type: 'boolean' },
 }, ['intent', 'observe']);
 const exact = [
@@ -74,7 +75,7 @@ export const methodSchema = {
     name: text, goal: text, run_prompt: text, run_label: ref,
     files: list(path), inputs: map({ $ref: '#/$defs/input' }), state: map({ $ref: '#/$defs/input' }),
     // Names and purposes only. The host supplies values to every script step; they never appear in the Method.
-    secrets: { type: 'object', propertyNames: secretName, additionalProperties: text, maxProperties: 50 },
+    secrets: { type: 'object', propertyNames: secretName, additionalProperties: text },
     // Where a signed-in host keeps run content: in the account (default) or only on the device that ran it.
     run_data: { enum: ['account', 'device'] },
     environment: map(object({ type: { enum: ['browser', 'service', 'desktop', 'files', 'tool'] }, description: text, role: { const: 'observer' } }, ['type', 'description'])),
@@ -91,7 +92,7 @@ export const methodSchema = {
       ...object({
         name: text, purpose: text, reading: object({ inputs: text, outputs: text, output_name: text, condition: text, check: text, check_name: text }, []), in: map(ref), out: { oneOf: [name, map({ $ref: '#/$defs/data' })] },
         do: { $ref: '#/$defs/execution' }, ask: text, check: { $ref: '#/$defs/check' },
-        each: { ...map(ref), minProperties: 1, maxProperties: 1 }, concurrency: width,
+        each: { ...map(ref), minProperties: 1, maxProperties: 1 }, concurrency: positive,
         repeat: object({ max_iterations: positive, until: ref }, ['max_iterations']), when: ref,
         after: { anyOf: [name, list(name)] }, changes: list(ref), effects: { ...map(effect), minProperties: 1 }, no_effect_reason: text,
         limits: object({ timeout_ms: positive, max_agent_turns: positive, max_model_requests: positive }, []),
