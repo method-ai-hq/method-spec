@@ -23,8 +23,10 @@ const modelId = { type: 'string', pattern: modelIdPattern, maxLength: 200 };
 const stepModel = { anyOf: [name, modelId] };
 const call = object({ kind: { const: 'call' }, model: stepModel, prompt: text }, ['kind', 'prompt']);
 const agent = object({ kind: { const: 'agent' }, model: stepModel, prompt: text, tools: list(name), browser: ref }, ['kind', 'prompt']);
-// What a models name means: a hosted model ID, or one with its output limit and reasoning effort.
-const methodModel = { anyOf: [modelId, object({ model: modelId, max_output_tokens: positive, reasoning_effort: { enum: ['minimal', 'low', 'medium', 'high'] } }, ['model'])] };
+// What a models name means: a hosted model ID, or one with its output limit and reasoning effort,
+// or a local agent (codex or claude) with its own model and reasoning effort.
+const methodModel = { anyOf: [modelId, object({ model: modelId, max_output_tokens: positive, reasoning_effort: { enum: ['minimal', 'low', 'medium', 'high'] } }, ['model']),
+  object({ agent: { enum: ['codex', 'claude'] }, model: text, reasoning_effort: text }, ['agent'])] };
 // An accepted warning: the issue code and the reason the author accepts it on this step.
 const runLimits = { timeout_ms: positive, max_model_requests: { type: 'integer', minimum: 0 }, max_invocations: positive, max_tool_calls: { type: 'integer', minimum: 0 }, max_output_bytes: positive, max_request_bytes: positive, max_concurrency: width };
 const stepLimits = { timeout_ms: positive, max_agent_turns: positive, max_model_requests: positive };

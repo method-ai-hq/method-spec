@@ -41,6 +41,7 @@ id: wf_3cfa2d6d2c00552ce5a4ab723a8248fe   # written once by the CLI; not part of
 models:                                    # what model names mean
   writer: openai/gpt-6-luna
   fields_writer: {model: deepseek/deepseek-v4.1-flash, max_output_tokens: 4000, reasoning_effort: low}
+  reviewer: {agent: codex, reasoning_effort: high}   # a local agent on the computer that runs the Method
 steps:
   write:
     do: {kind: call, model: writer, prompt: ...}             # a name from models
@@ -55,7 +56,7 @@ tools:                                     # tools that agent steps list by name
 ```
 
 - `id` is the account Method's ID: `wf_` and 32 lowercase hex digits. The CLI writes it at the first signed-in save. The content digest leaves it out (`documentForDigest`), so a copy keeps its versions and an `id` written during a run does not stop its resume.
-- `models` maps a name to a model ID, or to `{model, max_output_tokens?, reasoning_effort?}` (reasoning effort: minimal, low, medium, high). Each is a hosted model (backend `method`).
+- `models` maps a name to a model ID, or to `{model, max_output_tokens?, reasoning_effort?}` (reasoning effort: minimal, low, medium, high), each a hosted model (backend `method`), or to `{agent: codex | claude, model?, reasoning_effort?}`: a step that names it runs as a local-agent model step (backend `codex` or `claude`, with that agent's own model name and reasoning effort) wherever the Method runs. That agent must be installed and the configuration must allow local processes.
 - A `call` or `agent` step's `model` (also an agent check's) is a `models` name, a model ID (`provider/model`, pattern `^[a-z0-9-]+/[A-Za-z0-9._:-]+$`), or absent (the account default). `default` keeps meaning the account default. When the document has `models`, any other plain name must be one of them (`unknown_model`). Without `models`, a plain name can name a caller-configured profile.
 - `accept: {CODE: reason}` on a step accepts that warning or note on that step. The issue stays in the list with `accepted` set to the reason. Errors cannot be accepted.
 - `limits` sets run limits (`timeout_ms`, `max_model_requests`, `max_invocations`, `max_tool_calls`, `max_output_bytes`, `max_request_bytes`, `max_concurrency`); `limits.step` sets the defaults for steps without their own limits (`timeout_ms`, `max_agent_turns`, `max_model_requests`; it replaces configuration `step_defaults`). Document limits come before configuration limits.
@@ -192,7 +193,7 @@ On timeout or process exit, the runner kills the process group on POSIX systems.
 
 ### Models and agents
 
-Profiles are resolved once, in this order. On resume, the saved profiles. `--agent codex|claude` (runtime option `agent`) runs every model step with that local agent. The Method's own `models` and the model IDs that steps name are hosted models (backend `method`). Then the caller's configured profiles (`config.models`), then the `models` of a saved package's `runtime.json` when the document has no `models`. A step without a profile uses `default`: the configured default, the host's hosted model (`hostedModel`, the account default), the identified calling coding agent, or the sole installed supported agent. If both Codex and Claude are available without a choice, execution requests input. Both use their normal sign-in. The selected profiles remain fixed on resume. Codex starts a fresh process with approval and sandbox prompts disabled; it is trusted local execution. A supplied configuration must allow local processes.
+Profiles are resolved once, in this order. On resume, the saved profiles. `--agent codex|claude` (runtime option `agent`) runs every model step with that local agent. The Method's own `models` (hosted, or a local agent for an `agent` entry) and the model IDs that steps name (hosted, backend `method`). `--agent` replaces every profile, an `agent` entry too; it keeps an entry's model and reasoning effort only when the entry names the same agent. Then the caller's configured profiles (`config.models`), then the `models` of a saved package's `runtime.json` when the document has no `models`. A step without a profile uses `default`: the configured default, the host's hosted model (`hostedModel`, the account default), the identified calling coding agent, or the sole installed supported agent. If both Codex and Claude are available without a choice, execution requests input. Both use their normal sign-in. The selected profiles remain fixed on resume. Codex starts a fresh process with approval and sandbox prompts disabled; it is trusted local execution. A supplied configuration must allow local processes.
 
 The temporary Method MCP bridge exposes only the step's declared Method tools. Codex also retains its built-in and installed tools. Empty `tools` does not mean that Codex has no tools. Both `call` and `agent` use a Codex process with a structured final output on this backend. Internal Codex model requests and tools are not governed by Method's direct API request/turn counters.
 

@@ -172,3 +172,78 @@ test('a run uses the document limits and tools without configuration', async () 
     assert.match(JSON.stringify(result), /invocation/i);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+// Method 3.4 local-agent entries: models: {NAME: {agent: codex | claude, model?, reasoning_effort?}}.
+const mixed = (change = () => {}) => {
+  const method = {
+    format: 'method/3.4', name: 'Mixed models', goal: 'Draft with Codex, edit with Claude, and title with a hosted model.',
+    models: { drafter: { agent: 'codex', reasoning_effort: 'low' }, editor: { agent: 'claude', model: 'claude-test', reasoning_effort: 'high' }, titler: 'openai/gpt-6-luna' },
+    inputs: { notes: { type: 'text' } },
+    steps: {
+      draft: { in: { notes: 'inputs.notes' }, do: { kind: 'call', model: 'drafter', prompt: 'Draft from {{notes}}.' }, out: { draft: { type: 'text' } } },
+      edit: { in: { draft: 'draft' }, do: { kind: 'agent', model: 'editor', prompt: 'Edit {{draft}}.', tools: [] }, out: { edited: { type: 'text' } } },
+      title: { in: { edited: 'edited' }, do: { kind: 'call', model: 'titler', prompt: 'Title {{edited}}.' }, out: { title: { type: 'text' } } },
+    },
+    result: { title: 'title', edited: 'edited' },
+  };
+  change(method);
+  return method;
+};
+
+test('a models entry can name a local agent; other agent fields are refused', () => {
+  validateMethod(mixed());
+  validateMethod(mixed(m => { m.models.drafter = { agent: 'claude' }; }));
+  assert.throws(() => validateMethod(mixed(m => { m.models.drafter = { agent: 'gemini' }; })), /models/);
+  assert.throws(() => validateMethod(mixed(m => { m.models.drafter = { agent: 'codex', max_output_tokens: 10 }; })), /models/);
+  assert.throws(() => validateMethod(mixed(m => { m.models.drafter = { agent: 'codex', model: 'x', command: '/bin/sh' }; })), /models/);
+  assert.throws(() => validateMethod(mixed(m => { m.format = 'method/3.3'; })), /models requires method\/3\.4/);
+});
+
+test('model resolution: an agent entry is a local-agent profile; --agent still runs every step', async () => {
+  const profiles = await resolveModels(mixed(), {}, { hostedModel: 'a/b', env: {} });
+  assert.deepEqual(profiles.drafter, { backend: 'codex', reasoning_effort: 'low' });
+  assert.deepEqual(profiles.editor, { backend: 'claude', model: 'claude-test', reasoning_effort: 'high' });
+  assert.deepEqual(profiles.titler, { backend: 'method', model: 'openai/gpt-6-luna' });
+  // The Method's entry comes before a configured profile of the same name.
+  assert.deepEqual((await resolveModels(mixed(), { models: { drafter: { backend: 'claude' } } }, { env: {} })).drafter, { backend: 'codex', reasoning_effort: 'low' });
+  const claude = await resolveModels(mixed(), {}, { agent: 'claude', env: {} });
+  assert.deepEqual(claude, { drafter: { backend: 'claude' }, editor: { backend: 'claude', model: 'claude-test', reasoning_effort: 'high' }, titler: { backend: 'claude' } });
+  const codex = await resolveModels(mixed(), {}, { agent: 'codex', env: {} });
+  assert.deepEqual(codex, { drafter: { backend: 'codex', reasoning_effort: 'low' }, editor: { backend: 'codex' }, titler: { backend: 'codex' } });
+});
+
+test('a 3.4 Method that mixes hosted and agent entries runs each step on its own backend', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'method-34-agents-'));
+  const prior = process.env.PATH;
+  t.after(async () => { process.env.PATH = prior; await rm(dir, { recursive: true, force: true }); });
+  const log = join(dir, 'calls.jsonl');
+  // Fake agents on PATH: each records its arguments and returns its step output.
+  await writeFile(join(dir, 'codex'), `#!${process.execPath}
+const fs = require('node:fs'); const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ agent: 'codex', args }) + '\\n');
+fs.writeFileSync(args[args.indexOf('--output-last-message') + 1], JSON.stringify({ draft: 'Codex draft.' }));
+`, { mode: 0o700 });
+  await writeFile(join(dir, 'claude'), `#!${process.execPath}
+const fs = require('node:fs'); const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ agent: 'claude', args }) + '\\n');
+console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, structured_output: { edited: 'Claude edit.' } }));
+`, { mode: 0o700 });
+  const file = join(dir, 'mixed.method');
+  await writeFile(file, JSON.stringify(mixed()));
+  const sent = [];
+  const hostedModels = { request: async body => { sent.push(body.model); return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ title: 'Title.' }) } }], usage: { prompt_tokens: 1, completion_tokens: 1 } }; } };
+  // An agent entry needs that agent installed.
+  process.env.PATH = join(dir, 'missing');
+  await assert.rejects(runMethod(file, { allow_local_processes: true }, { runDir: join(dir, 'missing-run'), inputs: { notes: 'N' }, hostedModels, env: {} }), /codex/);
+  process.env.PATH = dir;
+  const result = await runMethod(file, { allow_local_processes: true }, { runDir: join(dir, 'run'), inputs: { notes: 'N' }, hostedModels, env: {} });
+  assert.equal(result.status, 'completed', result.error);
+  assert.deepEqual(result.result, { title: 'Title.', edited: 'Claude edit.' });
+  const calls = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(calls.map(call => call.agent), ['codex', 'claude']);
+  assert.ok(calls[0].args.includes('model_reasoning_effort="low"'));
+  assert.equal(calls[0].args.includes('--model'), false);
+  assert.equal(calls[1].args[calls[1].args.indexOf('--model') + 1], 'claude-test');
+  assert.equal(calls[1].args[calls[1].args.indexOf('--effort') + 1], 'high');
+  assert.deepEqual(sent, ['openai/gpt-6-luna']);
+});

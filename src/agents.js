@@ -4,9 +4,13 @@ import { join } from 'node:path';
 import { fail, own, validateConfig } from './validate.js';
 import { modelName, isModelId } from './semantics.js';
 
-/** Hosted profiles for the Method's own models and for model IDs that steps name directly. */
+/**
+ * Profiles for the Method's own models and for model IDs that steps name directly: hosted (backend method),
+ * or a local agent for an entry {agent: codex | claude, model?, reasoning_effort?}.
+ */
 export function methodProfiles(method) {
-  const hosted = spec => typeof spec === 'string' ? { backend: 'method', model: spec } : { backend: 'method', ...spec };
+  const hosted = spec => typeof spec === 'string' ? { backend: 'method', model: spec }
+    : spec.agent ? (({ agent, ...rest }) => ({ backend: agent, ...rest }))(spec) : { backend: 'method', ...spec };
   const profiles = Object.fromEntries(Object.entries(method.models ?? {}).map(([name, spec]) => [name, hosted(spec)]));
   for (const name of modelNames(method)) if (isModelId(name) && !own(profiles, name)) profiles[name] = hosted(name);
   return profiles;
@@ -28,8 +32,8 @@ export async function packageModels(method, sourceRoot) {
 }
 
 /**
- * Resolve once. Order: saved profiles (resume), --agent for every model step, the Method's models and model IDs
- * (hosted), configured profiles, a saved package's runtime.json models, then for the default: the host's hosted
+ * Resolve once. Order: saved profiles (resume), --agent for every model step, the Method's models (hosted or local
+ * agent) and model IDs (hosted), configured profiles, a saved package's runtime.json models, then for the default: the host's hosted
  * model, the calling agent, the one installed agent. Caller hints select a provider, never credentials or permissions.
  */
 export async function resolveModels(method, config, options = {}) {

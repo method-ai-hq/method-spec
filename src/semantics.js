@@ -170,7 +170,7 @@ const formatRank = format => Number(format.slice('method/3.'.length));
 /** The model a call or agent step uses: a models name, a model ID, or default (the account default). */
 export const modelName = exec => exec.model ?? 'default';
 export const isModelId = model => typeof model === 'string' && new RegExp(modelIdPattern).test(model);
-/** Method 3.4 fields: id, models, accept, a step model that is a model ID or absent. */
+/** Method 3.4 fields: id, models (hosted or a local agent), accept, a step model that is a model ID or absent. */
 function validateModels(method) {
   const executions = Object.entries(method.steps).flatMap(([id, step]) => [['do', step.do], ['check', step.check]]
     .filter(([, exec]) => ['call', 'agent'].includes(exec?.kind)).map(([phase, exec]) => [id, phase, exec]));
