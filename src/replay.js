@@ -54,7 +54,8 @@ export async function recordRun(runDir) {
     const at = `${event.step}:${event.iteration}`;
     if (event.event === 'step.started') open[at] = { inputs: event.inputs };
     else if (event.event === 'step.candidate' && open[at]) open[at].candidate = event.candidate;
-    else if (event.event === 'step.accepted' && open[at]?.candidate) (iterations[event.step] ??= [])[event.iteration] = open[at];
+    // An iteration reused from an earlier run has no candidate event; its accepted outputs are what that run's action returned.
+    else if (event.event === 'step.accepted' && open[at] && (open[at].candidate || event.reused_from)) (iterations[event.step] ??= [])[event.iteration] = { inputs: open[at].inputs, candidate: open[at].candidate ?? event.outputs };
   }
   const tools = started.config?.tools ?? {};
   const keys = Object.fromEntries(Object.entries(method.steps).map(([id, step]) => [id, stepKey(step, { files: manifest.files, profiles: manifest.models, tools })]));

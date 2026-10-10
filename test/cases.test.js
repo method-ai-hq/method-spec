@@ -65,6 +65,21 @@ test('a case must fail on the run that went wrong; it then fails on the current 
   assert.deepEqual(report.cases[0].candidate.attempts[0].live_steps, []);
 });
 
+test('a case from a run that reused an earlier run replays the reused outputs, so it fails on the unchanged version', async t => {
+  const { dir, cfg, write } = await setup(t);
+  const { send, ...steps } = version().steps;
+  const file = await write('totals.method', { ...version(), environment: {}, steps: { ...steps, report: { ...steps.report, in: { total: 'total' } } } });
+  const inputs = { amounts: [4, 6], to: 'ap@example.com' };
+  await runMethod(file, cfg, { runDir: join(dir, 'first'), inputs });
+  const reused = await runMethod(file, cfg, { runDir: join(dir, 'reused'), inputs, cacheFrom: [join(dir, 'first')] });
+  assert.deepEqual(reused.reused, { compute: 1, report: 1 });
+  await createCase({ methodFile: file, runDir: join(dir, 'reused'), id: 'delivery-pending', note: 'Say that delivery is not yet confirmed.',
+    expect: [{ kind: 'equals', ref: 'outputs.report', value: 'Paid 10; summary sent, delivery not yet confirmed' }], config: cfg });
+  const report = await testSuite(file, cfg);
+  assert.equal(report.cases[0].verdict, 'fail');
+  assert.deepEqual(report.cases[0].candidate.attempts[0].live_steps, []);
+});
+
 test('a fix turns the new case green, and pinned cases must keep passing', async t => {
   const { cfg, current, write, make, pin } = await setup(t);
   await pin('total', [{ kind: 'equals', ref: 'outputs.total', value: 10 }]);
