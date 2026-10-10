@@ -165,7 +165,7 @@ test('yes/no and score forms derive outputs, validate, and run', async t=>{
 
 test('Jev requests use the OpenRouter release name and answers keep the pinned version', ()=>{
   const base={request_id:'r', model:'jev-1.13.0', question:'Q?', inputs:{message:'m'}};
-  assert.deepEqual(jevRequest({...base, answer:'yes_no'}), {model:'jev-1.13', state:{message:'m'}, questions:{classification:{type:'noul', instructions:'Q?'}}});
+  assert.deepEqual(jevRequest({...base, answer:'yes_no'}), {model:'jev-1.13', state:{message:'m'}, questions:{classification:{type:'noul', instructions:'Q?'}}, provider:{data_collection:'deny', zdr:true}});
   assert.deepEqual(jevRequest({...base, levels:['low','high']}).questions.classification, {type:'score', instructions:'Q?', criteria:['low','high']});
   assert.deepEqual(jevRequest({...base, options:{a:'A', b:'B'}}).questions.classification, {type:'choice', instructions:'Q?', criteria:{a:'A', b:'B'}});
   const pin={provider:'typesafe', model:'jev-1.13.0'}, usage={input_tokens:5, output_tokens:2, cost:1e-5};

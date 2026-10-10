@@ -62,6 +62,10 @@ export function jevRequest(request: any): {
             criteria: any;
         };
     };
+    provider: {
+        data_collection: string;
+        zdr: boolean;
+    };
 };
 /** Convert a Jev response to the provider answer. Only an answer from the pinned release is accepted; it keeps the pinned name. */
 export function jevAnswer(request: any, data: any): {

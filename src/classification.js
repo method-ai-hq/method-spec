@@ -73,7 +73,8 @@ export function jevRequest(request) {
   const question = form.answer === 'yes_no' ? { type: 'noul', instructions: request.question }
     : form.levels ? { type: 'score', instructions: request.question, criteria: form.levels }
     : { type: 'choice', instructions: request.question, criteria: form.options };
-  return { model: jevModel(request.model), state: request.inputs, questions: { classification: question } };
+  // Private on every path: no provider that trains on the data, zero data retention.
+  return { model: jevModel(request.model), state: request.inputs, questions: { classification: question }, provider: { data_collection: 'deny', zdr: true } };
 }
 
 /** Convert a Jev response to the provider answer. Only an answer from the pinned release is accepted; it keeps the pinned name. */
