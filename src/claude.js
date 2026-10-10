@@ -13,7 +13,8 @@ export async function executeClaude(execution, input, schema, context) {
   const bridge = await startMethodTools(execution, context);
   const clean = value => String(value).replaceAll(bridge.token, '[REDACTED]');
   const prompt = [execution.prompt, 'Step inputs:', JSON.stringify(input),
-    `Save output files under ${context.artifacts}. Use the declared Method tools for their operations. Return the requested JSON output. Do not edit the Method or its input files.`].join('\n\n');
+    'Do only this step; Method runs the other steps. Use the Method tools for the operations they declare. Do not change the Method, its scripts, or its input files.',
+    `Save any output files under ${context.artifacts}. Return the step output in the requested JSON format.`].join('\n\n');
   const args = ['--print', '--output-format', 'stream-json', '--verbose', '--no-session-persistence',
     '--json-schema', JSON.stringify(schema), '--strict-mcp-config', '--mcp-config', join(directory, 'mcp.json'),
     '--permission-mode', 'dontAsk', '--allowedTools', 'Read,Write,Edit,Glob,Grep,mcp__method_step__*'];

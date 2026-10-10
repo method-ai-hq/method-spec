@@ -15,9 +15,9 @@ export async function executeCodex(execution, input, schema, context) {
   const output = join(directory, 'result.json');
   await writeJSON(join(directory, 'schema.json'), schema);
   const prompt = [execution.prompt, 'Step inputs:', JSON.stringify(input),
-    'Give brief public progress updates when you start a new part of the work or finish a group of tool calls. Describe the work, without source passages or secrets. Progress messages do not replace the final output.',
-    `Return the step output in the supplied format. Save any output files under ${context.artifacts}.`,
-    'Use the Method tools for declared calculations and operations. Method runs the other steps. Do not change the Method, its scripts, or its input files.'].join('\n\n');
+    'Give a short progress update when you start a new part of the work or finish a group of tool calls. Describe the work; do not quote sources or secrets. Updates do not replace the final output.',
+    'Do only this step; Method runs the other steps. Use the Method tools for the operations they declare. Do not change the Method, its scripts, or its input files.',
+    `Save any output files under ${context.artifacts}. Return the step output in the requested JSON format.`].join('\n\n');
   if (Buffer.byteLength(prompt) > context.maxRequestBytes) fail('Codex prompt exceeds request limit', 'input_limit');
   await writeFile(join(directory, 'prompt.md'), prompt, { mode: 0o600 });
   const bridge = await startMethodTools(execution, context);

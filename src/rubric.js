@@ -23,7 +23,7 @@ const judgeMethod = {
         'Decide whether the text below meets each criterion. Judge only from the text below: do not open files, run commands, or use outside knowledge, and do not assume what the text does not say.',
         'For each criterion, return its id, pass (true or false), quote, and reason.',
         'quote: words copied exactly from the text that decide the criterion. When no single passage decides it (for example, when the criterion is about something the text must not contain, and the text does not contain it), use an empty quote.',
-        'Quotes come only from the text, never from the context. The context (for example the sources or the person\'s words) is there so you can check the text against it; do not judge the context.',
+        'The context (for example the sources or the person\'s words) is for checking the text against. Do not judge the context, and do not quote from it.',
         'reason: one short sentence.', '', 'Criteria (JSON):', '{{criteria}}', '', 'Context:', '{{context}}', '', 'Text:', '{{value}}',
       ].join('\n') },
       out: { verdicts: { type: 'list', fields: { id: 'text', pass: 'boolean', quote: 'text', reason: 'text' } } },
