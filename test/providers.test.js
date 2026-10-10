@@ -97,9 +97,15 @@ test('openrouter-chat agent runs a tool and returns its result', async t => {
   assert.equal(requests[1].messages.at(-2).tool_calls[0].id, 'call_1');
 });
 
+test('openrouter-chat keeps a complete JSON answer padded to the token limit', async t => {
+  const f = await fixture(t, method(step()));
+  const result = await f.run(config({ backend: 'openrouter-chat' }), async () => ({ choices: [{ finish_reason: 'length', message: { role: 'assistant', content: `{"value":1}${' '.repeat(500)}` } }] }));
+  assert.equal(result.status, 'completed'); assert.equal(result.result, 1);
+});
+
 test('openrouter-chat length, filter, and error responses stop the step', async t => {
-  const stopped = finish => ({ choices: [{ finish_reason: finish, message: { role: 'assistant', content: '{"value":1}' } }] });
-  for (const [reply, code] of [[stopped('length'), 'model_incomplete'], [stopped('content_filter'), 'model_refusal'], [{ error: { message: 'No provider' } }, 'provider_error']]) {
+  const stopped = (finish, content = '{"value":1}') => ({ choices: [{ finish_reason: finish, message: { role: 'assistant', content } }] });
+  for (const [reply, code] of [[stopped('length', '{"value":'), 'model_incomplete'], [stopped('content_filter'), 'model_refusal'], [{ error: { message: 'No provider' } }, 'provider_error']]) {
     const f = await fixture(t, method(step()));
     const result = await f.run(config({ backend: 'openrouter-chat' }), async () => reply);
     assert.equal(result.status, 'failed'); assert.equal(result.code, code);

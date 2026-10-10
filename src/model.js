@@ -37,6 +37,7 @@ const object = value => value && typeof value === 'object' && !Array.isArray(val
  * read() returns the model's tool calls, its final text, or why it stopped. history() is what the
  * conversation keeps from a response, unchanged, so that later requests replay it as the provider sent it.
  */
+const completeJson = text => { try { return JSON.parse(text) !== null && /^[\[{]/.test(text.trim()); } catch { return false; } };
 const adapters = {
   'openai-responses': {
     url: 'https://api.openai.com/v1/responses',
@@ -102,9 +103,12 @@ const adapters = {
       const choice = data.choices?.[0];
       if (!choice?.message) return { incomplete: 'missing choice' };
       if (choice.finish_reason === 'content_filter' || choice.message.refusal) return { calls: [], refusal: true };
+      // Some models finish the JSON answer and then pad with spaces until the token limit. A complete answer is kept.
+      const text = typeof choice.message.content === 'string' ? choice.message.content : '';
+      if (choice.finish_reason === 'length' && !choice.message.tool_calls?.length && completeJson(text)) return { calls: [], refusal: false, text: text.trim() };
       if (!['stop', 'tool_calls'].includes(choice.finish_reason)) return { incomplete: choice.finish_reason ?? 'missing finish reason' };
       const calls = (choice.message.tool_calls ?? []).map(call => ({ id: call.id, name: call.function?.name, arguments: call.function?.arguments }));
-      return { calls, refusal: false, text: typeof choice.message.content === 'string' ? choice.message.content : '' };
+      return { calls, refusal: false, text };
     },
     history: data => [data.choices[0].message],
     results: results => results.map(({ call, output }) => ({ role: 'tool', tool_call_id: call.id, content: json(output) })),
