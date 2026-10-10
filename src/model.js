@@ -94,8 +94,8 @@ const adapters = {
       // Route only to providers that honor the output schema and tools. There is no models list, so no other model is used.
       provider: { require_parameters: true },
       ...(profile.reasoning_effort ? { reasoning: { effort: profile.reasoning_effort } } : {}),
-      ...(tools.length ? { tools: tools.map(tool => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters, strict: tool.strict } })),
-        parallel_tool_calls: false } : {}),
+      // No parallel_tool_calls: with require_parameters, a provider that does not list it is refused, and every call of a reply runs.
+      ...(tools.length ? { tools: tools.map(tool => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters, strict: tool.strict } })) } : {}),
     }),
     read(data) {
       if (data.error) fail(`OpenRouter error: ${object(data.error).message ?? 'unknown'}`, 'provider_error');

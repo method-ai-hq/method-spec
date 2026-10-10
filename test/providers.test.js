@@ -93,7 +93,6 @@ test('openrouter-chat agent runs a tool and returns its result', async t => {
     return requests.length === 1 ? router.tool() : router.text({ value: 5 });
   });
   assert.equal(result.status, 'completed'); assert.equal(result.result, 5);
-  assert.equal(requests[0].parallel_tool_calls, false);
   assert.deepEqual(requests[1].messages.at(-1), { role: 'tool', tool_call_id: 'call_1', content: '{"result":5}' });
   assert.equal(requests[1].messages.at(-2).tool_calls[0].id, 'call_1');
 });
