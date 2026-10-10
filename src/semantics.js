@@ -184,10 +184,10 @@ function validateModels(method) {
     }
     return;
   }
-  // With models, a plain name must be one of them; default keeps meaning the account default.
-  if (method.models) for (const [id, phase, exec] of executions) {
+  // A plain name must be in models (with or without a models block); default keeps meaning the account default.
+  for (const [id, phase, exec] of executions) {
     const model = modelName(exec);
-    if (model !== 'default' && !isModelId(model) && !own(method.models, model)) fail(`${id}.${phase}.model: ${model} is not in models`, 'unknown_model',
+    if (model !== 'default' && !isModelId(model) && !own(method.models ?? {}, model)) fail(`${id}.${phase}.model: ${model} is not in models`, 'unknown_model',
       { fix: `Add ${model} to models, or use a model ID such as openai/gpt-6-luna.`, step: id, field: `${phase}.model` });
   }
 }

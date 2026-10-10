@@ -101,7 +101,7 @@ async function executeRun(file, config, options) {
   const { order } = validateMethod(method);
   validateConfig(config);
   const suppliedConfig = config;
-  config = configuration(config);
+  config = configuration(config, method);
   const sourceRoot = await realpath(options.sourceRoot ?? dirname(pathResolve(file)));
   if (saved && (saved.method_sha256 !== hash(documentForDigest(method)) || saved.config_sha256 !== hash(suppliedConfig))) fail('Method or configuration changed. Resume needs the original version.', 'resume_mismatch');
   if (saved && (options.inputs || options.state)) fail('Resume uses saved inputs and state; omit --inputs and --state.', 'resume_mismatch');
@@ -422,7 +422,8 @@ async function executeRun(file, config, options) {
             if (Buffer.byteLength(prompt) + Buffer.byteLength(JSON.stringify(bindings)) > config.limits.max_request_bytes) fail('Expanded prompt exceeds request limit', 'input_limit');
             await scopedRecord('prompt.rendered', { phase: 'action', template: step.ask, rendered: prompt });
             if (!answer) {
-              await scopedRecord('human.required', { prompt, inputs: bindings });
+              // The answer form: what the answer must hold, so a worker can ask someone and check the reply.
+              await scopedRecord('human.required', { prompt, inputs: bindings, schema });
               fail('Human input required; this runner does not auto-answer ask', 'needs_input');
             }
           }

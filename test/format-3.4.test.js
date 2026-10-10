@@ -40,8 +40,9 @@ test('a plain model name must be in models; default keeps meaning the account de
   const [issue] = methodIssues(newsletter(m => { m.steps.write.do.model = 'editor'; }));
   assert.equal(issue.code, 'unknown_model'); assert.equal(issue.step, 'write'); assert.equal(issue.field, 'do.model'); assert.match(issue.fix, /Add editor to models/);
   validateMethod(newsletter(m => { m.steps.write.do.model = 'default'; }));
-  // Without models, a name may still come from the caller's configuration.
-  validateMethod(newsletter(m => { delete m.models; m.steps.write.do.model = 'editor'; }));
+  // Without a models block, a plain name is unknown too: no configuration file supplies models.
+  const [missing] = methodIssues(newsletter(m => { delete m.models; m.steps.write.do.model = 'editor'; m.steps.intro.do.model = 'default'; m.steps.fields.do.model = 'default'; }));
+  assert.equal(missing.code, 'unknown_model'); assert.equal(missing.step, 'write');
 });
 
 test('the 3.4 fields need format method/3.4', () => {

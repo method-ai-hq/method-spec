@@ -44,7 +44,7 @@ function missingSecretIssues(method, options) {
   const available = new Set(options.availableSecrets);
   return Object.keys(method.secrets ?? {}).filter(name => !available.has(name)).map(name =>
     issue('missing_secret', options.phase === 'run' ? 'error' : 'warning', `Secret ${name} has no value on this computer.`,
-      `Supply a value for ${name} in the host's secret store or the environment.`, { field: `secrets.${name}` }));
+      `Run method secret find to look for ${name} on this computer, or method secret set ${name} to enter it.`, { field: `secrets.${name}` }));
 }
 
 /** A classifier's most likely answer gates a step or feeds a change, with no step that applies a threshold. */
