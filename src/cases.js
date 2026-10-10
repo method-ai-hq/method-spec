@@ -328,7 +328,7 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
 }
 
 const scratchLimit = { files: 5000, bytes: 100_000_000 };
-const scratchSkip = new Set(['.git', 'node_modules', '.venv', '__pycache__', 'sensitive', '.method-runs', 'cases']);
+const scratchSkip = new Set(['.git', 'node_modules', '.venv', '__pycache__', '.method-runs', 'cases']);
 /** Copy a folder (or one file) into a scratch location, or return false when it is too large. */
 async function scratchCopy(real, scratch) {
   let files = 0, bytes = 0, info;

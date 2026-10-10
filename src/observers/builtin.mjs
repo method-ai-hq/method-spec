@@ -2,7 +2,7 @@
 // with only the observer connections. Mode "fetch" reads; mode "judge" decides from observations.
 import { readFileSync, existsSync, realpathSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { resolve, relative, isAbsolute, sep } from 'node:path';
+import { resolve, relative, isAbsolute } from 'node:path';
 
 const mode = process.argv[2];
 const input = JSON.parse(readFileSync(0, 'utf8'));
@@ -27,7 +27,7 @@ function connection() {
 function inside(root, path) {
   const base = realpathSync(root), full = resolve(base, path);
   const rel = relative(base, full);
-  if (rel.startsWith('..') || isAbsolute(rel) || rel.split(sep).includes('sensitive')) throw Error(`${path} is outside the observer connection`);
+  if (rel.startsWith('..') || isAbsolute(rel)) throw Error(`${path} is outside the observer connection`);
   return full;
 }
 

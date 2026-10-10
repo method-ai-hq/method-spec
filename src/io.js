@@ -12,13 +12,12 @@ export async function readDocument(file) {
   return parseDocumentValue(await readFile(file, 'utf8'));
 }
 export function relativeFile(path) {
-  if (isAbsolute(path) || path.includes('\\') || path.split('/').some(x => !x || x === '..' || x === '.' || x === 'sensitive' || x === '.git' || x === 'node_modules' || x.startsWith('.env') || x === 'secrets.env')) fail(`Invalid bundle path: ${path}`);
+  if (isAbsolute(path) || path.includes('\\') || path.split('/').some(x => !x || x === '..' || x === '.' || x === '.git' || x === 'node_modules' || x.startsWith('.env') || x === 'secrets.env')) fail(`Invalid bundle path: ${path}`);
   return path;
 }
 export async function containedFile(root, file) {
   const base = await realpath(root);
   const path = await realpath(resolve(base, file));
-  if (path.split(/[\\/]/).includes('sensitive')) fail('Use a path outside sensitive/.');
   const rel = relative(base, path);
   if (rel.startsWith('..') || isAbsolute(rel)) fail('File escapes its allowed directory');
   return path;

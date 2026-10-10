@@ -140,7 +140,7 @@ export async function observeEffect({ effect, key, token, inputs, attempt, actio
 }
 
 // Automatic observation of files connections: the runtime reads the folder itself, before and after the step.
-const skippedFolders = new Set(['.git', 'node_modules', '.venv', '__pycache__', 'sensitive', '.method-runs']);
+const skippedFolders = new Set(['.git', 'node_modules', '.venv', '__pycache__', '.method-runs']);
 // Listing must stay cheap: a step that writes to a large repository should not wait for it.
 export const folderLimit = { files: 20_000, ms: 3_000 };
 /**

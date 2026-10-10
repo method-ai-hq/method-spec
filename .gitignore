@@ -9,6 +9,5 @@ dist/
 runs/
 *.log
 .DS_Store
-sensitive/
 
 .method-runs/
