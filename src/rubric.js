@@ -53,7 +53,7 @@ async function modelVote(text, criteria, config, options, context) {
     await writeFile(file, JSON.stringify(judgeMethod));
     const result = await runMethod(file, { ...config, allow_local_processes: true }, { ...options.runOptions, runDir: join(dir, 'run'),
       inputs: { value: text, criteria: JSON.stringify(criteria.map(({ id, text }) => ({ id, text }))), context: context || '(none)' }, replay: undefined });
-    if (result.status !== 'completed') fail(`The rubric judge did not finish: ${result.error ?? result.status}`, 'judge_failed');
+    if (result.status !== 'completed') fail('outside_service', `The rubric judge did not finish: ${result.failure?.headline ?? result.status}`, 'judge_failed');
     const byId = new Map(result.result.map(v => [v.id, v]));
     const quoted = normalize(text);
     return criteria.map(({ id }) => {
@@ -82,7 +82,7 @@ async function classifyPass(text, criterion, options) {
 export async function judgeRubric({ value, criteria, context, judges = {}, config, options = {} }) {
   const settings = rubricSettings(config);
   const text = valueText(value ?? '');
-  if (Buffer.byteLength(text) > settings.max_value_bytes) fail(`The judged value exceeds ${settings.max_value_bytes} bytes`, 'judge_failed');
+  if (Buffer.byteLength(text) > settings.max_value_bytes) fail('limit', `The judged value exceeds ${settings.max_value_bytes} bytes`, 'judge_failed');
   const modelCriteria = criteria.filter(c => judges[c.id] !== 'classify');
   // The agent that resolves the default judge is part of the key, so a different judge does not reuse old answers.
   const profile = config?.models?.judge ?? { agent: options.runOptions?.agent ?? config?.models?.default ?? null };

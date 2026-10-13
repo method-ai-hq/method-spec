@@ -80,6 +80,6 @@ fs.writeFileSync(${JSON.stringify(join(root,'second'))},'yes');
   return {isError:true,content:[{type:'text',text:'Button not found'}]};
  }}}});
  const events=await readFile(join(root,'run/events.jsonl'),'utf8');
- if(fatal){assert.equal(result.status,'failed');assert.equal(result.code,'connection_failed');assert.match(result.error,/Browser connection lost/);assert.doesNotMatch(events,/"step":"finish"|step.accepted/);assert.match(events,/tool.failed/);await assert.rejects(readFile(join(root,'continued')),/ENOENT/);}
+ if(fatal){assert.equal(result.status,'failed');assert.equal(result.failure.code,'connection_failed');assert.match(result.failure.details,/Browser connection lost/);assert.doesNotMatch(events,/"step":"finish"|step.accepted/);assert.match(events,/tool.failed/);await assert.rejects(readFile(join(root,'continued')),/ENOENT/);}
  else {assert.equal(result.status,'completed',JSON.stringify(result));assert.equal(result.result,'Report');}
 });

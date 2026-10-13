@@ -24,4 +24,5 @@ export function documentForDigest(document: any): any;
 export class MethodValidationError extends Error {
     constructor(message: any, code?: string);
     code: string;
+    owner: string;
 }

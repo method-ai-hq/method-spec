@@ -6,7 +6,7 @@ import { formats } from './schema.js';
 import { codeIssues, applyAccepts } from './issues.js';
 
 export class MethodValidationError extends Error {
-  constructor(message, code = 'invalid_method') { super(message); this.name = 'MethodValidationError'; this.code = code; }
+  constructor(message, code = 'invalid_method') { super(message); this.name = 'MethodValidationError'; this.code = code; this.owner = 'method_code'; }
 }
 export function parseDocumentValue(value) {
   try {
@@ -16,7 +16,7 @@ export function parseDocumentValue(value) {
       if (document.errors.length) throw Error(document.errors.map(error => error.message).join('; '));
       value = document.toJS({ maxAliasCount: 20 });
     }
-    safeData(value);
+    safeData(value, 'method_code');
     return value;
   } catch (error) { throw new MethodValidationError(error.message); }
 }

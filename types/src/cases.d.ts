@@ -42,6 +42,8 @@ export function evaluate(expect: any, outcome: any, { caseDir, config, options }
 }>;
 /** What a finished run produced, as a case sees it. */
 export function outcomeOfRun(runDir: any): Promise<{
+    status: any;
+    failure: any;
     result: any;
     inputs: any;
     outputs: {
@@ -59,9 +61,6 @@ export function outcomeOfRun(runDir: any): Promise<{
     }[];
     artifacts: string;
     files: {};
-    error?: any;
-    status: any;
-    code: any;
 }>;
 /**
  * Record a case from a run that went wrong. The case must fail on that run: otherwise it does not capture the
@@ -191,8 +190,10 @@ export function testCase(methodFile: string, config: any, testCaseValue: any, ru
         live_steps: any[];
         live_model_steps: any[];
         judge_calls: number;
-        error?: string;
-        code?: any;
+        failure?: {
+            code: any;
+            headline: any;
+        };
         run_status: "completed" | "unconfirmed" | "failed" | "needs_input";
         status: string;
         results: {

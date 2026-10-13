@@ -6,6 +6,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { assertSchema, fail, safeData } from './validate.js';
 import { observationSchema, judgmentSchema } from './schema.js';
 import { effectSchedule, effectConfirm } from './semantics.js';
+import { displayText } from './schema.js';
+import { failureRecord } from './failure.js';
 import { containedFile, executeProcess, hash, writeJSON } from './io.js';
 
 /** One effect of one accepted iteration. */
@@ -26,7 +28,7 @@ export async function fixtureFiles(method, sourceRoot) {
     if (!effect.fixtures) continue;
     let names;
     try { names = await readdir(await containedFile(sourceRoot, effect.fixtures)); }
-    catch (error) { fail(`Cannot read effect fixtures ${effect.fixtures}: ${error.message}`, 'preflight'); }
+    catch (error) { fail('method_code', `Cannot read effect fixtures ${effect.fixtures}: ${error.message}`, 'preflight'); }
     files.push(...names.filter(name => name.endsWith('.json')).sort().map(name => posix.join(effect.fixtures, name)));
   }
   return files;
@@ -45,11 +47,11 @@ export async function testFixtures(method, bundle, manifest, judge) {
     const expected = new Set();
     for (const file of files) {
       const fixture = JSON.parse(await readFile(await containedFile(bundle, file), 'utf8'));
-      safeData(fixture);
-      if (!['confirmed', 'contradicted', 'no_evidence', 'unobservable'].includes(fixture.expect)) fail(`${file}: expect must be confirmed, contradicted, no_evidence or unobservable`, 'effect_fixture_failed');
-      assertSchema(observationSchema, { observations: fixture.observations }, `${file} observations`);
+      safeData(fixture, 'method_code');
+      if (!['confirmed', 'contradicted', 'no_evidence', 'unobservable'].includes(fixture.expect)) fail('method_code', `${file}: expect must be confirmed, contradicted, no_evidence or unobservable`, 'effect_fixture_failed');
+      assertSchema(observationSchema, { observations: fixture.observations }, `${file} observations`, { producer: `the effect fixture ${file}`, owner: 'method_code' });
       const judgment = await judge(effect, { token: fixture.token ?? 'mop_fixture', intent: effect.intent, inputs: fixture.inputs ?? {}, observations: fixture.observations, previous: fixture.previous ?? [], final: fixture.final ?? false });
-      if (judgment.verdict !== fixture.expect) fail(`${where}: fixture ${file} expects ${fixture.expect}, but the judge returned ${judgment.verdict} (${judgment.reason})`, 'effect_fixture_failed');
+      if (judgment.verdict !== fixture.expect) fail('method_code', `${where}: fixture ${file} expects ${fixture.expect}, but the judge returned ${judgment.verdict} (${judgment.reason})`, 'effect_fixture_failed');
       expected.add(fixture.observations.length ? fixture.expect : 'empty:' + fixture.expect);
       results.push({ effect: `${id}/${name}`, fixture: file, verdict: judgment.verdict });
     }
@@ -57,7 +59,7 @@ export async function testFixtures(method, bundle, manifest, judge) {
     if (!expected.has('contradicted')) missing.push('a contradicted case');
     if (!expected.has('empty:no_evidence')) missing.push('an empty case (observations: []) that gives no_evidence');
     if (effectConfirm(effect) === 'positive' && !expected.has('confirmed')) missing.push('a confirmed case');
-    if (missing.length) fail(`${where}: fixtures in ${effect.fixtures} need ${missing.join(', ')}`, 'effect_fixture_failed');
+    if (missing.length) fail('method_code', `${where}: fixtures in ${effect.fixtures} need ${missing.join(', ')}`, 'effect_fixture_failed');
   }
   return results;
 }
@@ -73,18 +75,22 @@ export async function runObserverScript({ exec, input, role, token, bundle, runt
     if (role === 'fetch' && process.env.METHOD_OBSERVER_TOKEN) env.METHOD_OBSERVER_TOKEN = process.env.METHOD_OBSERVER_TOKEN;
   } else {
     const profile = runtimeInfo[exec.runtime];
-    if (!profile) fail(`Unknown runtime: ${exec.runtime}`, 'preflight');
+    if (!profile) fail('setup', `Unknown runtime: ${exec.runtime}`, 'preflight');
     if (role === 'fetch') for (const key of profile.env ?? []) {
-      if (!process.env[key]) fail(`Missing runtime environment variable: ${key}`, 'preflight');
+      if (!process.env[key]) fail('setup', `Missing runtime environment variable: ${key}`, 'preflight');
       env[key] = process.env[key];
     }
     command = profile.command; args = [...(profile.args ?? []), await containedFile(bundle, exec.entrypoint), ...(exec.args ?? [])];
   }
   const result = await executeProcess({ command, args, cwd: bundle, input, env, signal, maxBytes });
+  // An observer or a judge is the Method's own code; a built-in one is Method's.
+  const owner = isBuiltin(exec) ? 'method_platform' : 'method_code';
+  const producer = isBuiltin(exec) ? `the built-in ${exec.kind} observer` : `the ${role === 'fetch' ? 'observer' : 'judge'} script ${exec.entrypoint}`;
   let output;
-  try { output = JSON.parse(result.output); } catch { fail(`${exec.entrypoint} must return one JSON object`, 'invalid_output'); }
-  safeData(output);
-  assertSchema(role === 'fetch' ? observationSchema : judgmentSchema, output, role === 'fetch' ? 'Observer output' : 'Judge output');
+  try { output = JSON.parse(result.output); } catch { fail(owner, `${exec.entrypoint ?? exec.kind} must return one JSON object`, 'invalid_output', { producer }); }
+  safeData(output, owner);
+  if (role !== 'fetch') output = displayText(output);
+  assertSchema(role === 'fetch' ? observationSchema : judgmentSchema, output, role === 'fetch' ? 'Observer output' : 'Judge output', { producer, owner });
   return { output, diagnostics: result.diagnostics };
 }
 
@@ -241,21 +247,22 @@ export function effectSummary(entries) {
     effects: current.map(({ effect, verdict, final, reason, observed_at, next_observation_at, horizon_at, action_outcome }) => ({ effect, verdict, final, reason, observed_at, next_observation_at, horizon_at, action_outcome })),
   };
 }
-/** Apply the effect summary to a completed run's status. */
-export function statusWithEffects(base, summary) {
+/**
+ * Apply the effect summary to a completed run's status. A contradicted effect fails the run with a failure record;
+ * an effect that no observer could confirm makes it unconfirmed.
+ * @param {any} base @param {any} summary @param {{method?: any, total?: (step: string) => number | null}} [where]
+ */
+export function statusWithEffects(base, summary, { method, total = () => null } = {}) {
   if (base.status !== 'completed' || !summary.total) return base;
   if (summary.contradicted) {
-    const effects = summary.effects.filter(e => e.verdict === 'contradicted').map(e => `${e.effect} (${e.reason})`).join('; ');
+    const contradicted = summary.effects.filter(e => e.verdict === 'contradicted');
+    const [step, iteration, name] = contradicted[0].effect.split('/');
+    const error = Object.assign(new Error(`An observer found evidence that an intended external change did not happen: ${contradicted.map(e => `${e.effect} (${e.reason})`).join('; ')}`),
+      { code: 'effect_contradicted', owner: 'agent_work', phase: 'effect', effect_name: name, evidence: contradicted.map(e => `${e.effect}: ${e.reason}`) });
     const { result, ...rest } = base;
-    return { ...rest, status: 'failed', code: 'effect_contradicted', error: `An observer found evidence that an intended external change did not happen: ${effects}`,
-      recovery: 'Inspect effects.jsonl and the external system. The external action is not repeated automatically; correct it, then start a new run.', effects: summary };
+    return { ...rest, status: 'failed', effects: summary, failure: failureRecord(error, { method, step: method?.steps?.[step] ? step : null, iteration: Number(iteration), total: total(step) }) };
   }
-  if (summary.unknown) {
-    const { result, ...rest } = base;
-    return { ...rest, status: 'unconfirmed', code: 'effect_unconfirmed', result,
-      error: `No observer could confirm these external changes: ${summary.effects.filter(e => e.verdict === 'unknown' && e.final).map(e => e.effect).join(', ')}`,
-      recovery: 'Inspect effects.jsonl and the external system before relying on this result.', effects: summary };
-  }
+  if (summary.unknown) return { ...base, status: 'unconfirmed', effects: summary };
   return { ...base, effects: summary };
 }
 

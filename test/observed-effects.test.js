@@ -83,7 +83,7 @@ for (const [language, entrypoint] of [['python', 'act.py'], ['node', 'act.mjs']]
     const f = await fixture(t);
     await writeFile(join(f.dir, entrypoint), withReports(scripts[entrypoint], language));
     const { result, text, events } = await f.run(method(language, entrypoint));
-    assert.equal(result.status, 'completed', result.error);
+    assert.equal(result.status, 'completed', result.failure?.details);
     assert.deepEqual(result.result, { ok: true, main: language === 'python' ? '__main__' : 'module', argv: ['first', 'second'], hidden: true, token: true });
     const accepted = events.find(e => e.event === 'step.accepted');
     const effects = accepted.observed_effects;
@@ -123,7 +123,7 @@ test('a failed python step keeps its exit code and records what it did', { skip:
 test('a runtime that cannot be observed still runs and says so', async t => {
   const f = await fixture(t);
   const { result, events } = await f.run(method('shell', 'act.sh'));
-  assert.equal(result.status, 'completed', result.error);
+  assert.equal(result.status, 'completed', result.failure?.details);
   assert.deepEqual(events.find(e => e.event === 'step.accepted').observed_effects, { unavailable: 'runtime_not_observed' });
 });
 

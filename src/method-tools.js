@@ -23,7 +23,7 @@ export async function startMethodTools(execution, context) {
         chunks.push(chunk);
       }
       message = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-      safeData(message);
+      safeData(message, 'agent_work');
       if (message.id === undefined) { res.writeHead(202).end(); return; }
       let result;
       if (message.method === 'initialize') result = {
@@ -37,7 +37,7 @@ export async function startMethodTools(execution, context) {
       }) };
       else if (message.method === 'tools/call') {
         const { name, arguments: args = {} } = message.params ?? {};
-        if (!names.includes(name)) fail(`Tool is not allowed: ${name}`, 'tool_denied');
+        if (!names.includes(name)) fail('agent_work', `Tool is not allowed: ${name}`, 'tool_denied');
         // Keep shared artifacts and the run journal in order even if Codex calls in parallel.
         const call = queue.then(() => context.invokeTool(name, args, randomUUID()));
         queue = call.catch(() => {});

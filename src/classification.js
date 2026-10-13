@@ -1,6 +1,7 @@
 import { fail, safeData } from './semantics.js';
 import { boundedJSON } from './model.js';
-import { withRetries, transientStatus } from './retry.js';
+import { withRetries, transientClass, attempts } from './retry.js';
+import { retryNotice } from './event-text.js';
 
 export const classificationByteLimit = 65_536;
 const margin = 1e-6;
@@ -19,8 +20,8 @@ const answerKeys = form => form.answer === 'yes_no' ? ['answer', 'probability'] 
  * @param {{provider: string, model: string}} identity
  */
 export function validateClassification(answer, execution, identity) {
-  const invalid = detail => fail(`Invalid classification response: ${detail}`, 'invalid_classification_response');
-  safeData(answer);
+  const invalid = detail => fail('outside_service', `Invalid classification response: ${detail}`, 'invalid_classification_response');
+  safeData(answer, 'outside_service');
   if (!answer || typeof answer !== 'object' || Array.isArray(answer)) invalid('expected an object');
   const form = classificationForm(execution);
   const keys = [...answerKeys(form), 'provider', 'model', 'confidence', 'usage'];
@@ -81,7 +82,7 @@ export function jevRequest(request) {
 export function jevAnswer(request, data) {
   const form = classificationForm(request), a = data?.answers?.classification ?? {};
   const served = typeof data?.model === 'string' ? data.model : '', release = `typesafe/${jevModel(request.model)}`;
-  if (served !== release && !served.startsWith(`${release}-`)) fail('Invalid classification response: model does not match the saved version', 'invalid_classification_response');
+  if (served !== release && !served.startsWith(`${release}-`)) fail('outside_service', 'Invalid classification response: model does not match the saved version', 'invalid_classification_response');
   const model = request.model;
   const u = data?.usage;
   const usage = u && typeof u === 'object' ? { input_tokens: u.input_tokens, output_tokens: u.output_tokens, ...(u.cost === undefined ? {} : { cost: u.cost }) } : null;
@@ -117,7 +118,7 @@ export function typesafeClassification(apiKeyEnv, secret = name => process.env[n
     async resolve() { return { provider: 'typesafe', model: typesafeModel }; },
     async evaluate(request, signal) {
       const key = secret(apiKeyEnv);
-      if (!key) fail(`Missing environment variable: ${apiKeyEnv}`, 'preflight');
+      if (!key) fail('setup', `Missing environment variable: ${apiKeyEnv}`, 'preflight');
       const response = await fetch(jevEndpoint, {
         method: 'POST', redirect: 'error', signal, headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
         body: JSON.stringify(jevRequest(request)),
@@ -128,15 +129,18 @@ export function typesafeClassification(apiKeyEnv, secret = name => process.env[n
   };
 }
 
-const transient = error => error.code !== 'classification_daily_limit' && (transientStatus(error.status)
-  || ['classification_unavailable', 'classification_timeout'].includes(error.code) || error.name === 'TimeoutError');
+const transient = error => error.code !== 'classification_daily_limit' && transientClass(error) !== null;
 
 /** One managed classification; candidate checks and acceptance remain in the runner. */
 export async function executeClassification(execution, inputs, identity, provider, context) {
   const request = { request_id: crypto.randomUUID(), model: identity.model, question: execution.question, ...classificationForm(execution), inputs };
-  if (new TextEncoder().encode(JSON.stringify(request)).length > Math.min(classificationByteLimit, context.maxRequestBytes)) fail('Classification input exceeds request limit', 'input_limit');
+  if (new TextEncoder().encode(JSON.stringify(request)).length > Math.min(classificationByteLimit, context.maxRequestBytes)) fail('limit', 'Classification input exceeds request limit', 'input_limit', { limit: 'request size', value: context.maxRequestBytes });
   return withRetries(() => classifyOnce(request, execution, identity, provider, context),
-    { transient, signal: context.signal, canRetry: () => context.canRequest?.() ?? true, beforeRetry: () => context.guard() });
+    { transient, signal: context.signal, canRetry: () => context.canRequest?.() ?? true,
+      beforeRetry: async (error, attempt) => {
+        context.guard();
+        await context.notice?.({ kind: 'retry', sub: 'classification', attempt, attempts, message: retryNotice({ service: 'the classification service', kind: transientClass(error), status: error.status, attempt, attempts }) });
+      } });
 }
 
 async function classifyOnce(request, execution, identity, provider, context) {
@@ -153,8 +157,8 @@ async function classifyOnce(request, execution, identity, provider, context) {
         .finally(() => context.signal.removeEventListener('abort', abort));
     });
     context.guard();
-    safeData(answer);
-    if (new TextEncoder().encode(JSON.stringify(answer)).length > Math.min(classificationByteLimit, context.maxOutputBytes)) fail('Classification output exceeds limit', 'output_limit');
+    safeData(answer, 'outside_service');
+    if (new TextEncoder().encode(JSON.stringify(answer)).length > Math.min(classificationByteLimit, context.maxOutputBytes)) fail('limit', 'Classification output exceeds limit', 'output_limit', { limit: 'output size', value: context.maxOutputBytes });
     const output = validateClassification(answer, execution, identity);
     context.usage(answer.usage);
     context.cost(answer.usage?.cost);
@@ -162,6 +166,8 @@ async function classifyOnce(request, execution, identity, provider, context) {
       duration_ms: performance.now() - started});
     return output;
   } catch (error) {
+    // Any other error of the classification request is the service's.
+    if (error && typeof error === 'object') error.owner ??= 'outside_service';
     await context.record('model.error', {...metadata, code: error.code ?? 'provider_error', usage_may_be_unknown: true});
     throw error;
   }

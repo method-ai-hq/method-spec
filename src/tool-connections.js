@@ -7,7 +7,7 @@ export function executionTools(execution, tools = {}) {
   if (execution.browser) {
     const connection = execution.browser.split('.')[1];
     for (const [name, tool] of Object.entries(tools)) if (tool.connection === connection) {
-      if (names.includes(name)) fail(`Duplicate browser/custom tool: ${name}`, 'preflight');
+      if (names.includes(name)) fail('setup', `Duplicate browser/custom tool: ${name}`, 'preflight');
       names.push(name);
     }
   }
@@ -17,11 +17,11 @@ export function toolContent(value, connection = false) {
   return connection ? value : {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value};
 }
 export function validateToolResult(result) {
-  if (!result || !Array.isArray(result.content)) fail('Connection returned invalid tool content', 'invalid_output');
+  if (!result || !Array.isArray(result.content)) fail('outside_service', 'Connection returned invalid tool content', 'invalid_output');
   for (const item of result.content) {
     if (item.type === 'text' && typeof item.text === 'string') continue;
     if (item.type === 'image' && typeof item.data === 'string' && /^image\/(png|jpeg|webp)$/.test(item.mimeType)) continue;
-    fail('Connection returned unsupported tool content', 'invalid_output');
+    fail('outside_service', 'Connection returned unsupported tool content', 'invalid_output');
   }
   return result;
 }

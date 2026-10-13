@@ -112,7 +112,7 @@ test('a 3.4 run sends each step to its hosted model, and resume survives an id w
     return reply(prompt.startsWith('Write the newsletter') ? { body: 'News.' } : prompt.startsWith('Write a two-line') ? { intro: 'Hi.' } : { subject: 'S', preview: 'P' });
   } };
   const result = await runMethod(file, {}, { runDir: join(dir, 'run'), inputs: { notes: 'Faster search.' }, hostedModels, hostedModel: 'account/default-model', env: {} });
-  assert.equal(result.status, 'completed', result.error);
+  assert.equal(result.status, 'completed', result.failure?.details);
   assert.deepEqual(sent.map(body => body.model), ['openai/gpt-6-luna', 'openai/gpt-6-luna', 'account/default-model']);
   const checkpoint = JSON.parse(await readFile(join(dir, 'run', 'checkpoint.json'), 'utf8'));
   assert.equal(checkpoint.method_sha256, hash(documentForDigest(doc)));
@@ -153,7 +153,7 @@ test('a run uses the document limits and tools without configuration', async () 
     await writeFile(join(root, 'one.mjs'), 'for await (const c of process.stdin) {}; console.log(JSON.stringify({one: 1}));');
     await writeFile(join(root, 'two.mjs'), 'for await (const c of process.stdin) {}; console.log(JSON.stringify({two: 2}));');
     const result = await runMethod(join(root, 'task.method'), { allow_local_processes: true, runtimes: { node: { command: process.execPath, version: 'test' } } }, { runDir: join(root, 'run') });
-    assert.equal(result.code, 'invocation_limit');
+    assert.equal(result.failure.code, 'invocation_limit');
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -220,7 +220,7 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
   await assert.rejects(runMethod(file, { allow_local_processes: true }, { runDir: join(dir, 'missing-run'), inputs: { notes: 'N' }, hostedModels, env: {} }), /codex/);
   process.env.PATH = dir;
   const result = await runMethod(file, { allow_local_processes: true }, { runDir: join(dir, 'run'), inputs: { notes: 'N' }, hostedModels, env: {} });
-  assert.equal(result.status, 'completed', result.error);
+  assert.equal(result.status, 'completed', result.failure?.details);
   assert.deepEqual(result.result, { title: 'Title.', edited: 'Claude edit.' });
   const calls = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
   assert.deepEqual(calls.map(call => call.agent), ['codex', 'claude']);

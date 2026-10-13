@@ -1,5 +1,7 @@
-export function fail(message: any, code?: string, details?: {}): void;
-export function safeData(value: any, seen?: Set<any>, depth?: number): void;
+/** Throw a Method error. The owner class is required: it says whose problem the error is. */
+export function fail(owner: any, message: any, code?: string, details?: {}): void;
+/** Reject values that are not plain JSON data. owner is whose code produced the value. */
+export function safeData(value: any, owner: any, seen?: Set<any>, depth?: number): void;
 export function shape(def: any): any;
 /** Derive primitive outputs once for validators, executors, and readers. */
 export function effectiveOutputs(step: any): any;
@@ -21,6 +23,8 @@ export function validateSemantics(method: any, assertData: any): {
     dependencies: {};
 };
 export function own(obj: any, key: any): boolean;
+/** Whose problem a failure is. Every failure states one; the run's failure record takes its sentence and next step from it. */
+export const owners: string[];
 export function effectConfirm(effect: any): any;
 export function modelName(exec: any): any;
 export function isModelId(model: any): boolean;

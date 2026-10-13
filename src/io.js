@@ -12,14 +12,14 @@ export async function readDocument(file) {
   return parseDocumentValue(await readFile(file, 'utf8'));
 }
 export function relativeFile(path) {
-  if (isAbsolute(path) || path.includes('\\') || path.split('/').some(x => !x || x === '..' || x === '.' || x === '.git' || x === 'node_modules' || x.startsWith('.env') || x === 'secrets.env')) fail(`Invalid bundle path: ${path}`);
+  if (isAbsolute(path) || path.includes('\\') || path.split('/').some(x => !x || x === '..' || x === '.' || x === '.git' || x === 'node_modules' || x.startsWith('.env') || x === 'secrets.env')) fail('method_code', `Invalid bundle path: ${path}`);
   return path;
 }
 export async function containedFile(root, file) {
   const base = await realpath(root);
   const path = await realpath(resolve(base, file));
   const rel = relative(base, path);
-  if (rel.startsWith('..') || isAbsolute(rel)) fail('File escapes its allowed directory');
+  if (rel.startsWith('..') || isAbsolute(rel)) fail('method_code', 'File escapes its allowed directory');
   return path;
 }
 export async function snapshotBundle(root, paths, destination) {
@@ -28,7 +28,7 @@ export async function snapshotBundle(root, paths, destination) {
     relativeFile(name);
     const source = await containedFile(root, name);
     const bytes = await readFile(source);
-    if (bytes.length > 20_000_000) fail(`Bundle file exceeds 20 MB: ${name}`);
+    if (bytes.length > 20_000_000) fail('method_code', `Bundle file exceeds 20 MB: ${name}`);
     manifest[name] = hash(bytes);
     await mkdir(dirname(resolve(destination, name)), { recursive: true, mode: 0o700 });
     await writeFile(resolve(destination, name), bytes, { mode: 0o600 });
@@ -46,7 +46,7 @@ export async function executable(command) {
   for (const candidate of choices) {
     try { await access(candidate, constants.X_OK); return candidate; } catch { /* Try the next PATH entry. */ }
   }
-  fail(`Runtime executable not found: ${command}`, 'preflight');
+  fail('setup', `Runtime executable not found: ${command}`, 'preflight');
 }
 // Preserve UTF-8 across pipe chunks. Progress lines use a small bound; agent
 // events use the process output bound so complete results reach their parser.
@@ -88,7 +88,7 @@ export function executeProcess({ command, args, cwd, input, env, signal, maxByte
     signal.addEventListener('abort', abort, { once: true });
     const collect = target => chunk => {
       bytes += chunk.length;
-      if (bytes > maxBytes) { failure = Object.assign(new Error('Process output limit exceeded'), { code: 'output_limit' }); kill(); }
+      if (bytes > maxBytes) { failure = Object.assign(new Error('Process output limit exceeded'), { code: 'output_limit', owner: 'limit', limit: 'output size', value: maxBytes }); kill(); }
       else target.push(chunk);
     };
     child.stdout.on('data', collect(stdout)); child.stderr.on('data', collect(stderr));

@@ -152,7 +152,7 @@ Embedded callers supply `config.classification: {provider: 'typesafe', model: '<
 
 To use your own OpenRouter key, add `api_key_env` to that configuration, for example `{provider: 'typesafe', model: 'jev-1.13.0', api_key_env: 'OPENROUTER_API_KEY'}`. The runtime then calls Typesafe's Jev at `https://openrouter.ai/api/v1/systemone` directly with that key. OpenRouter names the pinned release without its patch number (`jev-1.13`) and answers with a dated name such as `typesafe/jev-1.13-20260917`; the runtime accepts that answer as the pinned version. It does not use a supplied provider or the Method account, and the key is redacted from run records. A missing variable fails preflight.
 
-Each attempt reserves one model request. A service that is briefly unavailable (HTTP 429 or 5xx, or an unavailable or timed-out service) is tried three times in all, with a growing wait; model calls use the same policy. Requests and responses are bounded to 64 KiB or the smaller configured byte limit. The invocation deadline and cancellation apply. Responses must match the saved provider and model. Invalid responses fail without repair or retry. The result follows the existing candidate, check, and acceptance path. `model.request` and `model.response` carry `kind: classify`, request ID, provider, and model; the response adds confidence, usage, and duration. A reported `usage.cost` adds to the run's `cost_usd`. Missing usage remains unknown.
+Each attempt reserves one model request. A service that is briefly unavailable (HTTP 429 or 5xx, or an unavailable or timed-out service) is tried three times in all, with a growing wait; model calls use the same policy. Each retry records a `notice` event that names the class (rate limit, server error, unavailable, timeout) and the attempt, for example "attempt 2 of 3". A request that still fails after the last attempt fails the run with owner `outside_service`. Requests and responses are bounded to 64 KiB or the smaller configured byte limit. The invocation deadline and cancellation apply. Responses must match the saved provider and model. Invalid responses fail without repair or retry. The result follows the existing candidate, check, and acceptance path. `model.request` and `model.response` carry `kind: classify`, request ID, provider, and model; the response adds confidence, usage, and duration. A reported `usage.cost` adds to the run's `cost_usd`. Missing usage remains unknown.
 
 ### Scripts
 
@@ -208,7 +208,7 @@ Three direct providers are available. Each profile specifies the exact model ide
 
 The output schema goes to each provider's strict structured output. OpenRouter requests require providers that support the requested parameters and name no fallback models. Anthropic tool turns keep the assistant content, including thinking blocks, unchanged. `model.request`, `model.response`, and `model.error` record the backend. Usage is recorded as input and output tokens; Anthropic input includes cache reads and writes. A response that reports `usage.cost` adds it to the summary's `usage.cost_usd`.
 
-`call` sends one request with a strict JSON output schema and no tools. The runner validates the response locally. It does not issue repair calls. A rate limit (HTTP 429) or server error (5xx) is retried as for classification: three attempts in all, each one a model request.
+`call` sends one request with a strict JSON output schema and no tools. The runner validates the response locally. It does not issue repair calls. A rate limit (HTTP 429) or server error (5xx) is retried as for classification: three attempts in all, each one a model request, each retry with a `notice`. When the step's check does not pass, the step gets one more attempt (see State updates and checks).
 
 `agent` uses a fresh conversation and an explicit function-tool loop. The allowed tools are operator-configured scripts with typed inputs and outputs. The runner validates tool arguments, invokes the allowed script, validates its result, and sends the result back to the model. Reasoning items are retained between requests. Unknown tools, malformed arguments, refusal, or incomplete responses stop the operation.
 
@@ -225,6 +225,8 @@ Declare state changes with `changes: [state.count]`. The output must then includ
 ```
 
 The runner records candidate outputs, validates them, runs the requested check, and then replaces the state checkpoint. A failed or unknown check prevents that state commit. Already completed external actions remain possible; withholding a local state update does not undo them.
+
+**One more attempt after a failed check.** When the check of a `call` or `agent` step returns `fail` or `unknown`, and the step has no environment `changes` and no `effects`, the runner records `step.retry` (`{step, iteration, attempt: 2, attempts: 2, reason, evidence, message}`) and runs the action once more. The check's name, reason, and evidence are added to the end of the rendered prompt. The second candidate goes through the same check. If it does not pass, the run fails with `check_failed`. Script and classification actions, and steps that change the outside world, get no second attempt. A check result in the wrong form is a problem in the Method's code (`invalid_output` in the check phase) and gets no second attempt.
 
 Exact checks retain their named-reference forms:
 
@@ -247,7 +249,7 @@ They return exactly:
 {"status": "pass", "reason": "Explain the observed result.", "evidence": []}
 ```
 
-Status is `pass`, `fail`, or `unknown`. Evidence entries are string references, not automatic proofs. The incoming evidence list is empty in this release; observations can be bound as data or obtained through a trusted read tool. Script checks run as trusted local code and are not isolated from the action's filesystem.
+Status is `pass`, `fail`, or `unknown`. `reason` is text and `evidence` is a list of text; both are for display only. A `reason` that is not text, and each evidence item that is not text, becomes JSON text, and evidence that is not a list becomes a list of one. The same rule applies to an effect judge's `reason` and `evidence`. `status` and `verdict` are never converted: another value fails the run as a problem in the Method's code. Evidence entries are references, not automatic proofs. The incoming evidence list is empty in this release; observations can be bound as data or obtained through a trusted read tool. Script checks run as trusted local code and are not isolated from the action's filesystem.
 
 Output types are always checked. An omitted task check is recorded as `unchecked`, not `pass`. An external `changes: [environment.game]` declaration requires effects (next section); a check covers only outputs and state. Documents saved before `method/3.3` need no effect. A check of an action's completion does not establish that it was strategically useful.
 
@@ -344,15 +346,15 @@ Absence of evidence never gives `confirmed`. For mail to other domains, positive
 
 | Status | Condition | Exit code |
 |---|---|---|
-| `failed` (`effect_contradicted`) | An effect is contradicted. No `result.json` is written. | 1 |
-| `unconfirmed` (`effect_unconfirmed`) | No contradiction, and an effect is `unknown` at its horizon. `result.json` is written. | 3 |
+| `failed` | An effect is contradicted: `failure.code` is `effect_contradicted` and the owner is `agent_work`. No `result.json` is written. | 1 |
+| `unconfirmed` | No contradiction, and an effect is `unknown` at its horizon; `effects` lists it. `result.json` is written. | 3 |
 | `completed` | Every other case. `effects.pending` counts effects still before their horizon. | 0 |
 
 The summary and the run result carry an `effects` summary. Before the run reports, the runtime makes every observation that is due within `limits.effect_wait_ms` (operator configuration, default 300000, five minutes) and within the run deadline, so short schedules finish inside the run. `method observe RUN_DIR` makes the later observations that are due; `method observe --pending ROOT` does this for each run under ROOT with open effects. Schedule it, for example hourly. It runs only observers and judges, appends to the ledger and to `events.jsonl`, and records `run.status_changed` when new evidence changes the status, for example from `completed` to `failed` after a late bounce.
 
 **Blocking and retry.** With `blocking: true`, the runtime waits for the first observation before later steps start. A contradiction then stops the run with `effect_contradicted`, and the step stays unaccepted, so resuming it needs `--retry STEP:ITERATION`. With `retry: idempotent` as well, the runtime first repeats the action once with the same `METHOD_OPERATION_ID` and observes again. Declare `idempotent` only when the service drops a repeated request with the same key. The runtime never repeats an action because an effect is `pending` or `unknown`.
 
-**Failed actions.** When an action with effects fails, for example by a timeout or a crash, the runtime observes each effect at once with `action_outcome: indeterminate`. The failure's recovery text lists the verdicts. A `confirmed` verdict means the change happened, and the action must not be retried.
+**Failed actions.** When an action with effects fails, for example by a timeout or a crash, the runtime observes each effect at once with `action_outcome: indeterminate`. The failure's `next.text` lists the verdicts. A `confirmed` verdict means the change happened, and the action must not be retried.
 
 Limits: observers are trusted local processes, not an OS sandbox. A read can have side effects (an IMAP fetch can mark mail as read). The separation of actions and observers is least privilege, not proof.
 
@@ -402,7 +404,7 @@ Each expectation can carry `text`, a plain-language statement for people. A case
 
 - `when` references a boolean. False skips the entire step. Skipped outputs do not exist; a consumer fails if it requests one.
 - `each: {item: inputs.items}` runs once per item, in order. One collection alias is supported. Each output becomes a list in the original item order. An empty collection produces empty output lists.
-- `concurrency: N` (1 or more) with `each` runs up to N items at once; the configuration limit `max_concurrency` (default 8) caps it. The step cannot use `ask`, `changes`, or `effects`. Outputs keep item order. The first failure stops the other running items and fails the step; items accepted before it stay in the checkpoint, and resume (with `--retry` for the failed item) runs only the unfinished items.
+- `concurrency: N` (1 or more) with `each` runs up to N items at once; the configuration limit `max_concurrency` (default 8) caps it. The step cannot use `ask`, `changes`, or `effects`. Outputs keep item order. A failed item does not stop the others: the running and queued items continue to their end, and then the step fails. `failure.iteration` is the first failed item and `failure.failed_iterations` lists every failed item. Accepted items stay in the checkpoint, and resume (with `--retry` for the failed item) runs only the failed and unfinished items.
 - `repeat: {max_iterations: 5}` performs exactly five accepted invocations.
 - `repeat: {max_iterations: 5, until: done}` checks a boolean step output after each accepted invocation. It stops when true. Reaching the limit without true fails the step. The last accepted state remains in the checkpoint.
 
@@ -430,7 +432,31 @@ File outputs use `{path, sha256}`. Write them beneath `METHOD_OUTPUT_DIR`; paths
 
 Generic run records are private local artifacts by default (directory mode 0700, files 0600). Known configured environment-secret values are redacted from traces and result files when at least four characters long. This is a convenience, not a comprehensive secret detector. State checkpoints contain actual state values; keep state and inputs free of credentials. Do not publish raw run directories without review.
 
-Failures do not trigger automatic retries, except that a classification or model request that the service could not answer (HTTP 429 or 5xx, or an unavailable or timed-out classification service) is tried three times in all. A failed run's summary gives `code`, `error`, a `fix` sentence, and, when a step was running, `failed_step`, `iteration`, and the last 20 lines of its `diagnostics`. To continue the same run with its original files, resume:
+Failures do not trigger automatic retries, except that a classification or model request that the service could not answer (HTTP 429 or 5xx, or an unavailable or timed-out classification service) is tried three times in all, and a `call` or `agent` step whose check does not pass gets one more attempt. A stopped run (`failed` or `needs_input`) has one failure record, written once, in `summary.json` and in the `run.failed` event:
+
+```
+failure: {
+  owner,             // method_code | agent_work | outside_service | limit | setup | needs_you | method_platform
+  code,              // the error code, such as check_failed, invalid_output, provider_error, timeout
+  headline,          // one sentence: what happened and where, with names from the Method file and numbers only
+  step, step_name,   // the step ID and its name, or null
+  iteration,         // 0-based; the first failed task; null outside a step
+  failed_iterations, // every failed task of a parallel each step; [] otherwise
+  total,             // the number of tasks of an each step, or null
+  phase,             // action | check | effect | tool | setup | null
+  check_name,        // reading.check_name when the phase is check
+  next: {action, text, command?}, // fix_method | run_again | raise_limit | fix_setup | answer | report_bug
+  evidence,          // a list of text; may contain run content
+  details,           // the raw message and validator text; may contain run content
+  diagnostics?       // the last 20 stderr lines, only when a process failed
+}
+```
+
+The owner says whose problem it is: the Method's code (a script, check, tool, observer, or judge returned data in the wrong form or exited with an error), the agent's work (a model or agent returned data in the wrong form, or a declared check did not pass), a service outside Method (after the retries), a limit, the setup (a secret, model, tool, connection, run lock, or resume mismatch), an answer that a person must give, or a problem in Method itself. Each owner has one headline template and one next action. The headline and `next.text` never contain inputs, outputs, prompts, or URLs. A data error names the producer, the field, the kind of value found, and the kind expected, for example "the check script check.mjs returned evidence[0] as an object, but it must be text". A run that cannot start (an invalid Method, a missing secret, a locked run) rejects with an error whose `failure` is the same record.
+
+`events.jsonl` events that a person reads carry `message`, one plain sentence: `run.started`, `run.completed`, `run.failed` (the headline), `step.started`, `step.accepted`, `step.retry`, `check.completed`, `tool.dispatched`, `tool.completed`, `tool.failed`, `human.required`, `effect.observed`, and `notice`. Tasks are 1-based in text ("task 5 of 12") and 0-based in `iteration`. `step.started` of an `each` step has `total`, the number of tasks. A `notice` event (`{step?, iteration?, key, kind, message, attempt?, attempts?}`) records a problem that the run handles itself: a retry (`kind: retry`), an error-type or warning-type event in the Codex or Claude Code event stream (`kind: agent`, with the agent's own message), or 80% use of a run or step limit for time, model requests, tool calls, or invocations (`kind: limit`, once per limit). `key` is `STEP:ITERATION:KIND:NAME`, the same for each repeat of the same problem, so a reader shows the newest one. Lines that an agent writes only to its standard error are not notices.
+
+To continue the same run with its original files, resume:
 
 ```sh
 method run task.method --run-dir runs/example --resume

@@ -4,7 +4,7 @@ const options: RunOptions = {agent:'claude', runDir:'runs/test', resume:true};
 async function valid() {
   const result = await runMethod('test.method', config, options);
   if (result.status === 'completed') console.log(result.result);
-  else console.log(result.error);
+  else if (result.status === 'failed' || result.status === 'needs_input') console.log(result.failure.headline, result.failure.next.action);
 }
 // @ts-expect-error Misspelled option must not compile.
 void runMethod('test.method', config, {runDirectory:'wrong'});

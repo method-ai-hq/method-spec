@@ -69,7 +69,32 @@ export interface EffectSummary {
 }
 /** completed: every step was accepted and no effect is contradicted or unconfirmed (effects.pending can be above zero).
  * unconfirmed: every step was accepted, but an observer could not confirm an external change by its horizon. */
-export type RunResult = RunSummary & {effects?: EffectSummary} & ({status: 'completed'; result: Json} | {status: 'unconfirmed'; result: Json; code: string; error: string; recovery: string} | {status: 'failed' | 'needs_input'; code: string; error: string; fix: string; recovery: string; failed_step?: string; iteration?: number; diagnostics?: string; missing?: string[]});
+export type RunResult = RunSummary & {effects?: EffectSummary} & ({status: 'completed' | 'unconfirmed'; result: Json} | {status: 'failed' | 'needs_input'; failure: Failure});
+/** Whose problem a failure is. */
+export type FailureOwner = 'method_code' | 'agent_work' | 'outside_service' | 'limit' | 'setup' | 'needs_you' | 'method_platform';
+/**
+ * The failure record of a stopped run, written once. headline and next.text never contain run content; evidence,
+ * details and diagnostics may. iteration is 0-based; text says "task 1 of N". A run that cannot start rejects with an
+ * error that carries the same record as `failure`.
+ */
+export interface Failure {
+  owner: FailureOwner;
+  code: string;
+  headline: string;
+  step: string | null;
+  step_name: string | null;
+  iteration: number | null;
+  /** Every failed task of a parallel each step; [] otherwise. */
+  failed_iterations: number[];
+  total: number | null;
+  phase: 'action' | 'check' | 'effect' | 'tool' | 'setup' | null;
+  check_name: string | null;
+  next: {action: 'fix_method' | 'run_again' | 'raise_limit' | 'fix_setup' | 'answer' | 'report_bug'; text: string; command?: string};
+  evidence: string[];
+  details: string;
+  /** The last 20 stderr lines, only when a process failed. */
+  diagnostics?: string;
+}
 /** One problem that a check found. message says what is wrong and fix says what to do, each in one sentence. */
 export type Issue = {
   code: string;

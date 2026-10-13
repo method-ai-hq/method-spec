@@ -116,7 +116,7 @@ test('effects are required for external changes, and observers stay apart from a
 test('a judge that cannot report a contradiction fails before any action runs', async t => {
   const { run, dir } = await setup(t, method(), {}, { 'empty.json': fixtures['empty.json'], 'confirmed.json': fixtures['confirmed.json'] });
   const { result } = await run({ to: 'ap@example.com' });
-  assert.equal(result.status, 'failed'); assert.equal(result.code, 'effect_fixture_failed'); assert.match(result.error, /a contradicted case/);
+  assert.equal(result.status, 'failed'); assert.equal(result.failure.code, 'effect_fixture_failed'); assert.match(result.failure?.details, /a contradicted case/);
   assert.deepEqual((await readdir(join(dir, 'outbox'))).filter(f => f.endsWith('.json')), []);
 });
 
@@ -124,13 +124,13 @@ test('a judge that disagrees with a fixture fails the run', async t => {
   const wrong = `console.log(JSON.stringify({verdict:"no_evidence",reason:"always",evidence:[]}))`;
   const { run } = await setup(t, method(), { 'judge.mjs': wrong });
   const { result } = await run({ to: 'ap@example.com' });
-  assert.equal(result.code, 'effect_fixture_failed'); assert.match(result.error, /but the judge returned no_evidence \(always\)/);
+  assert.equal(result.failure.code, 'effect_fixture_failed'); assert.match(result.failure?.details, /but the judge returned no_evidence \(always\)/);
 });
 
 test('a bounce that the observer finds makes the run fail, though the action reported success', async t => {
   const { run, events } = await setup(t);
   const { result, runDir } = await run({ to: 'bounce@example.com' });
-  assert.equal(result.status, 'failed'); assert.equal(result.code, 'effect_contradicted'); assert.match(result.error, /send\/0\/delivered \(bounce 5\.1\.1\)/);
+  assert.equal(result.status, 'failed'); assert.equal(result.failure.code, 'effect_contradicted'); assert.match(result.failure?.details, /send\/0\/delivered \(bounce 5\.1\.1\)/);
   assert.equal(result.result, undefined);
   await assert.rejects(readFile(join(runDir, 'result.json')));
   const ledger = await readLedger(runDir);
@@ -165,7 +165,7 @@ test('a late bounce changes a completed run to failed', async t => {
   const later = await observeRun(runDir, { now: new Date(Date.now() + 2 * 3_600_000) });
   assert.equal(later.status, 'failed'); assert.equal(later.changed, true);
   const summary = JSON.parse(await readFile(join(runDir, 'summary.json'), 'utf8'));
-  assert.equal(summary.code, 'effect_contradicted');
+  assert.equal(summary.failure.code, 'effect_contradicted');
   const status = (await readFile(join(runDir, 'events.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse).find(e => e.event === 'run.status_changed');
   assert.deepEqual([status.from, status.to], ['completed', 'failed']);
 });
@@ -198,20 +198,22 @@ test('a blocking contradiction without an idempotent retry stops the run before 
   doc.result = 'after';
   const { run, events } = await setup(t, doc, { 'after.mjs': 'console.log(JSON.stringify({after:"ran"}))' });
   const { result, runDir } = await run({ to: 'bounce@example.com' });
-  assert.equal(result.code, 'effect_contradicted');
+  assert.equal(result.failure.code, 'effect_contradicted');
   assert.ok(!(await events(runDir)).some(e => e.step === 'after'));
-  assert.match(result.recovery, /--retry/);
+  assert.equal(result.failure.owner, 'agent_work'); assert.equal(result.failure.phase, 'effect'); assert.match(result.failure.headline, /did not happen/);
 });
 
 test('after an action fails, the runtime observes its effects before anyone retries it', async t => {
   const { run } = await setup(t, method({ confirm: 'positive' }));
   const { result, runDir } = await run({ to: 'crash-known@example.com' });
-  assert.equal(result.status, 'failed'); assert.equal(result.code, 'process_failed');
+  assert.equal(result.status, 'failed'); assert.equal(result.failure.code, 'process_failed');
   // crash-known: the fake server delivered the message before the script crashed.
   const ledger = await readLedger(runDir);
   assert.equal(ledger[0].action_outcome, 'indeterminate');
   assert.equal(result.effects.effects[0].action_outcome, 'indeterminate');
   assert.equal(result.effects.effects[0].verdict, 'confirmed');
+  assert.equal(result.failure.owner, 'method_code');
+  assert.match(result.failure.next.text, /observers found: delivered confirmed \(the change happened; do not repeat it\)/);
 });
 
 // Built-in observers: shapes taken from real Methods (a SQLite ledger, a local folder, a game API).
@@ -239,7 +241,7 @@ const times=a.note.startsWith("twice")?2:a.note.startsWith("none")?0:1;for(let i
   const { run } = await builtinSetup(t, { changes: 'environment.store', effects }, dir => ({ store: dir, store_reader: dir }), { 'act.mjs': `process.removeAllListeners("warning");${act}` });
   const first = await run({ note: 'loved it, 4 stars' }); assert.equal(first.result.status, 'completed', JSON.stringify(first.result));
   const twice = await run({ note: 'twice: watched it' });
-  assert.equal(twice.result.code, 'effect_contradicted');
+  assert.equal(twice.result.failure.code, 'effect_contradicted');
   // A row that never appears is unconfirmed: the runtime cannot tell "slow" from "never".
   const none = await run({ note: 'none: never saved' });
   assert.equal(none.result.status, 'unconfirmed');
@@ -256,7 +258,7 @@ if(!a.note.startsWith("skip")){mkdirSync(env.store+"/reports",{recursive:true});
   assert.equal(ok.result.status, 'completed'); assert.ok(ok.result.effects.confirmed >= 1);
   // The step reported success but wrote nothing; the file still holds the earlier text.
   const stale = await run({ note: 'skip this' });
-  assert.equal(stale.result.code, 'effect_contradicted');
+  assert.equal(stale.result.failure.code, 'effect_contradicted');
 });
 
 test('an http observer judges a trend over several readings, like continued game production', async t => {
@@ -277,7 +279,7 @@ test('an http observer judges a trend over several readings, like continued game
   assert.equal((await readLedger(good.runDir)).at(-1).verdict, 'confirmed');
   running = false;
   const stopped = await run({ note: 'x' });
-  assert.equal(stopped.result.code, 'effect_contradicted');
+  assert.equal(stopped.result.failure.code, 'effect_contradicted');
 });
 
 test('a declared waiver is recorded with the run', async t => {
@@ -336,7 +338,7 @@ console.log(JSON.stringify({path:a.mode==="nothing"?"No new notes, nothing saved
   assert.equal(written.status, 'completed'); assert.equal(written.effects.confirmed, 1);
   // The step says it saved weekly.md again, but did not write it: the run stops before the next step.
   const lied = await run('claim');
-  assert.equal(lied.code, 'effect_contradicted');
+  assert.equal(lied.failure.code, 'effect_contradicted');
   const events = (await readFile(join(dir, 'run-2', 'events.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
   assert.ok(!events.some(e => e.step === 'next'));
   // A step that has nothing to save, and says so, is fine.

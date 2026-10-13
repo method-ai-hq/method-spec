@@ -72,13 +72,13 @@ test('each preserves order and empty each sends no requests', async t=>{
 });
 test('limits prevent dispatch and oversized inputs fail',async t=>{
   const f=await fixture(t);let calls=0;f.provider.evaluate=async()=>{calls++;return answer();};
-  assert.equal((await f.run({}, {...f.cfg,limits:{max_model_requests:0}})).code,'model_limit');assert.equal(calls,0);
-  const g=await fixture(t);assert.equal((await g.run({inputs:{message:'x'.repeat(65536)}})).code,'input_limit');
+  assert.equal((await f.run({}, {...f.cfg,limits:{max_model_requests:0}})).failure.code,'model_limit');assert.equal(calls,0);
+  const g=await fixture(t);assert.equal((await g.run({inputs:{message:'x'.repeat(65536)}})).failure.code,'input_limit');
 });
 test('timeout rejects late provider answers without retry',async t=>{
   const m=doc();m.steps.classify.limits={timeout_ms:300};const f=await fixture(t,m);let calls=0;
   f.provider.evaluate=async()=>{calls++;await new Promise(r=>setTimeout(r,900));return answer();};
-  const r=await f.run();assert.equal(r.code,'timeout');assert.equal(calls,1);
+  const r=await f.run();assert.equal(r.failure.code,'timeout');assert.equal(calls,1);
   assert.equal((await f.events()).some(e=>e.event==='step.accepted'),false);
 });
 test('resume reuses accepted classification and enforces saved model identity',async t=>{

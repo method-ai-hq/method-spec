@@ -39,11 +39,11 @@ export async function packageModels(method, sourceRoot) {
 export async function resolveModels(method, config, options = {}) {
   const names = modelNames(method);
   if (options.savedModels) {
-    if (names.some(name => !options.savedModels[name])) fail('The checkpoint is missing its selected model profiles. Resume needs the original run records.', 'resume_mismatch');
+    if (names.some(name => !options.savedModels[name])) fail('setup', 'The checkpoint is missing its selected model profiles. Resume needs the original run records.', 'resume_mismatch');
     return options.savedModels;
   }
   if (!names.length) return {};
-  if (options.agent && !['codex', 'claude'].includes(options.agent)) fail('Choose codex or claude.', 'needs_input');
+  if (options.agent && !['codex', 'claude'].includes(options.agent)) fail('setup', 'Choose codex or claude.', 'needs_input');
   const profiles = { ...(method.models ? {} : options.packageModels), ...(config.models ?? {}), ...methodProfiles(method) };
   // A local agent runs every model step; a configured profile for the same agent keeps its command and model.
   if (options.agent) return Object.fromEntries(names.map(name => [name, profiles[name]?.backend === options.agent ? { ...profiles[name] } : { backend: options.agent }]));
@@ -68,7 +68,7 @@ export async function resolveModels(method, config, options = {}) {
     if (!backend) {
       const found = [];
       for (const name of ['codex', 'claude']) { try { await executable(name); found.push(name); } catch {} }
-      if (found.length !== 1) fail(found.length ? 'Both Codex and Claude are available. Supply --agent codex or --agent claude.' : 'Sign in to Method with method login to use hosted models, or sign in to Codex or Claude Code on this computer, then run again.', 'needs_input');
+      if (found.length !== 1) fail('setup', found.length ? 'Both Codex and Claude are available. Supply --agent codex or --agent claude.' : 'Sign in to Method with method login to use hosted models, or sign in to Codex or Claude Code on this computer, then run again.', 'needs_input');
       backend = found[0];
     }
     selected = { backend };

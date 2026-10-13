@@ -53,7 +53,7 @@ const started = async dir => (await readFile(join(dir, 'events.jsonl'), 'utf8'))
 test('a new run reuses unchanged accepted steps and runs the fixed one', async t => {
   const f = await fixture(t);
   const failed = await f.run();
-  assert.equal(failed.status, 'failed'); assert.equal(failed.failed_step, 'finish'); assert.equal(failed.code, 'invalid_output');
+  assert.equal(failed.status, 'failed'); assert.equal(failed.failure.step, 'finish'); assert.equal(failed.failure.code, 'invalid_output');
   await f.write('finish.mjs', fixed);
   const result = await f.run();
   // finish.mjs is only finish's entrypoint, so prepare and the model step are reused.

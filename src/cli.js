@@ -98,7 +98,8 @@ try {
       agent: values.agent, inputs: await json(values.inputs), state: await json(values.state), runDir: values['run-dir'], resume: values.resume, retry: values.retry, human: await json(values.human), signal: controller.signal,
     });
     process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
-    console.log(JSON.stringify({ status: result.status, code: result.code, run_dir: result.run_dir, elapsed_ms: result.elapsed_ms, model_requests: result.model_requests, ...(result.effects ? { effects: { pending: result.effects.pending, confirmed: result.effects.confirmed, unrefuted: result.effects.unrefuted, contradicted: result.effects.contradicted, unknown: result.effects.unknown, next_observation_at: result.effects.next_observation_at } } : {}) }));
+    if (result.failure) console.error(`Failed: ${result.failure.headline}\nNext: ${result.failure.next.text}`);
+    console.log(JSON.stringify({ status: result.status, ...(result.failure ? { failure: result.failure } : {}), run_dir: result.run_dir, elapsed_ms: result.elapsed_ms, model_requests: result.model_requests, ...(result.effects ? { effects: { pending: result.effects.pending, confirmed: result.effects.confirmed, unrefuted: result.effects.unrefuted, contradicted: result.effects.contradicted, unknown: result.effects.unknown, next_observation_at: result.effects.next_observation_at } } : {}) }));
     process.exitCode = { completed: 0, needs_input: 2, unconfirmed: 3 }[result.status] ?? 1;
   } else throw new Error(`Unknown command: ${command}`);
 } catch (error) { console.error(error.message); process.exitCode = 1; }

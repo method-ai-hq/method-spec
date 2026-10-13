@@ -7,7 +7,7 @@ import info from '../package.json' with {type:'json'};
 const base = {format:'method/3.1',name:'Test',goal:'Check a document.',steps:{ask:{ask:'Answer.',out:{answer:{type:'text'}}}},result:'answer'};
 test('browser-safe file validation matches executor output validation', () => {
   for(const value of [{path:'x'},{path:'x',sha256:'0'.repeat(64)},{path:'x',sha256:'wrong'},{path:'x',sha256:'0'.repeat(64),extra:true},null]) {
-    let accepted=true;try{assertSchema(dataSchema('file'),value,'file');}catch{accepted=false;}
+    let accepted=true;try{assertSchema(dataSchema('file'),value,'file',{producer:'the test',owner:'method_code'});}catch{accepted=false;}
     assert.equal(shapeErrors('file',value).length===0,accepted);
     const method={...base,inputs:{file:{type:'file',default:value}}};
     if(accepted)validateMethod(method);else assert.throws(()=>validateMethod(method),MethodValidationError);

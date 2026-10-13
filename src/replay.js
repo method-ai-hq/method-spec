@@ -39,7 +39,7 @@ export function replayedCandidate(replay, { id, step, iteration, bindings, manif
 }
 export function unverifiable(id, iteration, step) {
   const why = step.ask ? 'it asks a person' : 'it changes an external system';
-  fail(`Cannot replay ${id}:${iteration}: the step or its inputs changed, and ${why}. Record the case again from a new run.`, 'unverifiable');
+  fail('setup', `Cannot replay ${id}:${iteration}: the step or its inputs changed, and ${why}. Record the case again from a new run.`, 'unverifiable');
 }
 
 /** Build a recording from a finished run: each accepted iteration's inputs and outputs, plus its effect observations. */
@@ -48,7 +48,7 @@ export async function recordRun(runDir) {
   const method = await read('method.json'), manifest = await read('manifest.json');
   const events = (await readFile(pathResolve(runDir, 'events.jsonl'), 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line));
   const started = events.find(event => event.event === 'run.started');
-  if (!started) fail(`The run has no run.started event: ${runDir}`, 'case_invalid');
+  if (!started) fail('setup', `The run has no run.started event: ${runDir}`, 'case_invalid');
   const iterations = {}, open = {};
   for (const event of events) {
     const at = `${event.step}:${event.iteration}`;

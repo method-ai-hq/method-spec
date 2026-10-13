@@ -182,8 +182,15 @@ export function effectSummary(entries: any): {
         action_outcome: any;
     }[];
 };
-/** Apply the effect summary to a completed run's status. */
-export function statusWithEffects(base: any, summary: any): any;
+/**
+ * Apply the effect summary to a completed run's status. A contradicted effect fails the run with a failure record;
+ * an effect that no observer could confirm makes it unconfirmed.
+ * @param {any} base @param {any} summary @param {{method?: any, total?: (step: string) => number | null}} [where]
+ */
+export function statusWithEffects(base: any, summary: any, { method, total }?: {
+    method?: any;
+    total?: (step: string) => number | null;
+}): any;
 /** Wait until an ISO time, within a deadline. Returns false when the wait does not fit. */
 export function waitUntil(time: any, deadline: any, signal: any): Promise<boolean>;
 export function effectKey(step: any, iteration: any, name: any): string;

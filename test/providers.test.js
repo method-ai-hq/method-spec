@@ -71,7 +71,7 @@ test('anthropic-messages refusal and max_tokens stop the step', async t => {
   for (const [reply, code] of [[{ ...claude.text({ value: 1 }), stop_reason: 'refusal' }, 'model_refusal'], [{ ...claude.text({ value: 1 }), stop_reason: 'max_tokens' }, 'model_incomplete']]) {
     const f = await fixture(t, method(step()));
     const result = await f.run(config({ backend: 'anthropic-messages' }), async () => reply);
-    assert.equal(result.status, 'failed'); assert.equal(result.code, code);
+    assert.equal(result.status, 'failed'); assert.equal(result.failure.code, code);
   }
 });
 
@@ -108,7 +108,7 @@ test('openrouter-chat length, filter, and error responses stop the step', async 
   for (const [reply, code] of [[stopped('length', '{"value":'), 'model_incomplete'], [stopped('content_filter'), 'model_refusal'], [{ error: { message: 'No provider' } }, 'provider_error']]) {
     const f = await fixture(t, method(step()));
     const result = await f.run(config({ backend: 'openrouter-chat' }), async () => reply);
-    assert.equal(result.status, 'failed'); assert.equal(result.code, code);
+    assert.equal(result.status, 'failed'); assert.equal(result.failure.code, code);
   }
 });
 

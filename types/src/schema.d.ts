@@ -1,3 +1,9 @@
+/**
+ * Check and judge results carry two display-only fields, reason and evidence. Any JSON value is accepted there and
+ * shown as text: a reason that is not text and each evidence item that is not text become JSON text, and evidence
+ * that is not a list becomes a list of one. Fields with meaning (status, verdict) are never converted.
+ */
+export function displayText(result: any): any;
 export const callerVariables: string[];
 export const scriptVariables: string[];
 export function object(properties: any, required?: string[]): {

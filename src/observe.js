@@ -10,7 +10,7 @@ async function lockRun(runDir) {
   try { const lock = await open(path, 'wx', 0o600); await lock.writeFile(String(process.pid)); return { close: async () => { await lock.close(); await unlink(path); } }; }
   catch (error) {
     if (error.code !== 'EEXIST') throw error;
-    fail('The run is active or locked. Observe it after its process stops.', 'run_locked');
+    fail('setup', 'The run is active or locked. Observe it after its process stops.', 'run_locked');
   }
 }
 
@@ -36,7 +36,7 @@ export async function observeRun(runDir, options = {}) {
     let sequence = JSON.parse(lines.at(-1)).sequence;
     const config = { ...started.config, ...options.config };
     const bundle = pathResolve(runDir, 'bundle');
-    const verify = async file => { if (hash(await readFile(await containedFile(bundle, file))) !== manifest.files[file]) fail(`Bundle changed: ${file}`, 'bundle_changed'); };
+    const verify = async file => { if (hash(await readFile(await containedFile(bundle, file))) !== manifest.files[file]) fail('setup', `Bundle changed: ${file}`, 'bundle_changed'); };
     const signal = options.signal ?? new AbortController().signal;
     const record = async (event, data) => {
       const entry = { sequence: ++sequence, at: new Date().toISOString(), event, ...data };
@@ -58,13 +58,13 @@ export async function observeRun(runDir, options = {}) {
       await record('effect.observed', entry);
       observed.push(entry);
     }
-    const { code, error, recovery, effects, status, ...rest } = summary;
+    const { failure, effects, status, ...rest } = summary;
     let result = null;
     try { result = await read('result.json'); } catch { /* A failed run has no result. */ }
-    const next = statusWithEffects({ ...rest, status: 'completed', result }, effectSummary(await readLedger(runDir)));
+    const next = statusWithEffects({ ...rest, status: 'completed', result }, effectSummary(await readLedger(runDir)), { method });
     const { result: _, ...saved } = next;
     const changed = next.status !== summary.status;
-    if (changed) await record('run.status_changed', { from: summary.status, to: next.status, ...(next.code ? { code: next.code } : {}) });
+    if (changed) await record('run.status_changed', { from: summary.status, to: next.status, ...(next.failure ? { failure: next.failure } : {}) });
     await writeJSON(pathResolve(runDir, 'summary.json'), next.status === 'failed' ? saved : next);
     return { run_dir: runDir, status: next.status, observed, changed, effects: next.effects };
   } finally { await lock.close(); }

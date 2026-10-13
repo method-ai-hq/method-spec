@@ -14,7 +14,7 @@ test('preserves the Claude error result when its process exits nonzero',async t=
  await writeFile(file,JSON.stringify({format:'method/3.1',name:'Claude error',goal:'Preserve the provider error',steps:{read:{do:{kind:'agent',model:'writer',prompt:'Read the fixture.',tools:[]},out:{text:{type:'text'}}}},result:'text'}));
  const result=await runMethod(file,{allow_local_processes:true,models:{writer:{backend:'claude',command}}},{runDir:join(root,'run')});
  assert.equal(result.status,'failed');
- assert.equal(result.error,'OAuth access token has expired. Re-authenticate to continue.');
+ assert.equal(result.failure?.details,'OAuth access token has expired. Re-authenticate to continue.');
 });
 
 for (const limited of [false, true]) {
@@ -34,9 +34,9 @@ const event = Buffer.from(JSON.stringify({type:'result',subtype:'success',is_err
     limits:{max_output_bytes:limited ? 1024 : 100000}}, {runDir:join(root,'run')});
   if (limited) {
     assert.equal(result.status, 'failed');
-    assert.equal(result.code, 'output_limit');
+    assert.equal(result.failure.code, 'output_limit');
   } else {
-    assert.equal(result.status, 'completed', result.error);
+    assert.equal(result.status, 'completed', result.failure?.details);
     assert.equal(result.result, text);
   }
  });

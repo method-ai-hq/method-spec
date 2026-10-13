@@ -58,18 +58,24 @@ test('the operator limit caps concurrency, and no concurrency runs one item at a
   assert.equal(one.most, 1); assert.deepEqual(one.calls, items);
 });
 
-test('the first failure stops the other items, and resume runs only the unfinished ones', async t => {
+test('a failed item lets the other items finish; the failure lists every failed task, and resume runs only those', async t => {
   const f = await fixture(t), seen = counting(message => message === 2 ? 5 : 40);
-  seen.fail = message => message === 2;
+  seen.fail = message => message === 2 || message === 5;
   const failed = await f.run(seen.provider);
-  assert.equal(failed.status, 'failed'); assert.equal(failed.code, 'provider_error');
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.failure.code, 'provider_error'); assert.equal(failed.failure.owner, 'outside_service');
+  // Items 2 and 5 are tasks 1 and 4 (0-based); the first failed task is the failure's task.
+  assert.deepEqual(failed.failure.failed_iterations, [1, 4]); assert.equal(failed.failure.iteration, 1); assert.equal(failed.failure.total, items.length);
+  assert.match(failed.failure.headline, /task 2 of 7/);
+  // Every item ran to its end: the failure did not stop the others.
+  assert.equal(seen.calls.length, items.length);
   const saved = await f.checkpoint();
-  // The failure stopped the run before every item started.
-  assert.ok(seen.calls.length < items.length);
+  assert.equal(saved.accepted.route.filter(Boolean).length, items.length - 2);
   const again = counting(); seen.fail = null;
   await assert.rejects(f.run(again.provider, { resume: true }), /--retry route:/);
   const resumed = await f.run(again.provider, { resume: true, retry: [saved.active] });
   assert.equal(resumed.status, 'completed');
+  assert.deepEqual(again.calls.sort(), [2, 5]);
   assert.deepEqual(resumed.result.map(x => x.choice), items.map(m => m % 2 ? 'billing' : 'other'));
 });
 
@@ -119,7 +125,7 @@ test('an own OpenRouter key calls Jev through OpenRouter directly and is never r
 test('a missing own OpenRouter key fails before any request', async t => {
   const f = await fixture(t);
   const result = await f.run(undefined, {}, { ...f.cfg, classification: { ...identity, api_key_env: 'METHOD_TEST_MISSING_KEY' } }).catch(error => error);
-  assert.match(String(result.message ?? result.error), /METHOD_TEST_MISSING_KEY/);
+  assert.match(String(result.message ?? result.failure?.details), /METHOD_TEST_MISSING_KEY/);
   await assert.rejects(typesafeClassification('METHOD_TEST_MISSING_KEY').evaluate({ model: 'x', question: 'q', options: {}, inputs: {} }), /METHOD_TEST_MISSING_KEY/);
 });
 

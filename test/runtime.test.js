@@ -67,32 +67,32 @@ test('dependencies run in data order, not YAML order', async t => {
 });
 test('invalid script output fails without accepting the step', async t => {
   const f = await fixture(t, method(), { 'action.mjs': 'console.log(JSON.stringify({value:"wrong"}))' });
-  assert.equal((await f.run()).code, 'invalid_output'); assert.equal((await f.events()).filter(e => e.event === 'step.accepted').length, 0);
+  assert.equal((await f.run()).failure.code, 'invalid_output'); assert.equal((await f.events()).filter(e => e.event === 'step.accepted').length, 0);
 });
 for (const status of ['fail', 'unknown']) test(`a ${status} checker preserves the candidate but does not commit state`, async t => {
   const m = method(); m.state = { n: { ...number, default: 0 } }; m.steps.work.changes = ['state.n']; m.steps.work.check = script('check.mjs');
   const f = await fixture(t, m, { 'action.mjs': 'console.log(JSON.stringify({value:4,state:{n:4}}))', 'check.mjs': `console.log(JSON.stringify({status:${JSON.stringify(status)},reason:"test",evidence:[]}))` });
-  assert.equal((await f.run()).code, 'check_failed'); assert.deepEqual(await f.state(), { n: 0 });
+  assert.equal((await f.run()).failure.code, 'check_failed'); assert.deepEqual(await f.state(), { n: 0 });
   assert.ok((await f.events()).some(e => e.event === 'step.candidate' && e.candidate.state.n === 4));
 });
 test('checker execution error is distinct from a failed check', async t => {
   const m = method(); m.steps.work.check = script('check.mjs');
   const f = await fixture(t, m, { 'action.mjs': 'console.log(JSON.stringify({value:4}))', 'check.mjs': 'process.exit(3)' });
-  assert.equal((await f.run()).code, 'process_failed'); assert.ok(!(await f.events()).some(e => e.event === 'check.completed'));
+  assert.equal((await f.run()).failure.code, 'process_failed'); assert.ok(!(await f.events()).some(e => e.event === 'check.completed'));
 });
 test('process timeout terminates work and records a stopped run', async t => {
   const m = method(); m.steps.work.limits.timeout_ms = 80;
   const f = await fixture(t, m, { 'action.mjs': 'setInterval(()=>{},1000)' });
-  const result = await f.run(); assert.equal(result.code, 'timeout'); assert.ok(result.elapsed_ms < 2000);
+  const result = await f.run(); assert.equal(result.failure.code, 'timeout'); assert.ok(result.elapsed_ms < 2000);
 });
 test('process output is bounded', async t => {
   const f = await fixture(t, method(), { 'action.mjs': 'console.log("x".repeat(10000))' });
   const cfg = config(); cfg.limits.max_output_bytes = 1000;
-  assert.equal((await f.run(cfg)).code, 'output_limit');
+  assert.equal((await f.run(cfg)).failure.code, 'output_limit');
 });
 test('process failure diagnostics are retained', async t => {
   const f = await fixture(t, method(), { 'action.mjs': 'console.error("diagnostic");process.exit(7)' });
-  assert.equal((await f.run()).code, 'process_failed'); assert.ok((await f.events()).some(e => e.diagnostics?.includes('diagnostic')));
+  assert.equal((await f.run()).failure.code, 'process_failed'); assert.ok((await f.events()).some(e => e.diagnostics?.includes('diagnostic')));
 });
 test('each collects ordered results and an empty each creates empty lists', async t => {
   for (const items of [[1, 2, 3], []]) {
@@ -110,11 +110,11 @@ test('repeat stopping condition can finish before a smaller host invocation cap'
 test('repeat exhaustion is failure even after accepted intermediate outputs', async t => {
   const m = method(step({ value: number, done: boolean })); m.steps.work.repeat = { max_iterations: 2, until: 'done' };
   const f = await fixture(t, m, { 'action.mjs': 'console.log(JSON.stringify({value:4,done:false}))' });
-  assert.equal((await f.run()).code, 'iteration_limit'); assert.equal((await f.events()).filter(e => e.event === 'step.accepted').length, 2);
+  assert.equal((await f.run()).failure.code, 'iteration_limit'); assert.equal((await f.events()).filter(e => e.event === 'step.accepted').length, 2);
 });
 test('a consumer of skipped output fails explicitly', async t => {
   const m = method(); m.inputs = { enabled: { ...boolean, default: false } }; m.steps.work.when = 'inputs.enabled';
-  const f = await fixture(t, m); assert.equal((await f.run()).code, 'missing_reference');
+  const f = await fixture(t, m); assert.equal((await f.run()).failure.code, 'missing_reference');
 });
 test('bundle paths and symlinks cannot escape the source directory', async t => {
   const m = method(); m.steps.work.do.entrypoint = '../outside.mjs';
@@ -135,7 +135,7 @@ test('a model call is one request with strict output schema and no tool loop', a
 });
 test('bad model output is not repaired with hidden calls', async t => {
   const f = await fixture(t, method(modelStep())); let requests = 0;
-  assert.equal((await f.run(config(), { transport: async () => { requests++; return response({ value: 'bad' }); } })).code, 'invalid_output');
+  assert.equal((await f.run(config(), { transport: async () => { requests++; return response({ value: 'bad' }); } })).failure.code, 'invalid_output');
   assert.equal(requests, 1);
 });
 test('agent dispatches a real tool and preserves reasoning items between requests', async t => {
@@ -158,23 +158,23 @@ test('unlisted tools and invalid tool arguments are not dispatched', async t => 
 });
 test('a call step rejects tool responses', async t => {
   const f = await fixture(t, method(modelStep()));
-  assert.equal((await f.run(config(), { transport: async () => toolResponse() })).code, 'tool_denied');
+  assert.equal((await f.run(config(), { transport: async () => toolResponse() })).failure.code, 'tool_denied');
 });
 test('host model cap prevents dispatch', async t => {
   const f = await fixture(t, method(modelStep())); const cfg = config(); cfg.limits.max_model_requests = 0;
   const result = await f.run(cfg, { transport: async () => { throw Error('must not request'); } });
-  assert.equal(result.code, 'model_limit'); assert.equal(result.model_requests, 0);
+  assert.equal(result.failure.code, 'model_limit'); assert.equal(result.model_requests, 0);
 });
 test('action and checker share the request cap; candidate state is not committed', async t => {
   const m = method(modelStep()); m.state = { n: { ...number, default: 0 } }; m.steps.work.changes = ['state.n'];
   m.steps.work.check = { kind: 'agent', model: 'model', prompt: 'Check.', tools: [] }; m.steps.work.limits.max_model_requests = 1;
   const f = await fixture(t, m); const result = await f.run(config(), { transport: async () => response({ value: 4, state: { n: 4 } }) });
-  assert.equal(result.code, 'model_limit'); assert.equal(result.model_requests, 1); assert.deepEqual(await f.state(), { n: 0 });
+  assert.equal(result.failure.code, 'model_limit'); assert.equal(result.model_requests, 1); assert.deepEqual(await f.state(), { n: 0 });
 });
 test('agent does not dispatch a tool when no follow-up turn remains', async t => {
   const s = modelStep('agent'); s.do.tools = ['increment']; s.limits.max_agent_turns = 1;
   const f = await fixture(t, method(s), { 'tool.mjs': 'throw Error("must not run")' });
-  assert.equal((await f.run(addTool(config()), { transport: async () => toolResponse() })).code, 'model_limit');
+  assert.equal((await f.run(addTool(config()), { transport: async () => toolResponse() })).failure.code, 'model_limit');
   assert.ok(!(await f.events()).some(e => e.event === 'tool.dispatched'));
 });
 test('effectful tools need declared changes and are forbidden to checkers', async t => {
@@ -188,24 +188,24 @@ test('an external write followed by process failure is recorded and never retrie
   const m = method(); m.environment = { game: { type: 'service', description: 'Test target.' } }; m.steps.work.changes = ['environment.game']; m.steps.work.check = { present: 'value' };
   const f = await fixture(t, m, { 'action.mjs': 'import{appendFileSync}from"node:fs";appendFileSync(process.env.METHOD_OUTPUT_DIR+"/effect.txt","write\\n");process.exit(9)' });
   const cfg = config(); cfg.environment = { game: 'test-game' }; const result = await f.run(cfg);
-  assert.equal(result.code, 'process_failed'); assert.equal(await readFile(join(f.runDir, 'artifacts/effect.txt'), 'utf8'), 'write\n');
+  assert.equal(result.failure.code, 'process_failed'); assert.equal(await readFile(join(f.runDir, 'artifacts/effect.txt'), 'utf8'), 'write\n');
   assert.equal((await f.events()).filter(e => e.event === 'process.started').length, 1);
 });
 test('a deadline covers action and checker together', async t => {
   // Each phase alone fits in the deadline; together they do not.
   const m = method(); m.steps.work.check = script('check.mjs'); m.steps.work.limits.timeout_ms = 1000;
   const f = await fixture(t, m, { 'action.mjs': 'setTimeout(()=>console.log(JSON.stringify({value:4})),600)', 'check.mjs': 'setTimeout(()=>console.log(JSON.stringify({status:"pass",reason:"ok",evidence:[]})),800)' });
-  assert.equal((await f.run()).code, 'timeout');
+  assert.equal((await f.run()).failure.code, 'timeout');
 });
 test('file outputs require matching content hashes', async t => {
   const m = method(step({ artifact: { type: 'file', description: 'A file.' } })); m.steps.work.check = { file: 'artifact' };
   const f = await fixture(t, m, { 'action.mjs': 'import{writeFileSync}from"node:fs";writeFileSync(process.env.METHOD_OUTPUT_DIR+"/test.txt","hello");console.log(JSON.stringify({artifact:{path:"test.txt",sha256:"0".repeat(64)}}))' });
-  assert.equal((await f.run()).code, 'file_mismatch');
+  assert.equal((await f.run()).failure.code, 'file_mismatch');
 });
 test('a changed bundle is detected before the next invocation', async t => {
   const m = method(); m.steps.work.repeat = { max_iterations: 2 };
   const f = await fixture(t, m, { 'action.mjs': 'import{appendFileSync}from"node:fs";appendFileSync("action.mjs","\\n//changed");console.log(JSON.stringify({value:4}))' });
-  assert.equal((await f.run()).code, 'bundle_changed');
+  assert.equal((await f.run()).failure.code, 'bundle_changed');
 });
 test('ask stops with an inspectable request and never calls a model', async t => {
   const m = method(); delete m.steps.work.do; m.steps.work.ask = 'Supply value.';
@@ -243,7 +243,7 @@ test('HTTP rate limits and server errors are retried like classification; other 
   const patient = () => { const s = modelStep(); s.limits.timeout_ms = 10000; return method(s); };
   let calls = 0; globalThis.fetch = async () => { calls++; return new Response('do not log provider error bodies', { status: 429 }); };
   const f = await fixture(t, patient()); const result = await f.run();
-  assert.equal(result.code, 'provider_error'); assert.ok(calls > 1); assert.equal(result.usage.responses_without_usage, calls); assert.equal(result.usage.cost_usd, null);
+  assert.equal(result.failure.code, 'provider_error'); assert.ok(calls > 1); assert.equal(result.usage.responses_without_usage, calls); assert.equal(result.usage.cost_usd, null);
   assert.ok(!(await readFile(join(f.runDir, 'events.jsonl'), 'utf8')).includes('do not log provider error bodies'));
   // A server error that clears is retried, and the step completes.
   calls = 0; globalThis.fetch = async () => ++calls === 1 ? new Response('busy', { status: 503 }) : new Response(JSON.stringify(response({ value: 8 })), { status: 200 });
@@ -251,12 +251,12 @@ test('HTTP rate limits and server errors are retried like classification; other 
   assert.equal(recovered.result, 8); assert.equal(calls, 2);
   // A rejected request is not retried.
   calls = 0; globalThis.fetch = async () => { calls++; return new Response('bad request', { status: 400 }); };
-  const h = await fixture(t, patient()); assert.equal((await h.run()).code, 'provider_error'); assert.equal(calls, 1);
+  const h = await fixture(t, patient()); assert.equal((await h.run()).failure.code, 'provider_error'); assert.equal(calls, 1);
 });
 test('model timeout cancels the wait even if an injected transport ignores cancellation', async t => {
   const s = modelStep(); s.limits.timeout_ms = 50;
   const f = await fixture(t, method(s)); const result = await f.run(config(), { transport: () => new Promise(() => {}) });
-  assert.equal(result.code, 'timeout'); assert.ok(result.elapsed_ms < 1000); assert.equal(result.model_requests, 1);
+  assert.equal(result.failure.code, 'timeout'); assert.ok(result.elapsed_ms < 1000); assert.equal(result.model_requests, 1);
 });
 test('incomplete and refused model responses cannot pass', async t => {
   for (const value of [{ status: 'incomplete', output: [] }, { status: 'completed', output: [{ type: 'message', content: [{ type: 'refusal', refusal: 'No.' }] }] }]) {
@@ -320,7 +320,7 @@ test('resume rejects changed methods, config, inputs, and bundles', async t => {
   await assert.rejects(f.run({ ...config(), allow_local_processes: false }, { resume: true }), /configuration changed/);
   await assert.rejects(f.run(config(), { resume: true, inputs: {} }), /saved inputs/);
   await writeFile(join(f.runDir, 'bundle/action.mjs'), 'console.log("changed")');
-  assert.equal((await f.run(config(), { resume: true })).code, 'bundle_changed');
+  assert.equal((await f.run(config(), { resume: true })).failure.code, 'bundle_changed');
   await writeFile(f.file, JSON.stringify({ ...method(), goal: 'Changed goal' }));
   await assert.rejects(f.run(config(), { resume: true }), /Method or configuration changed/);
 });
@@ -352,7 +352,7 @@ test('resume does not reset the model request budget', async t => {
   const transport = async () => { calls++; throw Error('Provider failed after dispatch'); };
   assert.equal((await f.run(cfg, { transport })).model_requests, 1);
   const resumed = await f.run(cfg, { resume: true, retry: ['work:0'], transport });
-  assert.equal(resumed.code, 'model_limit'); assert.equal(resumed.model_requests, 1); assert.equal(calls, 1);
+  assert.equal(resumed.failure.code, 'model_limit'); assert.equal(resumed.model_requests, 1); assert.equal(calls, 1);
 });
 
 test('a second process cannot resume an active run', async t => {

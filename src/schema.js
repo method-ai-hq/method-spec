@@ -134,3 +134,16 @@ export const observationSchema = object({ observations: { type: 'array', maxItem
 export const builtinObserverKinds = ['file', 'sqlite', 'http'];
 export const judgmentSchema = object({ verdict: { enum: ['confirmed', 'contradicted', 'no_evidence', 'unobservable'] }, reason: { type: 'string' }, evidence: { type: 'array', items: { type: 'string' } } });
 export const checkResultSchema = object({ status: { enum: ['pass', 'fail', 'unknown'] }, reason: { type: 'string' }, evidence: { type: 'array', items: { type: 'string' } } });
+/**
+ * Check and judge results carry two display-only fields, reason and evidence. Any JSON value is accepted there and
+ * shown as text: a reason that is not text and each evidence item that is not text become JSON text, and evidence
+ * that is not a list becomes a list of one. Fields with meaning (status, verdict) are never converted.
+ */
+export function displayText(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
+  const text = value => typeof value === 'string' ? value : JSON.stringify(value) ?? String(value);
+  const out = { ...result };
+  if ('reason' in out) out.reason = text(out.reason);
+  if ('evidence' in out) out.evidence = (Array.isArray(out.evidence) ? out.evidence : [out.evidence]).map(text);
+  return out;
+}

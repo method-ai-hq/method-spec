@@ -41,24 +41,24 @@ const applyRedaction = (value, redact) => {
   if (!redact || !Object.keys(redact).length) return value;
   let text = JSON.stringify(value);
   for (const [from, to] of Object.entries(redact)) {
-    if (typeof from !== 'string' || from.length < 2 || typeof to !== 'string') fail('Redaction maps text of two or more characters to replacement text', 'case_invalid');
+    if (typeof from !== 'string' || from.length < 2 || typeof to !== 'string') fail('setup', 'Redaction maps text of two or more characters to replacement text', 'case_invalid');
     text = text.split(JSON.stringify(from).slice(1, -1)).join(JSON.stringify(to).slice(1, -1));
   }
   return JSON.parse(text);
 };
 
 function validateExpectations(expect) {
-  if (!Array.isArray(expect) || !expect.length) fail('A case needs at least one expectation (for example --rubric "sentence")', 'case_invalid');
+  if (!Array.isArray(expect) || !expect.length) fail('setup', 'A case needs at least one expectation (for example --rubric "sentence")', 'case_invalid');
   for (const item of expect) {
-    if (item.kind === 'status') { if (!Array.isArray(item.in) || !item.in.length) fail('A status expectation lists the allowed statuses in "in"', 'case_invalid'); }
-    else if (item.kind === 'equals') { if (typeof item.ref !== 'string' || !own(item, 'value')) fail('An equals expectation needs ref and value', 'case_invalid'); }
-    else if (item.kind === 'effect') { if (typeof item.effect !== 'string' || !Array.isArray(item.verdict)) fail('An effect expectation needs effect and a verdict list', 'case_invalid'); }
-    else if (item.kind === 'predicate') { if (typeof item.runtime !== 'string' || typeof item.entrypoint !== 'string') fail('A predicate expectation needs runtime and entrypoint', 'case_invalid'); }
+    if (item.kind === 'status') { if (!Array.isArray(item.in) || !item.in.length) fail('setup', 'A status expectation lists the allowed statuses in "in"', 'case_invalid'); }
+    else if (item.kind === 'equals') { if (typeof item.ref !== 'string' || !own(item, 'value')) fail('setup', 'An equals expectation needs ref and value', 'case_invalid'); }
+    else if (item.kind === 'effect') { if (typeof item.effect !== 'string' || !Array.isArray(item.verdict)) fail('setup', 'An effect expectation needs effect and a verdict list', 'case_invalid'); }
+    else if (item.kind === 'predicate') { if (typeof item.runtime !== 'string' || typeof item.entrypoint !== 'string') fail('setup', 'A predicate expectation needs runtime and entrypoint', 'case_invalid'); }
     else if (item.kind === 'rubric') {
-      if (typeof item.ref !== 'string') fail('A rubric expectation needs ref, the output to judge, such as outputs.report', 'case_invalid');
-      if (!Array.isArray(item.criteria) || !item.criteria.length || item.criteria.some(c => typeof c?.text !== 'string' || !c.text.trim() || typeof c.id !== 'string')) fail('A rubric lists criteria as plain sentences', 'case_invalid');
-      if (item.context !== undefined && (!Array.isArray(item.context) || item.context.some(ref => typeof ref !== 'string'))) fail('Rubric context lists references, such as outputs.material or inputs.notes', 'case_invalid');
-    } else fail(`Unknown expectation kind: ${item.kind}`, 'case_invalid');
+      if (typeof item.ref !== 'string') fail('setup', 'A rubric expectation needs ref, the output to judge, such as outputs.report', 'case_invalid');
+      if (!Array.isArray(item.criteria) || !item.criteria.length || item.criteria.some(c => typeof c?.text !== 'string' || !c.text.trim() || typeof c.id !== 'string')) fail('setup', 'A rubric lists criteria as plain sentences', 'case_invalid');
+      if (item.context !== undefined && (!Array.isArray(item.context) || item.context.some(ref => typeof ref !== 'string'))) fail('setup', 'Rubric context lists references, such as outputs.material or inputs.notes', 'case_invalid');
+    } else fail('setup', `Unknown expectation kind: ${item.kind}`, 'case_invalid');
   }
 }
 /** Turn plain sentences into rubric criteria with stable IDs. */
@@ -94,7 +94,7 @@ export async function evaluate(expect, outcome, { caseDir, config, options = {} 
     if (item.kind === 'status') { status = item.in.includes(outcome.status) ? 'pass' : 'fail'; reason = `run status ${outcome.status}`; }
     else if (item.kind === 'equals' || item.kind === 'rubric') {
       const found = lookup(outcome, item.ref);
-      if (found.missing || found.value === null) { status = outcome.status === 'failed' ? 'fail' : 'unverifiable'; reason = `${item.ref} is missing${outcome.error ? ` (the run ${outcome.status}: ${outcome.error})` : ''}`; }
+      if (found.missing || found.value === null) { status = outcome.status === 'failed' ? 'fail' : 'unverifiable'; reason = `${item.ref} is missing${outcome.failure ? ` (the run ${outcome.status}: ${outcome.failure.headline})` : ''}`; }
       else if (item.kind === 'equals') { status = isDeepStrictEqual(found.value, item.value) ? 'pass' : 'fail'; reason = `${item.ref} = ${JSON.stringify(found.value)}`; }
       else {
         // Context values (sources, the person's words) are read by the judge but not judged.
@@ -110,7 +110,7 @@ export async function evaluate(expect, outcome, { caseDir, config, options = {} 
       else { status = item.verdict.includes(effect.verdict) ? 'pass' : 'fail'; reason = `${item.effect} ${effect.verdict}`; }
     } else {
       const profile = configuration(config).runtimes?.[item.runtime];
-      if (!profile) fail(`Unknown runtime for predicate: ${item.runtime}`, 'preflight');
+      if (!profile) fail('setup', `Unknown runtime for predicate: ${item.runtime}`, 'preflight');
       try {
         const { artifacts, files, ...visible } = outcome;
         const result = await executeProcess({ command: await executable(profile.command), args: [...(profile.args ?? []), await containedFile(caseDir, item.entrypoint)], cwd: caseDir,
@@ -135,7 +135,7 @@ export async function outcomeOfRun(runDir) {
   // Paths in files connections map to the copies that the runtime kept for this run.
   const files = {};
   for (const entry of ledger.filter(e => e.automatic && e.copies)) for (const [path, copy] of Object.entries(entry.copies)) files[path === '.' ? entry.root : join(entry.root, path)] = join(runDir, copy);
-  return { status: summary.status, code: summary.code ?? null, ...(summary.error ? { error: summary.error } : {}), result, inputs: checkpoint?.root?.inputs ?? {},
+  return { status: summary.status, failure: summary.failure ?? null, result, inputs: checkpoint?.root?.inputs ?? {},
     outputs: outputsFrom(checkpoint), effects: ledger.length ? effectSummary(ledger).effects : [], artifacts: join(runDir, 'artifacts'), files };
 }
 
@@ -150,22 +150,22 @@ export async function outcomeOfRun(runDir) {
  *   config?: any, options?: any}} input
  */
 export async function createCase({ methodFile, runDir, id, note, author, expect = [], rubric = [], ref, context = [], passingRun, observations = {}, redact, runs, minPass, retentionDays = 365, supersedes = [], casesDir = defaultCasesDir(methodFile), config = {}, options = {} }) {
-  if (!caseId.test(id ?? '')) fail('Case IDs use lowercase letters, digits and hyphens', 'case_invalid');
-  if (typeof note !== 'string' || !note.trim()) fail('A case records the correction note: --note "the person\'s words"', 'case_invalid');
-  if (!runDir && !passingRun) fail('Give the run that went wrong (--run), the run that was right (--passing-run), or both', 'case_invalid');
+  if (!caseId.test(id ?? '')) fail('setup', 'Case IDs use lowercase letters, digits and hyphens', 'case_invalid');
+  if (typeof note !== 'string' || !note.trim()) fail('setup', 'A case records the correction note: --note "the person\'s words"', 'case_invalid');
+  if (!runDir && !passingRun) fail('setup', 'Give the run that went wrong (--run), the run that was right (--passing-run), or both', 'case_invalid');
   const method = await readDocument(methodFile);
   if (rubric.length) {
     ref ??= typeof method.result === 'string' ? `outputs.${method.result.split('.')[0]}` : undefined;
-    if (!ref) fail('Name the output to judge with --ref outputs.NAME; the Method result has several values', 'case_invalid');
+    if (!ref) fail('setup', 'Name the output to judge with --ref outputs.NAME; the Method result has several values', 'case_invalid');
     expect = [...expect, { kind: 'rubric', ref, criteria: rubricCriteria(rubric), ...(context.length ? { context } : {}) }];
   }
   validateExpectations(expect);
   // Without runs, a test decides: one run when only scripts run, three when a model step runs live.
-  if (runs !== undefined && (!Number.isSafeInteger(runs) || runs < 1 || runs > 20)) fail('runs must be between 1 and 20', 'case_invalid');
-  if (minPass !== undefined && (!Number.isSafeInteger(minPass) || minPass < 1 || minPass > (runs ?? 20))) fail('min_pass must be between 1 and runs', 'case_invalid');
+  if (runs !== undefined && (!Number.isSafeInteger(runs) || runs < 1 || runs > 20)) fail('setup', 'runs must be between 1 and 20', 'case_invalid');
+  if (minPass !== undefined && (!Number.isSafeInteger(minPass) || minPass < 1 || minPass > (runs ?? 20))) fail('setup', 'min_pass must be between 1 and runs', 'case_invalid');
   const dir = join(casesDir, id);
-  if (await exists(dir)) fail(`Case already exists: ${id}`, 'case_exists');
-  safeData(observations);
+  if (await exists(dir)) fail('setup', `Case already exists: ${id}`, 'case_exists');
+  safeData(observations, 'setup');
   const recorded = await recordRun(runDir ?? passingRun);
   const recording = applyRedaction({ ...recorded, observations: { ...recorded.observations, ...observations } }, redact);
   await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -176,10 +176,10 @@ export async function createCase({ methodFile, runDir, id, note, author, expect 
     }
     const plain = expect.filter(item => item.kind !== 'rubric');
     // A vacuous expectation passes even when the Method returns nothing.
-    if (plain.length && (await evaluate(plain, { status: 'completed', code: null, result: null, outputs: {}, effects: [] }, { caseDir: dir, config, options })).status === 'pass') fail('The expectation passes on an empty result, so it cannot detect the error. Make it specific.', 'case_vacuous');
+    if (plain.length && (await evaluate(plain, { status: 'completed', failure: null, result: null, outputs: {}, effects: [] }, { caseDir: dir, config, options })).status === 'pass') fail('method_code', 'The expectation passes on an empty result, so it cannot detect the error. Make it specific.', 'case_vacuous');
     const bad = runDir ? await evaluate(expect, await outcomeOfRun(runDir), { caseDir: dir, config, options }) : null;
-    if (bad?.status === 'pass') fail('The run that went wrong already meets this case, so the case does not capture the problem. Make the rule more specific, or check that the note matches what this run did.', 'case_not_red');
-    if (bad?.status === 'unverifiable') fail(`The case cannot be checked on the run that went wrong: ${bad.results.map(r => r.reason).join('; ')}`, 'case_invalid');
+    if (bad?.status === 'pass') fail('method_code', 'The run that went wrong already meets this case, so the case does not capture the problem. Make the rule more specific, or check that the note matches what this run did.', 'case_not_red');
+    if (bad?.status === 'unverifiable') fail('setup', `The case cannot be checked on the run that went wrong: ${bad.results.map(r => r.reason).join('; ')}`, 'case_invalid');
     const examples = [];
     const rubricResult = bad?.results.find(r => r.kind === 'rubric');
     if (rubricResult) {
@@ -189,7 +189,7 @@ export async function createCase({ methodFile, runDir, id, note, author, expect 
     let good = null;
     if (passingRun) {
       good = await evaluate(expect, await outcomeOfRun(passingRun), { caseDir: dir, config, options });
-      if (good.status !== 'pass') fail(`The passing run does not meet this case: ${good.results.filter(r => r.status !== 'pass').map(r => r.reason).join('; ')}`, 'case_not_green');
+      if (good.status !== 'pass') fail('method_code', `The passing run does not meet this case: ${good.results.filter(r => r.status !== 'pass').map(r => r.reason).join('; ')}`, 'case_not_green');
       const item = expect.find(e => e.kind === 'rubric');
       if (item) examples.push({ run: 'passing', labels: Object.fromEntries(item.criteria.map(c => [c.id, true])), value: valueText(lookup(await outcomeOfRun(passingRun), item.ref).value) });
     }
@@ -234,11 +234,11 @@ export async function createCase({ methodFile, runDir, id, note, author, expect 
  * @param {{by?: string | null | undefined, reason: string, casesDir?: string | undefined}} options
  */
 export async function retireCase(methodFile, id, { by = null, reason, casesDir = defaultCasesDir(methodFile) }) {
-  if (typeof reason !== 'string' || !reason.trim()) fail('Give the reason the case no longer applies', 'case_invalid');
+  if (typeof reason !== 'string' || !reason.trim()) fail('setup', 'Give the reason the case no longer applies', 'case_invalid');
   const file = join(casesDir, id, 'case.json');
-  if (!await exists(file)) fail(`No such case: ${id}`, 'case_invalid');
+  if (!await exists(file)) fail('setup', `No such case: ${id}`, 'case_invalid');
   const value = await readJSON(file);
-  if (value.status === 'retired') fail(`Case ${id} is already retired`, 'case_invalid');
+  if (value.status === 'retired') fail('setup', `Case ${id} is already retired`, 'case_invalid');
   await writeJSON(file, { ...value, status: 'retired', superseded_by: by, retired_at: new Date().toISOString(), retired_reason: reason });
 }
 
@@ -300,7 +300,7 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
         result = await runMethod(methodFile, { ...config, environment }, { ...runOptions, runDir, inputs: recording.inputs, state: recording.initial_state,
           replay: { recording, paths, observations: recording.observations ?? {}, artifacts: await exists(artifacts) ? artifacts : undefined, ...(only ? { only } : {}) } });
       } catch (error) { attempts.push({ status: 'unverifiable', reason: error.message }); break; }
-      if (result.status === 'failed' && result.code === 'unverifiable') { attempts.push({ status: 'unverifiable', reason: result.error }); break; }
+      if (result.status === 'failed' && result.failure.code === 'unverifiable') { attempts.push({ status: 'unverifiable', reason: result.failure.details }); break; }
       const events = (await readFile(join(runDir, 'events.jsonl'), 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line));
       const replayed = new Set(events.filter(e => e.event === 'step.replayed').map(e => `${e.step}:${e.iteration}`));
       const live = [...new Set(events.filter(e => e.event === 'step.candidate' && !replayed.has(`${e.step}:${e.iteration}`)).map(e => e.step))];
@@ -309,7 +309,7 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
       for (const [path, name] of Object.entries(testCaseValue.files ?? {})) outcome.files[path] ??= join(testCaseValue.dir, name);
       const evaluation = await evaluate(testCaseValue.expect, outcome, { caseDir: testCaseValue.dir, config, options: { runOptions, classification: runOptions.classification, cacheDir: runOptions.cacheDir } });
       const liveModel = live.filter(id => ['call', 'agent', 'classify'].includes(method.steps[id]?.do?.kind));
-      attempts.push({ ...evaluation, run_status: result.status, ...(result.code ? { code: result.code } : {}), ...(result.status === 'failed' ? { error: result.error } : {}), live_steps: live, live_model_steps: liveModel,
+      attempts.push({ ...evaluation, run_status: result.status, ...(result.failure ? { failure: { code: result.failure.code, headline: result.failure.headline } } : {}), live_steps: live, live_model_steps: liveModel,
         judge_calls: evaluation.results.reduce((sum, r) => sum + (r.judge_calls ?? 0), 0) });
       // A model step that runs live can answer differently each time, so it must pass three runs.
       if (testCaseValue.runs == null && n === 0 && liveModel.length) { total = 3; minPass = testCaseValue.min_pass ?? 3; }
@@ -382,7 +382,7 @@ export async function testSuite(methodFile, config, { casesDir = defaultCasesDir
   const suiteStarted = performance.now();
   const today = new Date().toISOString().slice(0, 10);
   const all = await listCases(methodFile, casesDir);
-  for (const id of [...(ids ?? []), ...newIds]) if (!all.some(c => c.id === id)) fail(`No case ${id} for ${basename(methodFile)}`, 'case_invalid');
+  for (const id of [...(ids ?? []), ...newIds]) if (!all.some(c => c.id === id)) fail('setup', `No case ${id} for ${basename(methodFile)}`, 'case_invalid');
   const selected = await changedFirst(methodFile, config, all.filter(c => c.status === 'active' && (!ids || ids.includes(c.id) || newIds.includes(c.id))));
   const report = await parallel(selected, concurrency, async item => {
     const candidate = await testCase(methodFile, config, item, runOptions);

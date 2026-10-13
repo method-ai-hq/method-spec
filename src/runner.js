@@ -25,21 +25,28 @@ import { effectKey, connectionsFor, testFixtures, runObserverScript, observeEffe
 import { observerConnection } from './semantics.js';
 import { replayedCandidate, unverifiable } from './replay.js';
 import { prepareObservation } from './observed-effects.js';
+import { failureRecord } from './failure.js';
+import { eventText, placeText, retryNotice, agentNotice, limitNotice } from './event-text.js';
+import { transientClass, attempts as retryAttempts } from './retry.js';
+import { displayText } from './schema.js';
+
+/** The name of a step's check in text: its reading name, else its script, else its kind. */
+const checkLabel = step => step?.reading?.check_name ?? step?.check?.entrypoint ?? (step?.check ? step.check.kind ?? Object.keys(step.check)[0] : 'check');
 
 function initialValues(defs = {}, supplied = {}) {
   const result = {};
   for (const [key, def] of Object.entries(defs)) {
     if (own(supplied, key)) result[key] = supplied[key];
     else if (own(def, 'default')) result[key] = structuredClone(def.default);
-    else fail(`Missing required initial value: ${key}`, 'preflight');
+    else fail('setup', `Missing required initial value: ${key}`, 'preflight');
   }
-  for (const key of Object.keys(supplied)) if (!own(defs, key)) fail(`Unknown initial value: ${key}`, 'preflight');
-  safeData(result); assertSchema(outputSchema(defs), result, 'Initial data');
+  for (const key of Object.keys(supplied)) if (!own(defs, key)) fail('setup', `Unknown initial value: ${key}`, 'preflight');
+  safeData(result, 'setup'); assertSchema(outputSchema(defs), result, 'Initial data', { producer: 'the run inputs', owner: 'setup' });
   return result;
 }
 /** A declared secret comes from the host's secret store, or else the process environment. */
 const secretValue = (options, name) => name ? (options.secrets && own(options.secrets, name) ? options.secrets[name] : process.env[name]) : undefined;
-const timeoutError = () => Object.assign(new Error('Execution deadline exceeded'), { code: 'timeout' });
+const timeoutError = (limit = 'time', value) => Object.assign(new Error('Execution deadline exceeded'), { code: 'timeout', owner: 'limit', limit, value });
 function boundedSignal(ms, parent) {
   const controller = new AbortController();
   const abort = () => controller.abort(parent.reason);
@@ -56,21 +63,29 @@ function boundedSignal(ms, parent) {
  * @returns {Promise<import('./api-types.js').RunResult>}
  */
 export async function runMethod(file, config, options = {}) {
+  try { return await startRun(file, config, options); }
+  catch (error) {
+    // A run that cannot start has no summary. Its error carries the same failure record, for the caller to show.
+    if (error && typeof error === 'object' && !error.failure) error.failure = failureRecord(error, { phase: 'setup' });
+    throw error;
+  }
+}
+async function startRun(file, config, options) {
   const runDir = pathResolve(options.runDir ?? pathResolve('.method-runs', randomUUID()));
-  if (options.resume && !options.runDir) fail('Resume needs an explicit run directory', 'preflight');
+  if (options.resume && !options.runDir) fail('setup', 'Resume needs an explicit run directory', 'preflight');
   await mkdir(dirname(runDir), { recursive: true, mode: 0o700 });
   if (!options.resume) {
-    try { await readFile(pathResolve(runDir, 'checkpoint.json')); fail('Run already exists. Use resume.', 'run_exists'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    try { await readFile(pathResolve(runDir, 'checkpoint.json')); fail('setup', 'Run already exists. Use resume.', 'run_exists'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
     await mkdir(runDir, { recursive: true, mode: 0o700 });
   }
   const lockPath = pathResolve(runDir, '.lock');
   let lock;
   try { lock = await open(lockPath, 'wx', 0o600); }
   catch {
-    if (!options.resume) fail('Run is locked. Use resume after its process stops.', 'run_locked');
+    if (!options.resume) fail('setup', 'Run is locked. Use resume after its process stops.', 'run_locked');
     const owner = Number(await readFile(lockPath, 'utf8'));
-    if (!Number.isSafeInteger(owner) || owner <= 0) fail('The run lock has no valid process ID. Inspect the run before removing it.', 'run_locked');
-    try { process.kill(owner, 0); fail('Run is locked. The process is still active.', 'run_locked'); }
+    if (!Number.isSafeInteger(owner) || owner <= 0) fail('setup', 'The run lock has no valid process ID. Inspect the run before removing it.', 'run_locked');
+    try { process.kill(owner, 0); fail('setup', 'Run is locked. The process is still active.', 'run_locked'); }
     catch(error) { if(error.code !== 'ESRCH') throw error; }
     await unlink(lockPath);
     lock = await open(lockPath, 'wx', 0o600);
@@ -80,19 +95,6 @@ export async function runMethod(file, config, options = {}) {
   finally { await lock.close(); await unlink(lockPath); }
 }
 
-/** One sentence that says what to do next for a failure code. */
-export function fixFor(error) {
-  const fixes = {
-    missing_secret: `Supply ${error.missing?.join(', ') ?? 'the declared secrets'}, then run again. No step ran.`,
-    process_failed: 'Read diagnostics, fix the script, and run again. Unchanged steps are reused.',
-    invalid_output: 'Make the step return its declared outputs, then run again. Unchanged steps are reused.',
-    classification_unavailable: 'The classification service did not answer after 3 attempts. Run again; unchanged steps are reused.',
-    model_credit_used: error.message,
-    needs_input: error.message,
-  };
-  return fixes[error.code] ?? 'Fix the problem and run again. Unchanged steps are reused.';
-}
-const lastLines = (text, count) => String(text).trimEnd().split('\n').slice(-count).join('\n');
 
 async function executeRun(file, config, options) {
   const runDir = options.runDir;
@@ -104,11 +106,11 @@ async function executeRun(file, config, options) {
   const suppliedConfig = config;
   config = configuration(config, method);
   const sourceRoot = await realpath(options.sourceRoot ?? dirname(pathResolve(file)));
-  if (saved && (saved.method_sha256 !== hash(documentForDigest(method)) || saved.config_sha256 !== hash(suppliedConfig))) fail('Method or configuration changed. Resume needs the original version.', 'resume_mismatch');
-  if (saved && (options.inputs || options.state)) fail('Resume uses saved inputs and state; omit --inputs and --state.', 'resume_mismatch');
+  if (saved && (saved.method_sha256 !== hash(documentForDigest(method)) || saved.config_sha256 !== hash(suppliedConfig))) fail('setup', 'Method or configuration changed. Resume needs the original version.', 'resume_mismatch');
+  if (saved && (options.inputs || options.state)) fail('setup', 'Resume uses saved inputs and state; omit --inputs and --state.', 'resume_mismatch');
   const inputs = saved?.root.inputs ?? initialValues(method.inputs, options.inputs);
   let state = saved?.root.state ?? initialValues(method.state, options.state);
-  if (saved && !saved.models) fail('The checkpoint is missing its selected model profiles. Resume needs the original run records.', 'resume_mismatch');
+  if (saved && !saved.models) fail('setup', 'The checkpoint is missing its selected model profiles. Resume needs the original run records.', 'resume_mismatch');
   const packaged = await packageModels(method, sourceRoot);
   config.models = await resolveModels(method, config, { ...options, packageModels: packaged, savedModels: saved?.models });
   const profiles = config.models, runtimeProfiles = config.runtimes ?? {}, tools = config.tools ?? {};
@@ -118,7 +120,7 @@ async function executeRun(file, config, options) {
   const artifacts = pathResolve(runDir, 'artifacts');
   if (!saved) await mkdir(artifacts, { mode: 0o700 });
   if (!saved && options.replay?.artifacts) await cp(options.replay.artifacts, artifacts, { recursive: true });
-  if (saved && hash(runtimeInfo) !== saved.runtime_sha256) fail('Runtime executable changed', 'resume_mismatch');
+  if (saved && hash(runtimeInfo) !== saved.runtime_sha256) fail('setup', 'Runtime executable changed', 'resume_mismatch');
   let sequence = saved?.sequence ?? 0, invocations = saved?.invocations ?? 0, requests = saved?.requests ?? 0, toolCalls = saved?.toolCalls ?? 0, knownUsage = saved?.knownUsage ?? 0, inputTokens = saved?.inputTokens ?? 0, outputTokens = saved?.outputTokens ?? 0;
   let started = performance.now() - (saved?.elapsed_ms ?? 0), deadline = started + config.limits.timeout_ms;
   let costUsd = saved?.costUsd ?? null;
@@ -136,7 +138,7 @@ async function executeRun(file, config, options) {
   const observed = saved?.observed ?? {};
   const cache = options.replay || options.fresh === true ? new Map() : await readCache(options.cacheFrom ?? []);
   const fresh = new Set(Array.isArray(options.fresh) ? options.fresh : []);
-  if (active && !(options.retry ?? []).includes(active) && !(method.steps[active.split(':')[0]]?.ask && options.human?.steps?.[active])) fail(`Inspect the trace and external state, then use --retry ${active} to authorize another attempt.`, 'recovery_required');
+  if (active && !(options.retry ?? []).includes(active) && !(method.steps[active.split(':')[0]]?.ask && options.human?.steps?.[active])) fail('setup', `Inspect the trace and external state, then use --retry ${active} to authorize another attempt.`, 'recovery_required');
   // Every run file is redacted: a secret value never reaches the run folder, so a resumed run sees [REDACTED] in its place.
   const checkpoint = () => writeJSON(pathResolve(runDir, 'checkpoint.json'), redact({
     executor_version: executorVersion, execution_id: executionId, device_name: deviceName,
@@ -157,6 +159,13 @@ async function executeRun(file, config, options) {
     if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redact(v)]));
     return value;
   };
+  // Names for event sentences: the step's name from the Method file, and the task number of an each step.
+  const tasksOf = id => method.steps[id]?.each ? collections[id]?.length ?? null : null;
+  const names = {
+    methodName: method.name,
+    place: (id, iteration) => placeText({ name: method.steps[id]?.name ?? id, iteration, total: tasksOf(id), repeat: method.steps[id]?.repeat?.max_iterations ?? null }),
+    checkName: id => checkLabel(method.steps[id]),
+  };
   let journal = Promise.resolve();
   const record = (event, data = {}) => {
     const write = journal.then(async () => {
@@ -166,7 +175,9 @@ async function executeRun(file, config, options) {
         codexInputTokens += usage.input_tokens; codexOutputTokens += usage.output_tokens; codexUsageReports++;
       }
     }
-    const entry = redact({ sequence: ++sequence, at: new Date().toISOString(), elapsed_ms: performance.now() - started, event, ...data });
+    // A user-facing event carries one plain sentence; progress and notice events bring their own.
+    const message = data.message === undefined ? eventText(event, data, names) : undefined;
+    const entry = redact({ sequence: ++sequence, at: new Date().toISOString(), elapsed_ms: performance.now() - started, event, ...data, ...(message ? { message } : {}) });
     await checkpoint();
     await appendFile(pathResolve(runDir, 'events.jsonl'), JSON.stringify(entry) + '\n', { mode: 0o600 });
     await options.onEvent?.(entry);
@@ -174,11 +185,39 @@ async function executeRun(file, config, options) {
     journal = write.catch(() => {});
     return write;
   };
+  // A notice is a problem that the run handles itself, such as a retry. Its key is the same for each repeat of the
+  // same problem, so a reader shows the newest one.
+  const notice = ({ sub, ...data }) => record('notice', { ...data, key: `${data.step ?? ''}:${data.iteration ?? ''}:${data.kind}:${sub}` });
+  // One notice when 80% of a run or step limit is used.
+  const limitsNoticed = new Set();
+  const watchLimit = ({ step: id, iteration, limit, used, max }) => {
+    const key = `${id ?? ''}:${iteration ?? ''}:${limit}`;
+    if (!(max > 0) || used < 0.8 * max || limitsNoticed.has(key)) return;
+    limitsNoticed.add(key);
+    const where = id === undefined ? null : names.place(id, iteration);
+    notice({ ...(id === undefined ? {} : { step: id, iteration }), kind: 'limit', sub: limit.replaceAll(' ', '_'), message: limitNotice({ where, limit, used, max }) }).catch(() => {});
+  };
+  const watchRunLimits = () => {
+    watchLimit({ limit: 'model requests', used: requests, max: config.limits.max_model_requests });
+    watchLimit({ limit: 'tool calls', used: toolCalls, max: config.limits.max_tool_calls });
+    watchLimit({ limit: 'invocations', used: invocations, max: config.limits.max_invocations });
+  };
+  /** A timer that records the time notice at 80% of a time limit. */
+  const timeWatch = (place, ms, alreadyUsed = 0) => {
+    const at = 0.8 * ms - alreadyUsed;
+    if (!(ms > 0) || at <= 0) return () => {};
+    const timer = setTimeout(() => watchLimit({ ...place, limit: 'time', used: 0.8 * ms, max: ms }), at);
+    timer.unref?.();
+    return () => clearTimeout(timer);
+  };
+  let stopRunWatch = () => {};
   const summary = () => ({ run_dir: runDir, started_at: startedAt, device_name: deviceName, elapsed_ms: performance.now() - started, invocations, model_requests: requests, tool_calls: toolCalls,
     ...(codexProcesses ? { codex: { processes: codexProcesses, input_tokens: codexUsageReports ? codexInputTokens : null, output_tokens: codexUsageReports ? codexOutputTokens : null, scope: 'Codex-reported usage; internal requests and built-in tools are managed by Codex' } } : {}),
     ...(Object.keys(reused).length ? { reused } : {}),
     usage: { responses_with_usage: knownUsage, responses_without_usage: requests - knownUsage, input_tokens: knownUsage ? inputTokens : null, output_tokens: knownUsage ? outputTokens : null, cost_usd: costUsd, scope: 'executor-managed model requests only' } });
   let manifest;
+  // Where the run is: setup until the first step starts, then the step that runs.
+  let stage = 'setup', current = null;
   try {
     manifest = saved ? JSON.parse(await readFile(pathResolve(runDir, 'manifest.json'), 'utf8')).files : await snapshotBundle(sourceRoot, files, bundle);
     await writeJSON(pathResolve(runDir, 'manifest.json'), { executor_version: executorVersion, method_sha256: hash(documentForDigest(method)), config_sha256: hash(suppliedConfig), files: manifest, runtime_profiles: runtimeInfo, models: profiles });
@@ -186,7 +225,7 @@ async function executeRun(file, config, options) {
     await writeJSON(pathResolve(runDir, 'state.json'), redact(state));
     const verifyBundle = async () => {
       for (const [file, expected] of Object.entries(manifest)) {
-        if (hash(await readFile(await containedFile(bundle, file))) !== expected) fail(`Bundle changed during execution: ${file}`, 'bundle_changed');
+        if (hash(await readFile(await containedFile(bundle, file))) !== expected) fail('setup', `Bundle changed during execution: ${file}`, 'bundle_changed');
       }
     };
     const checkFiles = async (defs, values) => {
@@ -194,7 +233,7 @@ async function executeRun(file, config, options) {
         const def = shape(definition);
         if (def.type === 'file') {
           const actual = hash(await readFile(await containedFile(artifacts, value.path)));
-          if (actual !== value.sha256) fail('File hash mismatch', 'file_mismatch');
+          if (actual !== value.sha256) fail('setup', 'File hash mismatch', 'file_mismatch');
         } else if (def.type === 'record') for (const [name, child] of Object.entries(def.fields)) await visit(child, value[name]);
         else if (def.type === 'list') for (const item of value) await visit(def.fields ? { type: 'record', fields: def.fields } : def.items, item);
       }
@@ -212,7 +251,9 @@ async function executeRun(file, config, options) {
     await writeJSON(pathResolve(runDir, 'summary.json'), { status: 'running', started_at: startedAt });
     await record(saved ? 'run.resumed' : 'run.started', { executor_version: executorVersion, execution_id: executionId, device_name: deviceName, method, config, inputs, initial_state: state, runtime_profiles: runtimeInfo, isolation: 'trusted-local-processes; not an OS sandbox' });
     await options.onStart?.({ method, inputs, state, runDir });
+    stopRunWatch = timeWatch({}, config.limits.timeout_ms, performance.now() - started);
     const executeScript = async (exec, input, signal, scopedRecord, operationId, onObserved) => {
+      const owner = 'method_code', producer = `the script ${exec.entrypoint}`;
       await verifyBundle();
       const profile = runtimeInfo[exec.runtime];
       // Scripts are the user's own processes: they get the basic environment that tools such as git, npx or wrangler need
@@ -222,7 +263,7 @@ async function executeRun(file, config, options) {
       if (operationId) environment.METHOD_OPERATION_ID = operationId;
       // Preflight checked that every declared secret has a value.
       for (const name of Object.keys(method.secrets ?? {})) environment[name] = secretValue(options, name);
-      if (Buffer.byteLength(JSON.stringify(input)) > config.limits.max_request_bytes) fail('Script input exceeds request limit', 'input_limit');
+      if (Buffer.byteLength(JSON.stringify(input)) > config.limits.max_request_bytes) fail('limit', 'Script input exceeds request limit', 'input_limit', { limit: 'request size', value: config.limits.max_request_bytes });
       await scopedRecord('process.started', { ...(operationId ? {operation_id: operationId} : {}), entrypoint: exec.entrypoint, runtime: exec.runtime, args: exec.args ?? [] });
       let result;
       // The process records the hosts, files, variables, and programs it used (observed_effects); the script is unchanged.
@@ -233,13 +274,15 @@ async function executeRun(file, config, options) {
           onProgress: async value => { const progress = progressMessage(value); if (progress && !signal.aborted) await scopedRecord('progress', progress); },
         });
       } catch (error) {
+        // A script is the Method's own code: its exit with an error is a problem in the Method's code.
+        if (error.code === 'process_failed') Object.assign(error, { owner, producer });
         await scopedRecord('process.failed', { code: error.code ?? 'process_failed', exit_code: error.exit_code ?? null, diagnostics: error.diagnostics ?? '', output: error.output ?? '', observed_effects: await observedEffects() });
         throw error;
       }
       await scopedRecord('process.completed', { exit_code: 0, diagnostics: result.diagnostics, output: result.output, internal_model_usage: 'not observable by executor', observed_effects: await observedEffects() });
       let output;
-      try { output = JSON.parse(result.output); } catch { fail('Script must return one JSON object', 'invalid_output'); }
-      safeData(output);
+      try { output = JSON.parse(result.output); } catch { fail(owner, 'Script must return one JSON object', 'invalid_output', { producer }); }
+      safeData(output, owner);
       return output;
     };
     const observerScript = async (exec, input, role, token, signal) => {
@@ -276,9 +319,11 @@ async function executeRun(file, config, options) {
     const tooLarge = new Set();
     const effectInputs = (step, scope) => Object.fromEntries(Object.entries(step ?? {}).map(([alias, ref]) => [alias, structuredClone(resolve(scope, ref))]));
     await verifyBundle();
+    stage = 'steps';
     for (const id of order) {
       // A replay for a case runs only the steps that its expectations need.
       if (options.replay?.only && !options.replay.only.includes(id)) continue;
+      current = id;
       const step = method.steps[id];
       const stepOutputs = effectiveOutputs(step);
     const limits = { ...config.step_defaults, ...step.limits };
@@ -288,13 +333,12 @@ async function executeRun(file, config, options) {
       if (eachEntry && !own(collections, id)) collections[id] = structuredClone(resolve(root, eachEntry[1]));
       const collection = eachEntry ? collections[id] : null;
       const count = collection ? collection.length : (step.repeat?.max_iterations ?? 1);
-      if (!step.repeat?.until && count - (accepted[id]?.filter(Boolean).length ?? 0) > config.limits.max_invocations - invocations) fail('Loop exceeds remaining invocation cap', 'invocation_limit');
+      if (!step.repeat?.until && count - (accepted[id]?.filter(Boolean).length ?? 0) > config.limits.max_invocations - invocations) fail('limit', 'Loop exceeds remaining invocation cap', 'invocation_limit', { limit: 'invocations', value: config.limits.max_invocations });
       const collected = Object.fromEntries(Object.keys(stepOutputs).map(k => [k, []]));
       let untilReached = false;
-      // Items of an each step may run at once. The first failure stops the others.
+      // Items of an each step may run at once. A failed item does not stop the others; the step fails when all have ended.
       const width = eachEntry ? Math.min(step.concurrency ?? 1, config.limits.max_concurrency) : 1;
-      const siblings = new AbortController();
-      const stepSignal = options.signal ? AbortSignal.any([options.signal, siblings.signal]) : siblings.signal;
+      const stepSignal = options.signal;
       /** Run one iteration. Returns true when the repeat condition is reached. */
       const runIteration = async iteration => {
         const previous = accepted[id]?.[iteration];
@@ -315,7 +359,7 @@ async function executeRun(file, config, options) {
           (accepted[id] ??= [])[iteration] = hit.outputs;
           if (hit.observed) (observed[id] ??= [])[iteration] = hit.observed;
           keys[key] = [id, iteration]; reused[id] = (reused[id] ?? 0) + 1;
-          await record('step.started', { step: id, iteration, inputs: bindings, state_before: state, external_effects_possible: false, reused_from: hit.dir });
+          await record('step.started', { step: id, iteration, ...(eachEntry ? { total: count } : {}), inputs: bindings, state_before: state, external_effects_possible: false, reused_from: hit.dir });
           // The key covers the step and its inputs, so the prompt is the one that the earlier run sent. The run record shows it.
           if (['call', 'agent'].includes(step.do?.kind)) await record('prompt.rendered', { step: id, iteration, phase: 'action', template: step.do.prompt, rendered: renderPrompt(step.do.prompt, bindings), reused_from: hit.dir });
           await record('step.accepted', { step: id, iteration, outputs: hit.outputs, state, check: { status: 'unchecked', reason: 'Reused from an earlier run', evidence: [] }, reused_from: hit.dir, ...(hit.observed ? { observed_effects: hit.observed } : {}) });
@@ -323,11 +367,12 @@ async function executeRun(file, config, options) {
           else Object.assign(root, hit.outputs);
           return !!step.repeat?.until && resolve(hit.outputs, step.repeat.until) === true;
         }
-        if (invocations >= config.limits.max_invocations) fail('Invocation cap reached', 'invocation_limit');
-        invocations++;
+        if (invocations >= config.limits.max_invocations) fail('limit', 'Invocation cap reached', 'invocation_limit', { limit: 'invocations', value: config.limits.max_invocations });
+        invocations++; watchRunLimits();
         const remaining = Math.min(limits.timeout_ms, deadline - performance.now());
         if (remaining <= 0) throw timeoutError();
         const bound = boundedSignal(remaining, stepSignal);
+        const stopStepWatch = limits.timeout_ms < config.limits.timeout_ms ? timeWatch({ step: id, iteration }, Math.min(limits.timeout_ms, remaining)) : () => {};
         let localRequests = 0, localAgentTurns = 0, actionObserved;
         const scopedRecord = (event, data) => record(event, { step: id, iteration, ...data });
         const guard = () => { if (bound.signal.aborted) throw bound.signal.reason; if (performance.now() >= deadline) throw timeoutError(); };
@@ -342,8 +387,14 @@ async function executeRun(file, config, options) {
           cost(value) { if (Number.isFinite(value) && value >= 0) costUsd = (costUsd ?? 0) + value; },
           canRequest: () => requests < config.limits.max_model_requests && localRequests < (limits.max_model_requests ?? 0),
           canAgentTurn: () => localAgentTurns < limits.max_agent_turns,
-          reserveRequest() { guard(); if (!this.canRequest()) fail('Model request cap reached', 'model_limit'); requests++; localRequests++; },
-          reserveAgentTurn() { if (++localAgentTurns > limits.max_agent_turns) fail('Agent turn cap reached', 'model_limit'); },
+          reserveRequest() {
+            guard();
+            if (!this.canRequest()) fail('limit', 'Model request cap reached', 'model_limit', requests >= config.limits.max_model_requests ? { limit: 'model requests', value: config.limits.max_model_requests } : { limit: 'model requests of a step', value: limits.max_model_requests ?? 0 });
+            requests++; localRequests++;
+            watchRunLimits(); watchLimit({ step: id, iteration, limit: 'model requests', used: localRequests, max: limits.max_model_requests ?? 0 });
+          },
+          notice: data => notice({ step: id, iteration, ...data }),
+          reserveAgentTurn() { if (++localAgentTurns > limits.max_agent_turns) fail('limit', 'Agent turn cap reached', 'model_limit', { limit: 'agent turns', value: limits.max_agent_turns }); },
           usage(value) {
             if (Number.isSafeInteger(value?.input_tokens) && value.input_tokens >= 0 && Number.isSafeInteger(value?.output_tokens) && value.output_tokens >= 0) {
               knownUsage++; inputTokens += value.input_tokens; outputTokens += value.output_tokens;
@@ -352,10 +403,22 @@ async function executeRun(file, config, options) {
           isConnectionTool(name) { return !!tools[name].connection; },
           toolDefinition(name) { return { type: 'function', name, description: tools[name].description, parameters: tools[name].parameters ?? outputSchema(tools[name].in), strict: !tools[name].connection }; },
           async invokeTool(name, args, callId) {
+            try { return await this.callTool(name, args, callId); }
+            catch (error) {
+              // A tool's error happened in the tool phase. A connection is a service outside Method; a script tool is the Method's code.
+              if (error && typeof error === 'object') {
+                error.phase ??= 'tool';
+                if (error.phase === 'tool') { error.producer ??= `the tool ${name}`; if (tools[name]?.connection) error.owner ??= 'outside_service'; }
+              }
+              throw error;
+            }
+          },
+          async callTool(name, args, callId) {
             guard();
-            if (++toolCalls > config.limits.max_tool_calls) fail('Tool-call cap reached', 'tool_limit');
+            if (++toolCalls > config.limits.max_tool_calls) fail('limit', 'Tool-call cap reached', 'tool_limit', { limit: 'tool calls', value: config.limits.max_tool_calls });
+            watchRunLimits();
             const tool = tools[name];
-            assertSchema(tool.parameters ?? outputSchema(tool.in), args, 'Tool arguments');
+            assertSchema(tool.parameters ?? outputSchema(tool.in), args, 'Tool arguments', { producer: `the agent's call of the tool ${name}`, owner: 'agent_work' });
             if (tool.connection) {
               // Page content is returned to the agent, never session secrets or raw provider logs.
               await this.record('tool.dispatched', {tool:name,call_id:callId,effects:tool.effects});
@@ -368,7 +431,7 @@ async function executeRun(file, config, options) {
                   if(bound.signal.aborted)abort();
                 });
                 guard(); validateToolResult(output);
-                if(Buffer.byteLength(JSON.stringify(output))>config.limits.max_output_bytes)fail('Tool output exceeds limit','output_limit');
+                if(Buffer.byteLength(JSON.stringify(output))>config.limits.max_output_bytes)fail('limit', 'Tool output exceeds limit', 'output_limit', { limit: 'output size', value: config.limits.max_output_bytes });
                 await this.record('tool.completed',{tool:name,call_id:callId,isError:!!output.isError});
                 return output;
               } catch (error) {
@@ -378,41 +441,71 @@ async function executeRun(file, config, options) {
               }
             }
             await this.record('tool.dispatched', { tool: name, call_id: callId, arguments: args, effects: tool.effects });
-            const output = await executeScript(tool.run, args, bound.signal, (event, data) => this.record(event, { ...data, tool: name, call_id: callId }));
-            assertSchema(outputSchema(tool.out), output, 'Tool output');
+            let output;
+            try {
+              output = await executeScript(tool.run, args, bound.signal, (event, data) => this.record(event, { ...data, tool: name, call_id: callId }));
+              assertSchema(outputSchema(tool.out), output, 'Tool output', { producer: `the tool ${name}`, owner: 'method_code' });
+            } catch (error) {
+              if (error?.code === 'process_failed' || error?.code === 'invalid_output') error.producer = `the tool ${name}`;
+              await this.record('tool.failed', { tool: name, call_id: callId, code: error?.code ?? 'tool_failed', message: String(error?.message ?? error) });
+              throw error;
+            }
             await this.record('tool.completed', { tool: name, call_id: callId, output });
             return output;
           },
         };
         const operationId = phase => 'mop_' + hash([executionId, id, iteration, phase]);
         const token = operationId('action');
-        const execute = async (exec, input, schema, phase) => {
-          guard();
-          if (['call', 'agent'].includes(exec.kind)) {
-            exec = exec.kind === 'agent' ? {...exec, tools:executionTools(exec, tools)} : exec;
-            const template = exec.prompt;
-            let rendered;
-            try { rendered = renderPrompt(template, input); }
-            catch (error) { fail(`${id}.${phase}.prompt: ${error.message}`, 'invalid_prompt'); }
-            if (Buffer.byteLength(rendered) + Buffer.byteLength(JSON.stringify(input)) > config.limits.max_request_bytes) fail('Expanded prompt exceeds request limit', 'input_limit');
-            await scopedRecord('prompt.rendered', { phase, template, rendered });
-            // An agent action has no operation ID of its own; give it the token that its observers will search for.
-            if (phase === 'action' && exec.kind === 'agent' && step.effects) rendered += `\n\nCorrelation token for this action: ${token}. Put it where the changed system keeps a reference (for example a message header, an idempotency key, or a note field), so that an observer can find this change.`;
-            exec = { ...exec, prompt: rendered };
+        // Who produced a phase's value, in words from the Method file.
+        const producerOf = (exec, phase) => {
+          const by = exec.kind === 'run' ? exec.entrypoint : exec.kind === 'classify' ? 'the classification service'
+            : { codex: 'Codex', claude: 'Claude Code' }[profiles[modelName(exec)]?.backend] ?? `the model ${profiles[modelName(exec)]?.model ?? modelName(exec)}`;
+          if (phase === 'check') return step.reading?.check_name ? `the check "${step.reading.check_name}" (${by})` : exec.kind === 'run' ? `the check script ${by}` : `the check by ${by}`;
+          return exec.kind === 'run' ? `the script ${by}` : by;
+        };
+        // The owner of a wrong value: a script is the Method's code; a model, an agent, or a classification is the agent's work.
+        const ownerOf = exec => exec.kind === 'run' ? 'method_code' : 'agent_work';
+        /** Run one phase. feedback is appended to the rendered prompt of a second attempt. */
+        const execute = async (exec, input, schema, phase, feedback) => {
+          const producer = producerOf(exec, phase);
+          try {
+            guard();
+            if (['call', 'agent'].includes(exec.kind)) {
+              exec = exec.kind === 'agent' ? {...exec, tools:executionTools(exec, tools)} : exec;
+              const template = exec.prompt;
+              let rendered;
+              try { rendered = renderPrompt(template, input); }
+              catch (error) { fail('method_code', `${id}.${phase}.prompt: ${error.message}`, 'invalid_prompt', { producer: `the prompt of the ${phase}`, problem: 'refers to a value that the step does not receive' }); }
+              if (feedback) rendered += `\n\n${feedback}`;
+              if (Buffer.byteLength(rendered) + Buffer.byteLength(JSON.stringify(input)) > config.limits.max_request_bytes) fail('limit', 'Expanded prompt exceeds request limit', 'input_limit', { limit: 'request size', value: config.limits.max_request_bytes });
+              await scopedRecord('prompt.rendered', { phase, template, rendered });
+              // An agent action has no operation ID of its own; give it the token that its observers will search for.
+              if (phase === 'action' && exec.kind === 'agent' && step.effects) rendered += `\n\nCorrelation token for this action: ${token}. Put it where the changed system keeps a reference (for example a message header, an idempotency key, or a note field), so that an observer can find this change.`;
+              exec = { ...exec, prompt: rendered };
+            }
+            const phaseContext = { ...context, record: (event, data) => scopedRecord(event, { phase, ...data }) };
+            let result = exec.kind === 'classify' ? {[step.out]: await executeClassification(exec, input, config.classification, classifier, phaseContext)}
+              : exec.kind === 'run' ? await executeScript(exec, input, bound.signal, phaseContext.record, operationId(phase), phase === 'action' ? value => { actionObserved = value; } : undefined)
+              : profiles[modelName(exec)].backend === 'codex' ? await executeCodex(exec, input, schema, phaseContext)
+              : profiles[modelName(exec)].backend === 'claude' ? await executeClaude(exec, input, schema, phaseContext)
+              : await executeModel(exec, input, schema, phaseContext);
+            // A check result's reason and evidence are display text; status is never converted.
+            if (phase === 'check') result = displayText(result);
+            guard(); assertSchema(schema, result, `${phase} output`, { producer, owner: ownerOf(exec) });
+            return result;
+          } catch (error) {
+            // The phase and the producer of the value are set where the error is caught, once.
+            if (error && typeof error === 'object') {
+              error.phase ??= phase;
+              if (error.phase === phase) error.producer = phase === 'check' || !error.producer ? producer : error.producer;
+            }
+            throw error;
           }
-          const phaseContext = { ...context, record: (event, data) => scopedRecord(event, { phase, ...data }) };
-          const result = exec.kind === 'classify' ? {[step.out]: await executeClassification(exec, input, config.classification, classifier, phaseContext)}
-            : exec.kind === 'run' ? await executeScript(exec, input, bound.signal, phaseContext.record, operationId(phase), phase === 'action' ? value => { actionObserved = value; } : undefined)
-            : profiles[modelName(exec)].backend === 'codex' ? await executeCodex(exec, input, schema, phaseContext)
-            : profiles[modelName(exec)].backend === 'claude' ? await executeClaude(exec, input, schema, phaseContext)
-            : await executeModel(exec, input, schema, phaseContext);
-          guard(); assertSchema(schema, result, `${phase} output`);
-          return result;
         };
         try {
           guard();
           active = `${id}:${iteration}`;
-          await scopedRecord('step.started', { inputs: bindings, state_before: state, external_effects_possible: (step.changes ?? []).some(x => x.startsWith('environment.')) });
+          await scopedRecord('step.started', { ...(eachEntry ? { total: count } : {}), inputs: bindings, state_before: state, external_effects_possible: (step.changes ?? []).some(x => x.startsWith('environment.')) });
           const answer = options.human?.steps?.[active];
           // A replay serves recorded outputs for unchanged steps; a changed step that acts on the world cannot be replayed.
           const replayed = options.replay ? replayedCandidate(options.replay, { id, step, iteration, bindings, manifest, profiles, tools }) : null;
@@ -423,20 +516,20 @@ async function executeRun(file, config, options) {
           for (const name of folders) before[name] = tooLarge.has(name) ? null : await listFolder(pathResolve(config.environment[name]), [runDir]);
           if (step.ask && !replayed) {
             const prompt = renderPrompt(step.ask, bindings);
-            if (Buffer.byteLength(prompt) + Buffer.byteLength(JSON.stringify(bindings)) > config.limits.max_request_bytes) fail('Expanded prompt exceeds request limit', 'input_limit');
+            if (Buffer.byteLength(prompt) + Buffer.byteLength(JSON.stringify(bindings)) > config.limits.max_request_bytes) fail('limit', 'Expanded prompt exceeds request limit', 'input_limit', { limit: 'request size', value: config.limits.max_request_bytes });
             await scopedRecord('prompt.rendered', { phase: 'action', template: step.ask, rendered: prompt });
             if (!answer) {
               // The answer form: what the answer must hold, so a worker can ask someone and check the reply.
               await scopedRecord('human.required', { prompt, inputs: bindings, schema });
-              fail('Human input required; this runner does not auto-answer ask', 'needs_input');
+              fail('needs_you', 'Human input required; this runner does not auto-answer ask', 'needs_input');
             }
           }
-          const act = async () => {
+          const act = async feedback => {
             if (replayed) { await scopedRecord('step.replayed', { candidate: replayed }); return replayed; }
             try {
-              const value = step.ask ? answer.outputs : await execute(step.do, bindings, schema, 'action');
-              assertSchema(schema, value, 'Action output');
-              return value;
+              if (!step.ask) return await execute(step.do, bindings, schema, 'action', feedback);
+              assertSchema(schema, answer.outputs, 'Answer', { producer: 'your answer', owner: 'needs_you' });
+              return answer.outputs;
             } catch (error) {
               // The action may have changed the outside world before it failed. Look before anyone retries it.
               if (step.effects && !options.signal?.aborted) {
@@ -447,6 +540,7 @@ async function executeRun(file, config, options) {
             }
           };
           let candidate, outputs, nextState, check;
+          /** Record a candidate and run the step's check. Returns true when the check passes or there is none. */
           const accept = async (value, retry) => {
             candidate = value;
             await scopedRecord('step.candidate', { candidate, ...(retry ? { retry: true } : {}) });
@@ -455,22 +549,32 @@ async function executeRun(file, config, options) {
             await checkFiles(outputDefs, candidate);
             nextState = { ...state, ...(updates ?? {}) };
             check = { status: 'unchecked', reason: 'No task check requested', evidence: [] };
-            if (step.check && !replayed) {
-              const spec = step.check, scope = { ...bindings, ...outputs };
-              if (spec.kind) check = await execute(spec, { inputs: bindings, outputs, state_before: state, state_after: nextState, evidence: [] }, checkResultSchema, 'check');
-              else {
-                let pass;
-                if (spec.equals) pass = isDeepStrictEqual(resolve(scope, spec.equals.actual), resolve(scope, spec.equals.expected));
-                else if (spec.count) { const n = resolve(scope, spec.count.value).length; pass = n >= (spec.count.min ?? 0) && n <= (spec.count.max ?? Infinity); }
-                else if (spec.file) { const artifact = resolve(scope, spec.file); pass = hash(await readFile(await containedFile(artifacts, artifact.path))) === artifact.sha256; }
-                else { const value = resolve(scope, spec.present); pass = value !== null && value !== undefined; }
-                check = { status: pass ? 'pass' : 'fail', reason: `Exact ${Object.keys(spec)[0]} check`, evidence: [] };
-              }
-              await scopedRecord('check.completed', { check });
-              if (check.status !== 'pass') fail(`Declared check returned ${check.status}${check.reason ? `: ${check.reason}` : ''}`, 'check_failed');
+            if (!step.check || replayed) return true;
+            const spec = step.check, scope = { ...bindings, ...outputs };
+            if (spec.kind) check = await execute(spec, { inputs: bindings, outputs, state_before: state, state_after: nextState, evidence: [] }, checkResultSchema, 'check');
+            else {
+              let pass;
+              if (spec.equals) pass = isDeepStrictEqual(resolve(scope, spec.equals.actual), resolve(scope, spec.equals.expected));
+              else if (spec.count) { const n = resolve(scope, spec.count.value).length; pass = n >= (spec.count.min ?? 0) && n <= (spec.count.max ?? Infinity); }
+              else if (spec.file) { const artifact = resolve(scope, spec.file); pass = hash(await readFile(await containedFile(artifacts, artifact.path))) === artifact.sha256; }
+              else { const value = resolve(scope, spec.present); pass = value !== null && value !== undefined; }
+              check = { status: pass ? 'pass' : 'fail', reason: `Exact ${Object.keys(spec)[0]} check`, evidence: [] };
             }
+            await scopedRecord('check.completed', { check });
+            return check.status === 'pass';
           };
-          await accept(await act());
+          const checkFailed = attempts => fail('agent_work', `Declared check returned ${check.status}${check.reason ? `: ${check.reason}` : ''}`, 'check_failed',
+            { phase: 'check', check_label: checkLabel(step), evidence: check.evidence, attempts });
+          // A model or an agent gets one more attempt when its work does not pass the check: it sees the check's reason
+          // and evidence. A step that changes the outside world is not run twice.
+          const retryable = ['agent', 'call'].includes(step.do?.kind) && !replayed && !step.effects && !(step.changes ?? []).some(x => x.startsWith('environment.'));
+          if (!await accept(await act())) {
+            if (!retryable) checkFailed(1);
+            await scopedRecord('step.retry', { attempt: 2, attempts: 2, reason: check.reason ?? '', evidence: check.evidence ?? [] });
+            const feedback = [`Your previous result did not pass the check "${checkLabel(step)}" (${check.status}). Do the step again and correct this.`,
+              `Reason: ${check.reason ?? ''}`, ...(check.evidence?.length ? ['Evidence:', ...check.evidence.map(item => `- ${item}`)] : [])].join('\n');
+            if (!await accept(await act(feedback), true)) checkFailed(2);
+          }
           // The runtime reads each changed folder itself; a file that the step claims to have written must have changed.
           for (const name of folders) {
             const folder = pathResolve(config.environment[name]);
@@ -493,7 +597,7 @@ async function executeRun(file, config, options) {
             }
             await appendLedger(runDir, redact(entry));
             await record('effect.observed', entry);
-            if (entry.verdict === 'contradicted') fail(`Effect ${entry.effect} was contradicted: ${entry.reason}`, 'effect_contradicted');
+            if (entry.verdict === 'contradicted') fail('agent_work', `Effect ${entry.effect} was contradicted: ${entry.reason}`, 'effect_contradicted', { phase: 'effect', effect_name: `files:${name}`, evidence: entry.evidence });
           }
           // Blocking effects are observed before later steps start. Other effects are observed when the run ends.
           const completedAt = new Date().toISOString();
@@ -507,12 +611,12 @@ async function executeRun(file, config, options) {
             if (entry.verdict === 'contradicted' && spec.retry === 'idempotent' && !options.replay) {
               // The same operation ID lets the service drop a duplicate if the first attempt did succeed.
               await scopedRecord('effect.retry', { effect: data.key, token });
-              await accept(await act(), true);
+              if (!await accept(await act(), true)) checkFailed(1);
               const again = { ...data, attempt: 2, completedAt: new Date().toISOString() };
               if (!await waitUntil(nextObservation(spec, again.completedAt, new Date(0).toISOString()), deadline, bound.signal)) throw timeoutError();
               entry = await observe(spec, again);
             }
-            if (entry.verdict === 'contradicted') fail(`Effect ${data.key} was contradicted: ${entry.reason}`, 'effect_contradicted');
+            if (entry.verdict === 'contradicted') fail('agent_work', `Effect ${data.key} was contradicted: ${entry.reason}`, 'effect_contradicted', { phase: 'effect', effect_name: name, evidence: entry.evidence });
           }
           for (const { data, spec } of registered) {
             const entry = { effect: data.key, token, inputs: data.inputs, action_outcome: 'ok', attempt: 0, registered_at: completedAt, verdict: 'pending', reason: 'Not yet observed.', final: false,
@@ -530,26 +634,39 @@ async function executeRun(file, config, options) {
           if (eachEntry) for (const key of Object.keys(collected)) collected[key][iteration] = outputs[key];
           else Object.assign(root, outputs);
           return !!step.repeat?.until && resolve(outputs, step.repeat.until) === true;
-        } finally { bound.close(); }
+        } finally { bound.close(); stopStepWatch(); }
+      };
+      // An error names the task where it happened.
+      const runTask = async iteration => {
+        try { return await runIteration(iteration); }
+        catch (error) { if (error && typeof error === 'object') { error.step ??= id; error.iteration ??= iteration; } throw error; }
       };
       if (width === 1) {
-        for (let iteration = 0; iteration < count; iteration++) if (await runIteration(iteration)) { untilReached = true; break; }
+        for (let iteration = 0; iteration < count; iteration++) if (await runTask(iteration)) { untilReached = true; break; }
       } else {
         // Each worker is the same for-each loop; it takes the next item that no other worker has taken.
-        let next = 0, failure = null;
+        let next = 0;
+        const failures = [];
         const worker = async () => {
-          while (next < count && !failure) {
+          while (next < count && !options.signal?.aborted) {
             const iteration = next++;
-            try { await runIteration(iteration); }
-            catch (error) { if (!failure) { failure = { error, key: `${id}:${iteration}` }; siblings.abort(error); } }
+            try { await runTask(iteration); }
+            catch (error) { failures.push({ error, iteration }); }
           }
         };
         await Promise.all(Array.from({ length: Math.min(width, count) }, worker));
-        // The step changes nothing outside the run, so resume runs the other unfinished items again.
-        if (failure) { active = failure.key; throw failure.error; }
+        // The step changes nothing outside the run, so resume runs only the failed and unfinished items again.
+        if (failures.length) {
+          failures.sort((a, b) => a.iteration - b.iteration);
+          const [first] = failures;
+          active = `${id}:${first.iteration}`;
+          if (first.error && typeof first.error === 'object') first.error.failedIterations = failures.map(f => f.iteration);
+          throw first.error;
+        }
       }
       if (eachEntry) Object.assign(root, collected);
-      if (step.repeat?.until && !untilReached) fail(`Repeat condition not reached: ${id}`, 'iteration_limit');
+      if (step.repeat?.until && !untilReached) fail('limit', `Repeat condition not reached: ${id}`, 'iteration_limit', { limit: 'repeat', value: step.repeat.max_iterations });
+      current = null;
     }
     if (performance.now() >= deadline) throw timeoutError();
     const resultOf = () => typeof method.result === 'string' ? resolve(root, method.result) : Object.fromEntries(Object.entries(method.result).map(([k, ref]) => [k, resolve(root, ref)]));
@@ -571,25 +688,26 @@ async function executeRun(file, config, options) {
       if (!await waitUntil(next.next_observation_at, until, options.signal)) break;
       await observe(specOf(next.effect), { key: next.effect, token: next.token, inputs: next.inputs, attempt: next.attempt + 1, actionOutcome: next.action_outcome, completedAt: next.completed_at });
     }
-    const completed = statusWithEffects({ ...summary(), status: 'completed', result }, effectSummary(await readLedger(runDir)));
+    const completed = statusWithEffects({ status: 'completed', ...summary(), result }, effectSummary(await readLedger(runDir)), { method, total: tasksOf });
     if (waived.length) completed.unobserved_changes = waived;
     await record(completed.status === 'failed' ? 'run.failed' : 'run.completed', completed);
     if (completed.status !== 'failed') await writeJSON(pathResolve(runDir, 'result.json'), redact(result));
     await writeJSON(pathResolve(runDir, 'summary.json'), redact(completed));
     return completed;
   } catch (error) {
-    const [unfinished, iteration] = active?.split(':') ?? [];
-    // Observations after a failed action tell the operator whether a retry could repeat a change that did happen.
-    const observed = error.effects?.length ? ' Observed after the failed action: ' + error.effects.map(e => `${e.effect} ${e.verdict}${e.verdict === 'confirmed' ? ' (the change happened; do not retry it)' : ''}`).join('; ') + '.' : '';
+    // The failure record is written once, here. Its owner is the class that the error states.
+    const id = typeof error?.step === 'string' && method.steps[error.step] ? error.step : current;
+    const iteration = Number.isInteger(error?.iteration) ? error.iteration : id && active?.startsWith(`${id}:`) ? Number(active.split(':')[1]) : null;
     const ledger = await readLedger(runDir).catch(() => []);
-    const failed = { ...summary(), status: error.code === 'needs_input' ? 'needs_input' : 'failed', code: error.code ?? 'execution_failed', error: error.message,
-      ...(unfinished ? { failed_step: unfinished, iteration: Number(iteration) } : {}), ...(error.diagnostics ? { diagnostics: lastLines(error.diagnostics, 20) } : {}),
-      fix: fixFor(error),
-      // A new run reuses unchanged accepted iterations, so a fix needs no resume. Resume keeps this run's bundle.
-      recovery: 'Fix the step and run again: unchanged steps are reused. To continue this run with its original files, resume with --run-dir and --resume; inspect unfinished actions before authorizing --retry STEP:ITERATION.' + observed,
-      ...(ledger.length ? { effects: effectSummary(ledger) } : {}) };
+    const failure = failureRecord(error, {
+      method, step: id, iteration, total: id ? tasksOf(id) : null, failedIterations: error?.failedIterations ?? [],
+      phase: stage === 'setup' ? 'setup' : null, stopped: !!options.signal?.aborted,
+      // Observations after a failed action tell whether a new run could repeat a change that did happen.
+      effects: (error?.effects ?? []).map(e => ({ name: e.effect.split('/').at(-1), verdict: e.verdict })),
+    });
+    const failed = { status: error?.code === 'needs_input' && !options.signal?.aborted ? 'needs_input' : 'failed', ...summary(), ...(ledger.length ? { effects: effectSummary(ledger) } : {}), failure };
     await record('run.failed', failed);
     await writeJSON(pathResolve(runDir, 'summary.json'), redact(failed));
     return failed;
-  }
+  } finally { stopRunWatch(); }
 }

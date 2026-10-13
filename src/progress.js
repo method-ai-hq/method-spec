@@ -27,3 +27,18 @@ export function codexProgress(event) {
   if (item.type === 'web_search') return { message: started ? 'Searching the web.' : 'Web search completed.' };
   return null;
 }
+
+/**
+ * An error-type or warning-type event of an agent's JSON stream (Codex or Claude Code), selected by its type, with
+ * the agent's own message; or null. A failed turn is not a notice: it fails the step.
+ */
+export function agentEvent(event) {
+  if (!event || typeof event !== 'object' || event.type === 'turn.failed') return null;
+  const item = ['item.started', 'item.completed'].includes(event.type) ? event.item : null;
+  const type = String(item ? item.type : event.type === 'system' ? event.subtype : event.type ?? '');
+  const level = /(^|[._])(error)$/.test(type) ? 'error' : /(^|[._])(warning|retry)$/.test(type) ? 'warning' : null;
+  if (!level || (item && event.type !== 'item.completed')) return null;
+  const source = item ?? event;
+  const text = [source.message, source.error?.message, typeof source.error === 'string' ? source.error : null, source.text].find(value => typeof value === 'string' && value.trim());
+  return { level, message: (text ?? type).trim().slice(0, 500) };
+}
