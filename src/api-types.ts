@@ -105,7 +105,18 @@ export type Issue = {
   evidence?: {probability?: number; check?: string; run_id?: string};
   /** The reason, when the step accepts this code. Errors are never accepted. */
   accepted?: string;
+  /** untrusted_reaches_action: the values from the source to the step, as step.output references (or the connection, when one step reads and acts). */
+  path?: string[];
+  /** A change that fixes the issue. behavioral: the Method then runs differently (here, it asks you first). */
+  patch?: {safety: 'behavioral'; edits: Edit[]};
 };
+/** One change to a Method document; applyEdits applies a list of them. Paths are lists of keys from the root. */
+export type Edit =
+  | {op: 'set'; path: string[]; value: unknown}
+  | {op: 'remove'; path: string[]}
+  | {op: 'insert_step'; before: string; id: string; step: Record<string, unknown>};
+/** A property that the code checks prove about a Method, in one plain sentence. */
+export type Proof = {code: 'no_untrusted_action'; statement: string};
 export interface IssueOptions {
   /** Secret values to find by exact match (values shorter than 8 characters are skipped). A record names each secret in the message; the value never appears. */
   secretValues?: string[] | Record<string, string>;
@@ -115,7 +126,7 @@ export interface IssueOptions {
   availableSecrets?: string[];
   /** run makes a missing secret an error; validate (the default) makes it a warning. */
   phase?: 'validate' | 'run';
-  /** Operator tools, so that a tool with effects counts as one that changes things. */
+  /** Operator tools, so that a tool with effects counts as one that changes things. Document tools come first. */
   tools?: RuntimeConfig['tools'];
   /** Issues from other checks (for example model checks); accepts apply to them too. */
   issues?: Issue[];

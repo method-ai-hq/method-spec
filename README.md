@@ -5,7 +5,7 @@ A Method is a YAML file that describes a reusable procedure: inputs, steps, outp
 This public MIT repository contains two parts:
 
 - **Format and validator:** JSON Schema plus semantic checks for references, types, effects, and dependency cycles.
-- **Executor (`@withmethod/runtime` 0.9.1):** local script, model, and agent execution; checks; state; run records; and checkpoint resume.
+- **Executor (`@withmethod/runtime` 0.14.0):** local script, model, and agent execution; checks; state; run records; and checkpoint resume.
 
 New methods use `format: method/3.4`. Existing `method/3.1`, `method/3.2`, and `method/3.3` documents load and run unchanged. Method 3.3 adds effect contracts (observed external results) and recorded cases (`method test`).
 
@@ -28,7 +28,7 @@ The example runs checked counter steps and saves a trace. `node src/cli.js` is a
 
 ## Model setup and limits
 
-A method/3.4 document names its own hosted models in `models`, or a model ID on each step. `--agent codex|claude` runs every model step with that local agent. Otherwise the runtime uses configured profiles, the host's hosted model, the calling Codex or Claude Code process, or the sole installed supported agent. Ambiguous selection returns needs_input. No command reads a configuration file: programs pass `RuntimeConfig` to `runMethod`, and it must enable `allow_local_processes` for scripts or Codex. `methodIssues` returns the errors, warnings, and notes of a Method.
+A method/3.4 document names its own hosted models in `models`, or a model ID on each step. `--agent codex|claude` runs every model step with that local agent. Otherwise the runtime uses configured profiles, the host's hosted model, the calling Codex or Claude Code process, or the sole installed supported agent. Ambiguous selection returns needs_input. No command reads a configuration file: programs pass `RuntimeConfig` to `runMethod`, and it must enable `allow_local_processes` for scripts or Codex. `methodIssues` returns the errors, warnings, and notes of a Method. `methodProofs` returns what the code checks prove about it, and `applyEdits` applies the patch that an issue carries.
 
 An explicit `backend: openai-responses`, `anthropic-messages`, or `openrouter-chat` profile uses an API key environment variable and the provider's fixed endpoint. Request and agent-turn caps govern that direct API loop. Codex manages its own internal requests and installed tools. Method records Codex process logs and enforces its timeout and declared Method tool limits; it does not count every internal request or enforce a dollar budget.
 

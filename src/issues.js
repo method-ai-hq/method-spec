@@ -1,5 +1,6 @@
 /** Deterministic code checks on a valid Method. Browser-safe: no file system, no network. */
 import { effectiveOutputs } from './semantics.js';
+import { untrustedIssues } from './flow.js';
 
 const head = ref => ref.split('.')[0];
 const issue = (code, level, message, fix, where = {}) => ({ code, level, ...where, message, fix });
@@ -47,28 +48,6 @@ function missingSecretIssues(method, options) {
       `Run method secret find to look for ${name} on this computer, or method secret set ${name} to enter it.`, { field: `secrets.${name}` }));
 }
 
-/**
- * An agent with a browser (untrusted content) that can also change a connection other than files: through its
- * own changes, or through a tool whose declaration has effects. Only declarations count, never names.
- */
-function untrustedAgentIssues(method, options) {
-  const found = [];
-  const tools = options.tools ?? {};
-  for (const [id, step] of Object.entries(method.steps)) {
-    const exec = step.do;
-    if (exec?.kind !== 'agent' || !exec.browser) continue;
-    const changed = (step.changes ?? []).filter(ref => ref.startsWith('environment.') && method.environment?.[ref.slice(12)]?.type !== 'files');
-    const acting = (exec.tools ?? []).filter(name => tools[name]?.effects?.length);
-    const actors = [...changed, ...acting];
-    if (!actors.length) continue;
-    found.push(issue('untrusted_content_can_act', 'warning',
-      `${id} reads untrusted content (${exec.browser}) and can also change things (${actors.join(', ')}).`,
-      'Split the step: one agent reads the content and returns data, and a later step without a browser makes the change.',
-      { step: id, field: 'do' }));
-  }
-  return found;
-}
-
 /** An output that no step, result, run label, or check uses. */
 function unusedOutputIssues(method) {
   const used = new Set();
@@ -96,7 +75,7 @@ function unusedOutputIssues(method) {
 export function codeIssues(method, options = {}) {
   return [
     ...secretValueIssues(method, options), ...missingSecretIssues(method, options),
-    ...untrustedAgentIssues(method, options), ...unusedOutputIssues(method),
+    ...untrustedIssues(method, options), ...unusedOutputIssues(method),
   ];
 }
 

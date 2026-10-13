@@ -11,3 +11,11 @@ void runMethod('test.method', config, {runDirectory:'wrong'});
 // @ts-expect-error Unsupported provider must not compile.
 const bad: RuntimeConfig = {models:{worker:{backend:'unknown'}}};
 void valid; void bad;
+import {methodIssues, methodProofs, applyEdits, type Proof, type Edit} from '../types/src/index.js';
+const proofs: Proof[] = methodProofs('format: method/3.4');
+const [first] = methodIssues('format: method/3.4');
+const edits: Edit[] = first?.patch?.edits ?? [{op:'set', path:['steps','send','when'], value:'send_approved'}];
+void applyEdits({steps:{}}, edits); void proofs;
+// @ts-expect-error An edit needs a known op.
+const wrong: Edit = {op:'move', path:[]};
+void wrong;

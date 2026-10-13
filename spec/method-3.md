@@ -1,6 +1,6 @@
 # Method reference
 
-Implemented by `@withmethod/runtime` 0.10.0. The full Method SDK uses this runtime at a pinned Git revision. New methods use this format under the same Method product and command.
+Implemented by `@withmethod/runtime` 0.14.0. The full Method SDK uses this runtime at a pinned Git revision. New methods use this format under the same Method product and command.
 
 Use `format: method/3.4` for new documents. Existing `method/3.1`, `method/3.2`, and `method/3.3` documents load and run unchanged. All formats share one set of rules, with two exceptions that keep saved documents running: before `method/3.3`, an external change needs no effect; before `method/3.4`, a plain model name can name a configured profile (or a saved package's `runtime.json` model). Method 3.3 adds effect contracts: an external change is confirmed by an observer, not by the action's receipt. Method 3.4 adds the Method ID, the Method's own `models`, `limits`, and `tools`, model IDs on steps, and accepted warnings (see [Method 3.4](#method-34)). The machine-readable grammar is [method-3.schema.json](method-3.schema.json). Operator configuration uses [runtime-config.schema.json](runtime-config.schema.json). The validator also checks references, dependencies, data declarations, loop conditions, and effects; JSON Schema alone is insufficient.
 
@@ -64,17 +64,39 @@ tools:                                     # tools that agent steps list by name
 
 ## Issues
 
-`methodIssues(document, options)` returns a list of issues. Each has `code`, `level` (`error`, `warning`, or `note`), optional `step`, `field`, `file`, and `line`, a one-sentence `message`, a one-sentence `fix`, optional `evidence`, and `accepted` (the reason, when the step accepts that code). A format error (the first one) is the only issue for a document that does not validate; it keeps the validation code. For a valid document the runtime adds these deterministic checks:
+`methodIssues(document, options)` returns a list of issues. Each has `code`, `level` (`error`, `warning`, or `note`), optional `step`, `field`, `file`, and `line`, a one-sentence `message`, a one-sentence `fix`, optional `evidence`, optional `path` and `patch` (see [Untrusted text](#untrusted-text)), and `accepted` (the reason, when the step accepts that code). A format error (the first one) is the only issue for a document that does not validate; it keeps the validation code. For a valid document the runtime adds these deterministic checks:
 
 | Code | Level | When |
 |---|---|---|
 | `secret_value` | error | The document or a file in `options.files` contains a value from `options.secretValues` (exact match, values of 8 or more characters). The value never appears in the issue. |
 | `missing_secret` | warning (error with `phase: 'run'`) | A declared secret is not in `options.availableSecrets`. |
-| `untrusted_content_can_act` | warning | An agent with a `browser` can also change things: its `changes` name a connection that is not files, or it uses a tool whose declaration (in `options.tools`) has effects. Only declarations count, never tool names. |
+| `untrusted_reaches_action` | warning | Text from an untrusted source can reach an acting step without a question to you. See [Untrusted text](#untrusted-text). |
 | `unused_output` | warning | No step, check, effect, result, or run label uses an output. |
 | `accept_unused` | note | A step accepts a code that no longer fires on it. |
 
-`options.issues` adds issues from other checks (for example the SDK's model checks); accepts apply to them too. `options.notChecked` lists codes that were not computed this time, so their accepts give no `accept_unused` note. `options.tools` supplies operator tools for the effects check. Issues are sorted errors first, then warnings, then notes.
+`options.issues` adds issues from other checks (for example the SDK's model checks); accepts apply to them too. `options.notChecked` lists codes that were not computed this time, so their accepts give no `accept_unused` note. `options.tools` supplies operator tools for the untrusted text check. An accept of a code that no longer exists, such as `untrusted_content_can_act` (replaced in 0.14.0 by `untrusted_reaches_action`), gives the `accept_unused` note. Issues are sorted errors first, then warnings, then notes.
+
+### Untrusted text
+
+The runtime follows text from untrusted sources through the steps. It uses only the declarations in the Method and in `options.tools`: no lists of names and no model calls.
+
+- **Sources.** An `agent` step with a `browser`. A step that binds a `service` connection in `in` or `each` and does not list it in `changes`. An agent with a tool that has no effects and whose `connection` is a `service` environment. Run inputs are not sources: the format has no mark for inputs that come from outside.
+- **Acting steps.** A step whose `changes` name a connection that is not `files` (a step with `effects` always has one), or an agent with a tool whose declaration has effects. Document `tools` come before `options.tools`.
+- **How text travels.** A step's outputs that can hold text get the label of every value that the step reads (`in`, `each`, `when`, an effect's `in`, and state that a labelled step changed), and the label of its own source. An `ask` step and a `classify` step give no label (a person or a fixed list of options made the value). A `number` or `boolean` value holds no text, and a record or list holds text only when one of its fields or items does. A reference to a number field of a labelled record has no label.
+- **Finding.** An acting step that reads a labelled value gives `untrusted_reaches_action` on that step. `field` is the place where it reads the value. `path` lists the values from the source to the step as `step.output` references, for example `["discover.findings", "draft.message"]`. When one step reads the content and acts, `path` is the connection, for example `["environment.web"]`, and the fix is to split the step. An acting step whose `when` is an output of an `ask` step is clear for the values that the `ask` step also reads in `in` or `each`, because the person saw them.
+- **Patch.** When the acting step has no `when` and does not read the content itself, the issue has `patch: {safety: "behavioral", edits}`. The edits insert an `ask` step before the acting step that reads the same values and returns one boolean, and set the acting step's `when` to that boolean. `behavioral` means that the Method then runs differently: it stops to ask you.
+
+`methodProofs(document, options)` returns what these checks prove, as `[{code, statement}]`. It gives `{code: "no_untrusted_action", statement: "Text from web pages cannot reach a step that sends or changes things without a question to you."}` when the Method has a source, an acting step, and no `untrusted_reaches_action` (accepted or not). Otherwise, and for an invalid Method, it gives an empty list. A proof covers declarations only: a script that reads the web or sends mail without a declaration is not seen.
+
+**Edits.** `applyEdits(document, edits)` applies a list of edits to a parsed document and returns a new document. It does not change its input. A bad edit throws an error with code `invalid_edit`.
+
+| Edit | Effect |
+|---|---|
+| `{op: "set", path: [KEY, ...], value}` | Set the value at `path`. Missing records on the way are made. |
+| `{op: "remove", path: [KEY, ...]}` | Remove the value at `path`. |
+| `{op: "insert_step", before, id, step}` | Add step `id` to `steps`, just before step `before`. |
+
+A path is a list of keys from the document root, for example `["steps", "send", "when"]`.
 
 ## Document and data
 

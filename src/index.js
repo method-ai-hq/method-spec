@@ -8,10 +8,13 @@ export { effectSummary, readLedger } from './effects.js';
 export { validateMethod, validateConfig, dataSchema, outputSchema } from './validate.js';
 export { methodSchema, configSchema } from './schema.js';
 export { readDocument } from './io.js';
-export { parseDocumentValue, MethodValidationError, shapeErrors, methodIssues, documentForDigest } from './document.js';
+export { parseDocumentValue, MethodValidationError, shapeErrors, methodIssues, methodProofs, documentForDigest } from './document.js';
+export { applyEdits } from './flow.js';
 export { methodProfiles } from './agents.js';
 /** @typedef {import('./api-types.js').Issue} Issue */
 /** @typedef {import('./api-types.js').IssueOptions} IssueOptions */
+/** @typedef {import('./api-types.js').Proof} Proof */
+/** @typedef {import('./api-types.js').Edit} Edit */
 /** @typedef {import('./api-types.js').RuntimeConfig} RuntimeConfig */
 /** @typedef {import('./api-types.js').RunOptions} RunOptions */
 /** @typedef {import('./api-types.js').RunResult} RunResult */

@@ -82,38 +82,6 @@ test('a missing secret is a warning in validate and an error for a run', () => {
   assert.deepEqual(only(methodIssues(doc), 'missing_secret'), []);
 });
 
-// A research Method: an agent reads web pages, then something posts the summary.
-const research = (change = () => {}) => {
-  const method = {
-    format: 'method/3.4', name: 'Competitor watch', goal: 'Post a weekly summary of competitor pricing.',
-    environment: { web: { type: 'browser', description: 'A signed-out browser.' }, chat: { type: 'service', description: 'The team chat.' } },
-    steps: {
-      read: { do: { kind: 'agent', prompt: 'Read the pricing pages and list each plan and price.', browser: 'environment.web' }, out: { plans: { type: 'list', items: 'text' } } },
-      post: { name: 'Post summary', purpose: 'Post the plans to the team chat.', in: { plans: 'plans' }, do: { kind: 'run', runtime: 'node', entrypoint: 'post.mjs' },
-        out: { posted: { type: 'boolean', description: 'Whether the post went out.' } }, changes: ['environment.chat'], no_effect_reason: 'The chat has no read API.' },
-    },
-    result: 'posted',
-  };
-  change(method);
-  return method;
-};
-
-test('an agent with a browser that can change things gives a warning, decided only from declarations', () => {
-  assert.deepEqual(only(methodIssues(research()), 'untrusted_content_can_act'), []);
-  const both = research(m => { m.steps.read.changes = ['environment.chat']; m.steps.read.no_effect_reason = 'The chat has no read API.'; });
-  const [warning] = only(methodIssues(both), 'untrusted_content_can_act');
-  assert.equal(warning.step, 'read'); assert.match(warning.message, /environment\.web/); assert.match(warning.message, /environment\.chat/);
-  // A tool named send_email with no declared effects does not count; the same tool with effects does.
-  const named = research(m => { m.steps.read.do.tools = ['send_email']; });
-  const tool = effects => ({ send_email: { description: 'Send an email.', connection: 'mail', tool: 'send', parameters: {}, effects } });
-  assert.deepEqual(only(methodIssues(named), 'untrusted_content_can_act'), []);
-  assert.deepEqual(only(methodIssues(named, { tools: tool([]) }), 'untrusted_content_can_act'), []);
-  assert.match(only(methodIssues(named, { tools: tool(['mail']) }), 'untrusted_content_can_act')[0].message, /send_email/);
-  // Without a browser, tools with effects are not untrusted content.
-  const noBrowser = research(m => { delete m.steps.read.do.browser; m.steps.read.do.tools = ['send_email']; });
-  assert.deepEqual(only(methodIssues(noBrowser, { tools: tool(['mail']) }), 'untrusted_content_can_act'), []);
-});
-
 test('an output that nothing uses gives a warning', () => {
   const doc = triage(m => { m.steps.draft.out.subject = { type: 'text' }; });
   const [warning] = only(methodIssues(doc), 'unused_output');

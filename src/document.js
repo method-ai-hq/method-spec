@@ -4,6 +4,7 @@ import { methodShape } from './document-validators.js';
 import { safeData, validateSemantics, dataSchema, shape } from './semantics.js';
 import { formats } from './schema.js';
 import { codeIssues, applyAccepts } from './issues.js';
+import { untrustedProofs } from './flow.js';
 
 export class MethodValidationError extends Error {
   constructor(message, code = 'invalid_method') { super(message); this.name = 'MethodValidationError'; this.code = code; this.owner = 'method_code'; }
@@ -112,6 +113,17 @@ export function methodIssues(document, options = {}) {
     const line = lineOf(document, [...(item.step ? ['steps', item.step] : []), ...(item.field ? item.field.split('.') : [])]);
     return line === undefined ? item : { ...item, line };
   });
+}
+/**
+ * What the code checks prove about a valid Method, as plain statements. Empty for an invalid Method, or when
+ * nothing is proved. Proofs come from declarations only: a script that reads the web without declaring it is not seen.
+ * @param {unknown} document Method text or parsed value.
+ * @param {Pick<import('./api-types.js').IssueOptions, 'tools'>} [options]
+ * @returns {import('./api-types.js').Proof[]}
+ */
+export function methodProofs(document, options = {}) {
+  const { method, validated } = inspect(document);
+  return validated ? untrustedProofs(method, options) : [];
 }
 /** Throw the first format error; return the Method, its step order, and its dependencies. */
 export function validateMethod(value) {
