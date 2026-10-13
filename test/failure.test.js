@@ -166,7 +166,7 @@ test('a missing secret stops the run before it starts, with a setup failure that
     for (const key of failureKeys) assert.ok(key in failure, `failure has ${key}`);
     assert.equal(failure.owner, 'setup'); assert.equal(failure.code, 'missing_secret'); assert.equal(failure.phase, 'setup');
     assert.equal(failure.headline, 'Missing secrets: ARCHIVE_TOKEN.');
-    assert.deepEqual(failure.next, { action: 'fix_setup', text: 'Run method secret find to look for ARCHIVE_TOKEN on this computer, or method secret set to enter it. Then run again. No step ran.', command: 'method secret set ARCHIVE_TOKEN' });
+    assert.deepEqual(failure.next, { action: 'fix_setup', text: 'Run method secret find to look for ARCHIVE_TOKEN on this computer, or method secret set to enter it. Then run again. No step ran. Never open or print a key file, and never paste a key into a chat.', command: 'method secret set ARCHIVE_TOKEN' });
     return true;
   });
 });

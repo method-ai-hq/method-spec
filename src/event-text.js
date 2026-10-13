@@ -42,7 +42,7 @@ const nextSteps = {
   outside_service: () => ({ action: 'run_again', text: 'Wait a few minutes and run again. Steps that finished are reused.' }),
   limit: s => ({ action: 'raise_limit', text: `Raise the ${s.limit} limit in the Method's limits, or make the step do less, then run again.` }),
   setup: s => s.missing?.length
-    ? { action: 'fix_setup', text: `Run method secret find to look for ${s.missing.join(', ')} on this computer, or method secret set to enter it. Then run again. No step ran.`, command: `method secret set ${s.missing[0]}` }
+    ? { action: 'fix_setup', text: `Run method secret find to look for ${s.missing.join(', ')} on this computer, or method secret set to enter it. Then run again. No step ran. Never open or print a key file, and never paste a key into a chat.`, command: `method secret set ${s.missing[0]}` }
     : { action: 'fix_setup', text: 'Fix the setup that the headline names, then run again.' },
   needs_you: () => ({ action: 'answer', text: 'Answer the question, then continue the run.' }),
   method_platform: () => ({ action: 'report_bug', text: 'This is a bug in Method. Report it with the run folder; your Method does not need a change.' }),
