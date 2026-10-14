@@ -9,7 +9,7 @@ import { configuration } from './defaults.js';
 import { fail, own, safeData, validateMethod, effectiveOutputs } from './validate.js';
 import { executable, executeProcess, hash, writeJSON, containedFile, readDocument } from './io.js';
 import { readLedger, effectSummary } from './effects.js';
-import { judgeRubric, chooseJudges, valueText } from './rubric.js';
+import { judgeRubric, chooseJudges, findConflicts, valueText } from './rubric.js';
 
 const caseId = /^[a-z0-9][a-z0-9-]{0,79}$/;
 const reservedRoots = new Set(['inputs', 'state', 'environment', 'run']);
@@ -139,17 +139,36 @@ export async function outcomeOfRun(runDir) {
     outputs: outputsFrom(checkpoint), effects: ledger.length ? effectSummary(ledger).effects : [], artifacts: join(runDir, 'artifacts'), files };
 }
 
+const modelKinds = new Set(['call', 'agent', 'classify']);
+const clip = (text, max) => text.length > max ? `${text.slice(0, max)}\n[... ${text.length - max} more characters]` : text;
+/** The instructions of the model steps of a recorded run, each with the information that the step received. */
+function standingInstructions(recorded) {
+  const parts = [];
+  for (const [id, step] of Object.entries(recorded.method.steps ?? {})) {
+    const exec = step.do;
+    if (!modelKinds.has(exec?.kind)) continue;
+    const told = exec.kind === 'classify' ? [exec.question, exec.options ? JSON.stringify(exec.options) : ''].filter(Boolean).join('\n') : exec.prompt;
+    const received = recorded.iterations[id]?.find(Boolean)?.inputs;
+    parts.push([`Step ${id} (${step.name ?? id})`, 'Instructions:', told, ...(received ? ['Information it received:', clip(valueText(received), 40_000)] : [])].join('\n'));
+  }
+  return parts.join('\n\n---\n\n');
+}
+/** The rules of a case as plain sentences, for the conflict judge. */
+const caseRules = expect => expect.flatMap((item, i) => item.kind === 'rubric' ? item.criteria.map(c => ({ id: c.id, text: c.text }))
+  : item.kind === 'equals' ? [{ id: `e${i + 1}`, text: `${item.ref} equals ${JSON.stringify(item.value)}` }] : []);
+
 /**
  * Record a case from a run that went wrong. The case must fail on that run: otherwise it does not capture the
  * problem, or the note does not match the run. With a passing run (the output the person accepted after the fix),
  * the case must pass on it. A case from a passing run alone pins behaviour that is already right. A rubric's judge
- * is calibrated on the runs it has.
+ * is calibrated on the runs it has. A case that can pass only by breaking an instruction of the Method's model steps is
+ * refused, unless the person's answer accepts the conflict.
  * @param {{methodFile: string, runDir?: string | undefined, id: string, note: string, author?: string | null | undefined, expect?: any[] | undefined, rubric?: string[] | undefined,
  *   ref?: string | undefined, context?: string[] | undefined, passingRun?: string | undefined, observations?: Record<string, any[]> | undefined, redact?: Record<string, string> | undefined,
  *   runs?: number | undefined, minPass?: number | undefined, retentionDays?: number | undefined, supersedes?: string[] | undefined, casesDir?: string | undefined,
- *   config?: any, options?: any}} input
+ *   acceptConflict?: string | undefined, config?: any, options?: any}} input
  */
-export async function createCase({ methodFile, runDir, id, note, author, expect = [], rubric = [], ref, context = [], passingRun, observations = {}, redact, runs, minPass, retentionDays = 365, supersedes = [], casesDir = defaultCasesDir(methodFile), config = {}, options = {} }) {
+export async function createCase({ methodFile, runDir, id, note, author, expect = [], rubric = [], ref, context = [], passingRun, observations = {}, redact, runs, minPass, retentionDays = 365, supersedes = [], casesDir = defaultCasesDir(methodFile), acceptConflict, config = {}, options = {} }) {
   if (!caseId.test(id ?? '')) fail('setup', 'Case IDs use lowercase letters, digits and hyphens', 'case_invalid');
   if (typeof note !== 'string' || !note.trim()) fail('setup', 'A case records the correction note: --note "the person\'s words"', 'case_invalid');
   if (!runDir && !passingRun) fail('setup', 'Give the run that went wrong (--run), the run that was right (--passing-run), or both', 'case_invalid');
@@ -193,6 +212,12 @@ export async function createCase({ methodFile, runDir, id, note, author, expect 
       const item = expect.find(e => e.kind === 'rubric');
       if (item) examples.push({ run: 'passing', labels: Object.fromEntries(item.criteria.map(c => [c.id, true])), value: valueText(lookup(await outcomeOfRun(passingRun), item.ref).value) });
     }
+    // A rule that only an invented detail or a broken instruction can meet would make later versions break that instruction.
+    const rules = caseRules(expect);
+    const judged = expect.some(item => item.kind === 'rubric') || config.models?.judge || options.runOptions?.agent;
+    const instructions = standingInstructions(recorded);
+    const conflicts = rules.length && judged && instructions ? await findConflicts({ rules, note, instructions, config, options }) : [];
+    if (conflicts.length && !acceptConflict?.trim()) fail('method_code', `This case can pass only by breaking an instruction of the Method: ${conflicts.map(c => `"${c.text}" breaks "${c.instruction}" (${c.reason})`).join('; ')}. Ask the person which one is right before you save the case. When the case is right, change the instruction first; to keep both, add --accept-conflict with the person's answer.`, 'case_conflicts');
     // The fast judge is used for a criterion only when it agrees with these examples.
     for (const item of expect.filter(e => e.kind === 'rubric')) {
       const judges = await chooseJudges({ criteria: item.criteria, examples, config, options });
@@ -214,7 +239,7 @@ export async function createCase({ methodFile, runDir, id, note, author, expect 
     const value = {
       format: 'method-case/1', id, status: 'active', method_file: basename(methodFile), note: applyRedaction(note, redact), author: author ?? null,
       created: created.toISOString(), source: { run_dir: pathResolve(runDir ?? passingRun), execution_id: recorded.execution_id, method_sha256: recorded.method_sha256, ...(passingRun ? { passing_run_dir: pathResolve(passingRun) } : {}) },
-      expect, runs: runs ?? null, min_pass: minPass ?? null, supersedes, superseded_by: null, ...(Object.keys(keptFiles).length ? { files: keptFiles } : {}),
+      expect, runs: runs ?? null, min_pass: minPass ?? null, supersedes, superseded_by: null, ...(conflicts.length ? { accepted_conflicts: { answer: applyRedaction(acceptConflict, redact), conflicts: applyRedaction(conflicts, redact) } } : {}), ...(Object.keys(keptFiles).length ? { files: keptFiles } : {}),
       retention_until: new Date(created.getTime() + retentionDays * 86_400_000).toISOString().slice(0, 10), redacted: !!(redact && Object.keys(redact).length),
     };
     await writeJSON(join(dir, 'recording.json'), recording);

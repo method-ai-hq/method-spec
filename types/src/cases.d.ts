@@ -66,13 +66,14 @@ export function outcomeOfRun(runDir: any): Promise<{
  * Record a case from a run that went wrong. The case must fail on that run: otherwise it does not capture the
  * problem, or the note does not match the run. With a passing run (the output the person accepted after the fix),
  * the case must pass on it. A case from a passing run alone pins behaviour that is already right. A rubric's judge
- * is calibrated on the runs it has.
+ * is calibrated on the runs it has. A case that can pass only by breaking an instruction of the Method's model steps is
+ * refused, unless the person's answer accepts the conflict.
  * @param {{methodFile: string, runDir?: string | undefined, id: string, note: string, author?: string | null | undefined, expect?: any[] | undefined, rubric?: string[] | undefined,
  *   ref?: string | undefined, context?: string[] | undefined, passingRun?: string | undefined, observations?: Record<string, any[]> | undefined, redact?: Record<string, string> | undefined,
  *   runs?: number | undefined, minPass?: number | undefined, retentionDays?: number | undefined, supersedes?: string[] | undefined, casesDir?: string | undefined,
- *   config?: any, options?: any}} input
+ *   acceptConflict?: string | undefined, config?: any, options?: any}} input
  */
-export function createCase({ methodFile, runDir, id, note, author, expect, rubric, ref, context, passingRun, observations, redact, runs, minPass, retentionDays, supersedes, casesDir, config, options }: {
+export function createCase({ methodFile, runDir, id, note, author, expect, rubric, ref, context, passingRun, observations, redact, runs, minPass, retentionDays, supersedes, casesDir, acceptConflict, config, options }: {
     methodFile: string;
     runDir?: string | undefined;
     id: string;
@@ -90,6 +91,7 @@ export function createCase({ methodFile, runDir, id, note, author, expect, rubri
     retentionDays?: number | undefined;
     supersedes?: string[] | undefined;
     casesDir?: string | undefined;
+    acceptConflict?: string | undefined;
     config?: any;
     options?: any;
 }): Promise<{
@@ -146,6 +148,10 @@ export function createCase({ methodFile, runDir, id, note, author, expect, rubri
     retention_until: string;
     redacted: boolean;
     files?: {};
+    accepted_conflicts?: {
+        answer: any;
+        conflicts: any;
+    };
     format: string;
     id: string;
     status: string;

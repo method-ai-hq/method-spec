@@ -44,26 +44,31 @@ async function cached(key, compute, cacheDir) {
   return value;
 }
 
-/** One vote of the model judge on every criterion. */
-async function modelVote(text, criteria, config, options, context) {
+/** Run a one-step judge Method with the judge model and return its result. */
+async function runJudge(method, inputs, config, options) {
   const { runMethod } = await import('./runner.js');
   const dir = await mkdtemp(join(tmpdir(), 'method-judge-'));
   try {
     const file = join(dir, 'judge.method');
-    await writeFile(file, JSON.stringify(judgeMethod));
-    const result = await runMethod(file, { ...config, allow_local_processes: true }, { ...options.runOptions, runDir: join(dir, 'run'),
-      inputs: { value: text, criteria: JSON.stringify(criteria.map(({ id, text }) => ({ id, text }))), context: context || '(none)' }, replay: undefined });
-    if (result.status !== 'completed') fail('outside_service', `The rubric judge did not finish: ${result.failure?.headline ?? result.status}`, 'judge_failed');
-    const byId = new Map(result.result.map(v => [v.id, v]));
-    const quoted = normalize(text);
-    return criteria.map(({ id }) => {
-      const verdict = byId.get(id);
-      if (!verdict) return { id, pass: false, quote: '', reason: 'The judge gave no verdict for this criterion.' };
-      // A judge that invents support is wrong, whatever it decided.
-      if (verdict.quote.trim() && !quoted.includes(normalize(verdict.quote))) return { ...verdict, pass: false, reason: `The quote is not in the text: "${verdict.quote.slice(0, 120)}"` };
-      return verdict;
-    });
+    await writeFile(file, JSON.stringify(method));
+    const result = await runMethod(file, { ...config, allow_local_processes: true }, { ...options.runOptions, runDir: join(dir, 'run'), inputs, replay: undefined });
+    if (result.status !== 'completed') fail('outside_service', `The ${method.name.toLowerCase()} did not finish: ${result.failure?.headline ?? result.status}`, 'judge_failed');
+    return result.result;
   } finally { await rm(dir, { recursive: true, force: true }); }
+}
+
+/** One vote of the model judge on every criterion. */
+async function modelVote(text, criteria, config, options, context) {
+  const verdicts = await runJudge(judgeMethod, { value: text, criteria: JSON.stringify(criteria.map(({ id, text }) => ({ id, text }))), context: context || '(none)' }, config, options);
+  const byId = new Map(verdicts.map(v => [v.id, v]));
+  const quoted = normalize(text);
+  return criteria.map(({ id }) => {
+    const verdict = byId.get(id);
+    if (!verdict) return { id, pass: false, quote: '', reason: 'The judge gave no verdict for this criterion.' };
+    // A judge that invents support is wrong, whatever it decided.
+    if (verdict.quote.trim() && !quoted.includes(normalize(verdict.quote))) return { ...verdict, pass: false, reason: `The quote is not in the text: "${verdict.quote.slice(0, 120)}"` };
+    return verdict;
+  });
 }
 
 /** The classification judge's probability that a value meets one criterion. */
@@ -108,6 +113,47 @@ export async function judgeRubric({ value, criteria, context, judges = {}, confi
     }
   }
   return { status: results.every(r => r.pass) ? 'pass' : 'fail', criteria: results, judge_calls: calls };
+}
+
+const conflictMethod = {
+  format: 'method/3.3', name: 'Case conflict judge', goal: 'Find the rules of a new case that can be met only by breaking an instruction of the Method.',
+  inputs: { rules: { type: 'text' }, note: { type: 'text' }, instructions: { type: 'text' } },
+  steps: {
+    judge: {
+      name: 'Find conflicts',
+      in: { rules: 'inputs.rules', note: 'inputs.note', instructions: 'inputs.instructions' },
+      do: { kind: 'call', model: 'judge', prompt: [
+        'A person corrected a run of a Method. The rules below will become a case: every later version of the Method must meet them on the same inputs.',
+        'Below the rules are the instructions of the Method\'s model steps and the information that each step received on that run.',
+        'For each rule, decide whether an output can meet it while it follows every instruction and uses only the information received.',
+        'Report a conflict only when the rule cannot be met without breaking an instruction: for example, the rule needs a detail that the information does not give, and an instruction forbids inventing such details.',
+        'For each conflict, return rule (the rule id), instruction (words copied exactly from the instructions that the rule would break), and reason (one sentence that names what is missing or what the rule forces).',
+        'Return an empty list when no rule conflicts. Do not report a conflict that depends on information you cannot see. Do not open files, run commands, or use outside knowledge.',
+        '', 'The person\'s words:', '{{note}}', '', 'Rules (JSON):', '{{rules}}', '', 'Instructions and information:', '{{instructions}}',
+      ].join('\n') },
+      out: { conflicts: { type: 'list', fields: { rule: 'text', instruction: 'text', reason: 'text' } } },
+    },
+  },
+  result: 'conflicts',
+};
+
+/**
+ * Find the rules of a new case that can be met only by breaking a standing instruction, such as "Do not invent missing
+ * jurisdictions" when the inputs give no jurisdiction. A rule conflicts when most judge votes report it with an
+ * instruction that is copied exactly from the instructions.
+ * @param {{rules: Array<{id: string, text: string}>, note: string, instructions: string, config: any, options?: any}} input
+ */
+export async function findConflicts({ rules, note, instructions, config, options = {} }) {
+  const runs = rubricSettings(config).judge_runs;
+  const inputs = { rules: JSON.stringify(rules), note, instructions };
+  const votes = await Promise.all(Array.from({ length: runs }, () => runJudge(conflictMethod, inputs, config, options)));
+  const given = normalize(instructions);
+  const conflicts = [];
+  for (const rule of rules) {
+    const found = votes.map(vote => vote.find(c => c.rule === rule.id && c.instruction.trim() && given.includes(normalize(c.instruction)))).filter(Boolean);
+    if (found.length * 2 > runs) conflicts.push({ rule: rule.id, text: rule.text, instruction: found[0].instruction, reason: found[0].reason });
+  }
+  return conflicts;
 }
 
 /**

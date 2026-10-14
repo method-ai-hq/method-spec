@@ -1,6 +1,6 @@
 # Method reference
 
-Implemented by `@withmethod/runtime` 0.14.0. The full Method SDK uses this runtime at a pinned Git revision. New methods use this format under the same Method product and command.
+Implemented by `@withmethod/runtime` 0.14.1. The full Method SDK uses this runtime at a pinned Git revision. New methods use this format under the same Method product and command.
 
 Use `format: method/3.4` for new documents. Existing `method/3.1`, `method/3.2`, and `method/3.3` documents load and run unchanged. All formats share one set of rules, with two exceptions that keep saved documents running: before `method/3.3`, an external change needs no effect; before `method/3.4`, a plain model name can name a configured profile (or a saved package's `runtime.json` model). Method 3.3 adds effect contracts: an external change is confirmed by an observer, not by the action's receipt. Method 3.4 adds the Method ID, the Method's own `models`, `limits`, and `tools`, model IDs on steps, and accepted warnings (see [Method 3.4](#method-34)). The machine-readable grammar is [method-3.schema.json](method-3.schema.json). Operator configuration uses [runtime-config.schema.json](runtime-config.schema.json). The validator also checks references, dependencies, data declarations, loop conditions, and effects; JSON Schema alone is insufficient.
 
@@ -393,6 +393,8 @@ method case retire task.method old-rule --by new-rule --reason "Policy changed o
 A case keeps the copies of the files that its source run wrote, and a rubric judges a path inside a files connection by that run's copy, not by the file on disk now.
 
 `--run` is the run that went wrong. The case must **fail** on it; otherwise the case does not capture the problem, or the note does not match what the run did, and `case new` refuses it (`case_not_red`). `--passing-run` is the run that the person accepted after the fix; the case must **pass** on it (`case_not_green`). A case with only `--passing-run` pins behaviour that is already right.
+
+`case new` also checks the case against the instructions of the Method's model steps and the information each step received on the recorded run. When a rule can be met only by breaking an instruction (for example, the rule needs a jurisdiction that the inputs do not give, and a prompt says "Do not invent missing jurisdictions"), `case new` refuses the case (`case_conflicts`) and names the rule and the instruction. Ask the person which one is right. When the case is right, change the instruction first. To keep both, add `--accept-conflict "the person's answer"`; `case.json` keeps the answer and the conflicts in `accepted_conflicts`.
 
 `case new` reads the run's events and saves `recording.json` (each accepted iteration's inputs and outputs, a key for each step, the run's inputs and initial state, and the run's effect observations), the declared files of its steps, and `case.json` (note, author, source run, expectations, `runs`, `min_pass`, retention date). `--observations FILE` adds observations by effect key (`STEP/ITERATION/NAME`). `--redact FILE` maps recorded text to replacement text everywhere in the recording and the note.
 

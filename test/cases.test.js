@@ -297,3 +297,35 @@ test('a case with a live model step runs more than once, stops at a failed run, 
   assert.equal(flaky.cases[0].candidate.runs, n);
   assert.equal(flaky.cases[0].candidate.attempts.at(-1).status, 'fail');
 });
+
+test('a case that can pass only by breaking an instruction is refused until the person accepts the conflict', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'method-conflict-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const rules = 'Draft the NDA from the request. Do not invent missing company details, addresses, purposes, jurisdictions, dates or signatories.';
+  const doc = { format: 'method/3.3', name: 'NDA', goal: 'Draft an NDA.', inputs: { request: { type: 'text' } },
+    steps: { draft: { name: 'Draft', in: { request: 'inputs.request' }, do: { kind: 'call', model: 'model', prompt: rules }, out: { nda: { type: 'text' } } } }, result: 'nda' };
+  const file = join(dir, 'nda.method'); await writeFile(file, JSON.stringify(doc));
+  const cfg = { ...withJudge(config({})), models: { ...withJudge(config({})).models, model: { backend: 'openai-responses', model: 'test-model', api_key_env: 'METHOD_TEST_UNUSED_KEY', max_output_tokens: 100 } } };
+  const reply = value => ({ status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify(value) }] }], usage: { input_tokens: 1, output_tokens: 1 } });
+  await runMethod(file, cfg, { runDir: join(dir, 'run'), inputs: { request: 'An NDA for Whiskerwell Foods Limited. No jurisdiction given.' }, transport: async () => reply({ nda: 'Party: Whiskerwell Foods Limited. Jurisdiction: [to be confirmed]' }) });
+  // The judge model: the NDA fails the rule, and the conflict judge quotes the instruction (or a sentence that is not in it).
+  let quote = 'Do not invent missing company details, addresses, purposes, jurisdictions';
+  const prompts = [];
+  const transport = async body => {
+    const prompt = JSON.stringify(body); prompts.push(prompt);
+    if (prompt.includes('Rules (JSON)')) return reply({ conflicts: [{ rule: 'c1', instruction: quote, reason: 'The request gives no jurisdiction.' }] });
+    return reply({ verdicts: [{ id: 'c1', pass: false, quote: '', reason: 'No jurisdiction is named.' }] });
+  };
+  const make = (id, extra = {}) => createCase({ methodFile: file, runDir: join(dir, 'run'), id, note: 'it just won\'t attach the completed document',
+    rubric: ['The NDA names the jurisdiction of Whiskerwell Foods Limited.'], config: cfg, options: { runOptions: { transport }, cacheDir: join(dir, 'cache') }, ...extra });
+  await assert.rejects(make('jurisdiction'), error => error.code === 'case_conflicts' && /breaks "Do not invent missing company details/.test(error.message));
+  assert.ok(prompts.some(p => p.includes('No jurisdiction given')), 'the judge reads what the step received');
+  assert.deepEqual(await listCases(file), []);
+  const accepted = await make('jurisdiction', { acceptConflict: 'Fill it in from the company number.' });
+  assert.equal(accepted.accepted_conflicts.answer, 'Fill it in from the company number.');
+  assert.equal(accepted.accepted_conflicts.conflicts[0].rule, 'c1');
+  // A quote that is not in the instructions is not a conflict.
+  quote = 'Always state a jurisdiction.';
+  const kept = await make('jurisdiction-2');
+  assert.equal(kept.accepted_conflicts, undefined);
+});
