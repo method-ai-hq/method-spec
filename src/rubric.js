@@ -126,7 +126,7 @@ const conflictMethod = {
         'A person corrected a run of a Method. The rules below will become a case: every later version of the Method must meet them on the same inputs.',
         'Below the rules are the instructions of the Method\'s model steps and the information that each step received on that run.',
         'For each rule, decide whether an output can meet it while it follows every instruction and uses only the information received.',
-        'Report a conflict only when the rule cannot be met without breaking an instruction: for example, the rule needs a detail that the information does not give, and an instruction forbids inventing such details.',
+        'Report a conflict only when the rule cannot be met without breaking an instruction. Two common kinds: the rule needs a fact that the information does not give, and an instruction forbids inventing or assuming facts; or the rule requires an action, a content, or a form that an instruction forbids or limits.',
         'For each conflict, return rule (the rule id), instruction (words copied exactly from the instructions that the rule would break), and reason (one sentence that names what is missing or what the rule forces).',
         'Return an empty list when no rule conflicts. Do not report a conflict that depends on information you cannot see. Do not open files, run commands, or use outside knowledge.',
         '', 'The person\'s words:', '{{note}}', '', 'Rules (JSON):', '{{rules}}', '', 'Instructions and information:', '{{instructions}}',
@@ -138,9 +138,9 @@ const conflictMethod = {
 };
 
 /**
- * Find the rules of a new case that can be met only by breaking a standing instruction, such as "Do not invent missing
- * jurisdictions" when the inputs give no jurisdiction. A rule conflicts when most judge votes report it with an
- * instruction that is copied exactly from the instructions.
+ * Find the rules of a new case that can be met only by breaking a standing instruction: a rule that needs a fact the
+ * inputs do not give when an instruction forbids inventing it, or a rule that requires what an instruction forbids. A
+ * rule conflicts when most judge votes report it with an instruction that is copied exactly from the instructions.
  * @param {{rules: Array<{id: string, text: string}>, note: string, instructions: string, config: any, options?: any}} input
  */
 export async function findConflicts({ rules, note, instructions, config, options = {} }) {

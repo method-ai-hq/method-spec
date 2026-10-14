@@ -34,9 +34,9 @@ export function judgeRubric({ value, criteria, context, judges, config, options 
     judge_calls: number;
 }>;
 /**
- * Find the rules of a new case that can be met only by breaking a standing instruction, such as "Do not invent missing
- * jurisdictions" when the inputs give no jurisdiction. A rule conflicts when most judge votes report it with an
- * instruction that is copied exactly from the instructions.
+ * Find the rules of a new case that can be met only by breaking a standing instruction: a rule that needs a fact the
+ * inputs do not give when an instruction forbids inventing it, or a rule that requires what an instruction forbids. A
+ * rule conflicts when most judge votes report it with an instruction that is copied exactly from the instructions.
  * @param {{rules: Array<{id: string, text: string}>, note: string, instructions: string, config: any, options?: any}} input
  */
 export function findConflicts({ rules, note, instructions, config, options }: {
