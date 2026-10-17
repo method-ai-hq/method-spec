@@ -58,24 +58,17 @@ export async function agentSignedIn(backend, command = backend) {
 }
 
 /**
- * The local agents that are installed and signed in, in the order of choice: the agent that started the run first,
- * then Claude Code, then Codex. env supplies the caller variables and PATH.
- */
-export async function localAgents(env = process.env) {
-  const caller = callerAgent(env), found = [];
-  for (const name of [...new Set([caller, 'claude', 'codex'].filter(Boolean))]) {
-    const path = await onPath(name, env);
-    if (path && await agentSignedIn(name, path)) found.push(name);
-  }
-  return found;
-}
-
-/**
  * The local agent for model steps that name no model: the agent that started the run, when it is installed and
  * signed in; otherwise an installed, signed-in Claude Code or Codex (Claude Code when both are). Undefined when there is none.
+ * env supplies the caller variables and PATH.
  */
 export async function localAgent(env = process.env) {
-  return (await localAgents(env))[0];
+  const caller = callerAgent(env);
+  for (const name of [...new Set([caller, 'claude', 'codex'].filter(Boolean))]) {
+    const path = await onPath(name, env);
+    if (path && await agentSignedIn(name, path)) return name;
+  }
+  return undefined;
 }
 
 /**

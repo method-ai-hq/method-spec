@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resolveModels, localAgent, localAgents, callerAgent } from '../src/agents.js';
+import { resolveModels, localAgent, callerAgent } from '../src/agents.js';
 const method={steps:{write:{do:{kind:'agent',model:'writer'}}}};
 const plain={steps:{write:{do:{kind:'agent',model:'default'}}}};
 
@@ -42,13 +42,6 @@ test('without a caller, an installed and signed-in agent is used: Claude Code wh
  // A caller that is not installed or not signed in is skipped too.
  assert.equal(await localAgent({PATH:await installed(t,{codex:true}),CLAUDECODE:'1'}),'codex');
  assert.equal(await localAgent({PATH:await installed(t,{codex:true,claude:false}),CLAUDECODE:'1'}),'codex');
-});
-
-test('every signed-in local agent is listed in the order of choice, the caller first',async t=>{
- assert.deepEqual(await localAgents({PATH:await installed(t,{codex:true,claude:true}),CODEX_THREAD_ID:'task'}),['codex','claude']);
- assert.deepEqual(await localAgents({PATH:await installed(t,{codex:true,claude:true})}),['claude','codex']);
- assert.deepEqual(await localAgents({PATH:await installed(t,{codex:false,claude:true})}),['claude']);
- assert.deepEqual(await localAgents({PATH:await installed(t,{claude:false})}),[]);
 });
 
 test('hosted models are used only when no local agent can run the step',async t=>{
