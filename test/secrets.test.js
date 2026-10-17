@@ -25,7 +25,7 @@ test('a missing secret stops the run before any step and names the secret', asyn
   await assert.rejects(f.run({ secrets: {} }), error => error.code === 'missing_secret' && error.missing[0] === 'ARCHIVE_TOKEN');
   // Every variable that the runtime sets for scripts is reserved; a secret cannot replace it.
   for (const name of [...scriptVariables, 'METHOD_OPERATION_ID']) assert.throws(() => validateMethod(method({ secrets: { [name]: 'Not allowed.' } })), name);
-  assert.deepEqual([...scriptVariables].sort(), ['HOME', 'LANG', 'PATH', 'TMPDIR', 'USER']);
+  assert.deepEqual([...scriptVariables].sort(), ['CLAUDECODE', 'CODEX_THREAD_ID', 'HOME', 'LANG', 'PATH', 'TMPDIR', 'USER']);
 });
 
 test('an each item named again in in gets an error that says so', () => {
