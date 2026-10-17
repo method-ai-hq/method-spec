@@ -149,7 +149,7 @@ test('the calling agent is chosen before a hosted model; configured profiles win
   const { resolveModels } = await import('../src/agents.js');
   const doc = method(step());
   const bin = await mkdtemp(join(tmpdir(), 'method-caller-')); t.after(() => rm(bin, { recursive: true, force: true }));
-  await writeFile(join(bin, 'claude'), '#!/bin/sh\n', { mode: 0o700 });
+  await writeFile(join(bin, 'claude'), '#!/bin/sh\necho \'{"loggedIn": true}\'\n', { mode: 0o700 });
   const env = { CLAUDECODE: '1', PATH: bin };
   assert.deepEqual((await resolveModels(doc, {}, { hostedModel: 'x/y', env })).model, { backend: 'claude' });
   assert.deepEqual((await resolveModels(doc, {}, { hostedModel: 'x/y', env: {} })).model, { backend: 'method', model: 'x/y' });

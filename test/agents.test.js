@@ -39,8 +39,9 @@ test('without a caller, an installed and signed-in agent is used: Claude Code wh
  assert.equal(await localAgent({PATH:await installed(t,{claude:true})}),'claude');
  // A signed-out agent is skipped.
  assert.equal(await localAgent({PATH:await installed(t,{codex:true,claude:false})}),'codex');
- // A caller that is not installed is skipped too.
+ // A caller that is not installed or not signed in is skipped too.
  assert.equal(await localAgent({PATH:await installed(t,{codex:true}),CLAUDECODE:'1'}),'codex');
+ assert.equal(await localAgent({PATH:await installed(t,{codex:true,claude:false}),CLAUDECODE:'1'}),'codex');
 });
 
 test('hosted models are used only when no local agent can run the step',async t=>{
