@@ -4,7 +4,9 @@ const ref = { type: 'string', pattern: '^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*|\\
 const positive = { type: 'integer', minimum: 1, maximum: 2147483647 };
 const keyEnv = { type: 'string', pattern: '^[A-Z_][A-Z0-9_]*$' };
 // Variables that a script gets from the caller's environment, and every variable the runtime sets for a script.
-export const callerVariables = ['HOME', 'USER', 'TMPDIR'];
+// CLAUDECODE and CODEX_THREAD_ID name the coding agent that started the run, so a script that runs `method` (such as
+// improve.method's model requests) uses the same agent as the run's own model steps.
+export const callerVariables = ['HOME', 'USER', 'TMPDIR', 'CLAUDECODE', 'CODEX_THREAD_ID'];
 export const scriptVariables = ['PATH', 'LANG', ...callerVariables];
 // A secret name is an environment variable name. Names that the runtime sets for scripts are reserved.
 const secretName = { type: 'string', pattern: '^[A-Z][A-Z0-9_]*$', not: { anyOf: [{ enum: scriptVariables }, { pattern: '^METHOD_' }] } };

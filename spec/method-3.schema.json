@@ -390,7 +390,9 @@
                 "LANG",
                 "HOME",
                 "USER",
-                "TMPDIR"
+                "TMPDIR",
+                "CLAUDECODE",
+                "CODEX_THREAD_ID"
               ]
             },
             {
