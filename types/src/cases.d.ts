@@ -185,13 +185,16 @@ export function retireCase(methodFile: string, id: string, { by, reason, casesDi
 /**
  * Replay one case against a Method file. Files connections are bound to fresh scratch folders, so a changed step
  * that writes files can run safely. Only the steps the expectations need run. A strict case stops at its first
- * failed run.
+ * failed run. once: one run decides, for a quick check such as the improvement loop's.
  * @param {string} methodFile
  * @param {any} config
  * @param {any} testCaseValue
  * @param {any} [runOptions]
+ * @param {{once?: boolean}} [check]
  */
-export function testCase(methodFile: string, config: any, testCaseValue: any, runOptions?: any): Promise<{
+export function testCase(methodFile: string, config: any, testCaseValue: any, runOptions?: any, { once }?: {
+    once?: boolean;
+}): Promise<{
     attempts: ({
         live_steps: any[];
         live_model_steps: any[];
@@ -242,18 +245,19 @@ export function testCase(methodFile: string, config: any, testCaseValue: any, ru
 /**
  * Test a Method version against its active cases. Every active case must pass. With a baseline (the version
  * before a change), each case also runs on the old version, to show what the change fixed or broke. New cases
- * must fail on the baseline and pass on the candidate.
+ * must fail on the baseline and pass on the candidate. once: each case runs once, even when a model step runs live.
  * @param {string} methodFile
  * @param {any} config
- * @param {{casesDir?: string | undefined, ids?: string[] | undefined, baseline?: string | undefined, newIds?: string[] | undefined, runOptions?: any, concurrency?: number | undefined}} [options]
+ * @param {{casesDir?: string | undefined, ids?: string[] | undefined, baseline?: string | undefined, newIds?: string[] | undefined, runOptions?: any, concurrency?: number | undefined, once?: boolean | undefined}} [options]
  */
-export function testSuite(methodFile: string, config: any, { casesDir, ids, baseline, newIds, runOptions, concurrency }?: {
+export function testSuite(methodFile: string, config: any, { casesDir, ids, baseline, newIds, runOptions, concurrency, once }?: {
     casesDir?: string | undefined;
     ids?: string[] | undefined;
     baseline?: string | undefined;
     newIds?: string[] | undefined;
     runOptions?: any;
     concurrency?: number | undefined;
+    once?: boolean | undefined;
 }): Promise<{
     counts: {
         [k: string]: number;

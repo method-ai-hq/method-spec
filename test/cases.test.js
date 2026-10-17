@@ -296,6 +296,9 @@ test('a case with a live model step runs more than once, stops at a failed run, 
   // The case stops at its first failed run.
   assert.equal(flaky.cases[0].candidate.runs, n);
   assert.equal(flaky.cases[0].candidate.attempts.at(-1).status, 'fail');
+  // A quick check runs each case once, also with a live model step.
+  const quick = await testSuite(file, cfg, { once: true, runOptions: { transport: async () => answer('hello') } });
+  assert.equal(quick.cases[0].candidate.runs, 1); assert.equal(quick.cases[0].verdict, 'pass'); assert.equal(quick.totals.live_model_steps, 1);
 });
 
 test('a case that can pass only by breaking an instruction is refused until the person accepts the conflict', async t => {

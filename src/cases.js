@@ -292,13 +292,14 @@ function neededSteps(method, expect) {
 /**
  * Replay one case against a Method file. Files connections are bound to fresh scratch folders, so a changed step
  * that writes files can run safely. Only the steps the expectations need run. A strict case stops at its first
- * failed run.
+ * failed run. once: one run decides, for a quick check such as the improvement loop's.
  * @param {string} methodFile
  * @param {any} config
  * @param {any} testCaseValue
  * @param {any} [runOptions]
+ * @param {{once?: boolean}} [check]
  */
-export async function testCase(methodFile, config, testCaseValue, runOptions = {}) {
+export async function testCase(methodFile, config, testCaseValue, runOptions = {}, { once = false } = {}) {
   const started = performance.now();
   const recording = await readJSON(join(testCaseValue.dir, 'recording.json'));
   const artifacts = join(testCaseValue.dir, 'artifacts');
@@ -310,7 +311,7 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
     .filter(name => method.environment?.[name]?.type === 'files'));
   const parent = await mkdtemp(join(tmpdir(), 'method-case-'));
   try {
-    let total = testCaseValue.runs ?? 1, minPass = testCaseValue.min_pass ?? total;
+    let total = once ? 1 : testCaseValue.runs ?? 1, minPass = once ? 1 : testCaseValue.min_pass ?? total;
     for (let n = 0; n < total; n++) {
       const runDir = join(parent, `run-${n + 1}`);
       const environment = { ...config.environment }, paths = {};
@@ -337,14 +338,14 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
       attempts.push({ ...evaluation, run_status: result.status, ...(result.failure ? { failure: { code: result.failure.code, headline: result.failure.headline } } : {}), live_steps: live, live_model_steps: liveModel,
         judge_calls: evaluation.results.reduce((sum, r) => sum + (r.judge_calls ?? 0), 0) });
       // A model step that runs live can answer differently each time, so it must pass three runs.
-      if (testCaseValue.runs == null && n === 0 && liveModel.length) { total = 3; minPass = testCaseValue.min_pass ?? 3; }
+      if (!once && testCaseValue.runs == null && n === 0 && liveModel.length) { total = 3; minPass = testCaseValue.min_pass ?? 3; }
       const passes = attempts.filter(a => a.status === 'pass').length, failures = attempts.length - passes;
       // Stop as soon as the result is decided.
       if (passes >= minPass || failures > total - minPass) break;
     }
   } finally { await rm(parent, { recursive: true, force: true }); }
   const passes = attempts.filter(a => a.status === 'pass').length;
-  const needed = testCaseValue.min_pass ?? (attempts.some(a => a.live_model_steps?.length) ? 3 : 1);
+  const needed = once ? 1 : testCaseValue.min_pass ?? (attempts.some(a => a.live_model_steps?.length) ? 3 : 1);
   const status = attempts.some(a => a.status === 'unverifiable') ? 'unverifiable' : passes >= needed ? 'pass' : 'fail';
   // Passing some runs and failing another means the Method does not follow the rule reliably.
   const unreliable = status === 'fail' && passes > 0;
@@ -398,20 +399,20 @@ async function changedFirst(methodFile, config, cases) {
 /**
  * Test a Method version against its active cases. Every active case must pass. With a baseline (the version
  * before a change), each case also runs on the old version, to show what the change fixed or broke. New cases
- * must fail on the baseline and pass on the candidate.
+ * must fail on the baseline and pass on the candidate. once: each case runs once, even when a model step runs live.
  * @param {string} methodFile
  * @param {any} config
- * @param {{casesDir?: string | undefined, ids?: string[] | undefined, baseline?: string | undefined, newIds?: string[] | undefined, runOptions?: any, concurrency?: number | undefined}} [options]
+ * @param {{casesDir?: string | undefined, ids?: string[] | undefined, baseline?: string | undefined, newIds?: string[] | undefined, runOptions?: any, concurrency?: number | undefined, once?: boolean | undefined}} [options]
  */
-export async function testSuite(methodFile, config, { casesDir = defaultCasesDir(methodFile), ids, baseline, newIds = [], runOptions = {}, concurrency = 4 } = {}) {
+export async function testSuite(methodFile, config, { casesDir = defaultCasesDir(methodFile), ids, baseline, newIds = [], runOptions = {}, concurrency = 4, once = false } = {}) {
   const suiteStarted = performance.now();
   const today = new Date().toISOString().slice(0, 10);
   const all = await listCases(methodFile, casesDir);
   for (const id of [...(ids ?? []), ...newIds]) if (!all.some(c => c.id === id)) fail('setup', `No case ${id} for ${basename(methodFile)}`, 'case_invalid');
   const selected = await changedFirst(methodFile, config, all.filter(c => c.status === 'active' && (!ids || ids.includes(c.id) || newIds.includes(c.id))));
   const report = await parallel(selected, concurrency, async item => {
-    const candidate = await testCase(methodFile, config, item, runOptions);
-    const before = baseline ? await testCase(baseline, config, item, runOptions) : null;
+    const candidate = await testCase(methodFile, config, item, runOptions, { once });
+    const before = baseline ? await testCase(baseline, config, item, runOptions, { once }) : null;
     let verdict;
     if (newIds.includes(item.id)) verdict = before?.status === 'pass' ? 'not_red' : candidate.status === 'pass' ? 'fixed' : candidate.status === 'unverifiable' ? 'unverifiable' : 'not_fixed';
     else if (candidate.status === 'unverifiable') verdict = 'unverifiable';
