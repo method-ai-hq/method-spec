@@ -90,7 +90,7 @@ export async function judgeRubric({ value, criteria, context, judges = {}, confi
   if (Buffer.byteLength(text) > settings.max_value_bytes) fail('limit', `The judged value exceeds ${settings.max_value_bytes} bytes`, 'judge_failed');
   const modelCriteria = criteria.filter(c => judges[c.id] !== 'classify');
   // The agent that resolves the default judge is part of the key, so a different judge does not reuse old answers.
-  const profile = config?.models?.judge ?? { agent: options.runOptions?.agent ?? config?.models?.default ?? null };
+  const profile = config?.models?.judge ?? { agent: config?.models?.default ?? null };
   const contextText = context === undefined || context === null ? '' : valueText(context);
   const key = hash(['rubric/2', text, contextText, modelCriteria, profile, settings.judge_runs]);
   let calls = 0;

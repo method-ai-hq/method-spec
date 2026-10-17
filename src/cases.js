@@ -214,7 +214,7 @@ export async function createCase({ methodFile, runDir, id, note, author, expect 
     }
     // A rule that only an invented detail or a broken instruction can meet would make later versions break that instruction.
     const rules = caseRules(expect);
-    const judged = expect.some(item => item.kind === 'rubric') || config.models?.judge || options.runOptions?.agent;
+    const judged = expect.some(item => item.kind === 'rubric') || config.models?.judge;
     const instructions = standingInstructions(recorded);
     const conflicts = rules.length && judged && instructions ? await findConflicts({ rules, note, instructions, config, options }) : [];
     if (conflicts.length && !acceptConflict?.trim()) fail('method_code', `This case can pass only by breaking an instruction of the Method: ${conflicts.map(c => `"${c.text}" breaks "${c.instruction}" (${c.reason})`).join('; ')}. Ask the person which one is right before you save the case. When the case is right, change the instruction first; to keep both, add --accept-conflict with the person's answer.`, 'case_conflicts');

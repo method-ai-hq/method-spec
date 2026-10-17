@@ -1,62 +1,79 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveModels } from '../src/agents.js';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { resolveModels, localAgent, callerAgent } from '../src/agents.js';
 const method={steps:{write:{do:{kind:'agent',model:'writer'}}}};
-test('uses caller, lets --agent run every model step, and preserves resumed profiles',async()=>{
- assert.equal((await resolveModels(method,{}, {env:{CLAUDECODE:'1'}})).writer.backend,'claude');
- assert.equal((await resolveModels(method,{}, {env:{CODEX_THREAD_ID:'test'}})).writer.backend,'codex');
- assert.equal((await resolveModels(method,{models:{writer:{backend:'openai-responses'}}},{env:{CLAUDECODE:'1'}})).writer.backend,'openai-responses');
- assert.equal((await resolveModels(method,{models:{writer:{backend:'openai-responses'}}},{agent:'claude'})).writer.backend,'claude');
- assert.equal((await resolveModels(method,{}, {savedModels:{writer:{backend:'codex'}},agent:'claude'})).writer.backend,'codex');
+const plain={steps:{write:{do:{kind:'agent',model:'default'}}}};
+
+/** A PATH folder with fake agents. A signed-in agent answers its status command; a signed-out one exits 1. */
+async function installed(t, agents) {
+ const dir=await mkdtemp(join(tmpdir(),'method-agents-'));
+ t.after(()=>rm(dir,{recursive:true,force:true}));
+ for(const [name,signedIn] of Object.entries(agents)){
+  const status=name==='claude'?`echo '{"loggedIn": ${signedIn}}'`:signedIn?'echo "Logged in"':'exit 1';
+  await writeFile(join(dir,name),`#!/bin/sh\n${status}\n`,{mode:0o700});
+ }
+ return dir;
+}
+
+test('the caller is Claude Code from CLAUDECODE or Codex from CODEX_THREAD_ID, and neither when both are set',()=>{
+ assert.equal(callerAgent({CLAUDECODE:'1'}),'claude');
+ assert.equal(callerAgent({CODEX_THREAD_ID:'task'}),'codex');
+ assert.equal(callerAgent({CLAUDECODE:'1',CODEX_THREAD_ID:'task'}),undefined);
+ assert.equal(callerAgent({}),undefined);
+});
+
+test('a step that names no model runs on the agent that started the run, before an installed one and before hosted models',async t=>{
+ const PATH=await installed(t,{codex:true,claude:true});
+ assert.equal((await resolveModels(plain,{}, {env:{PATH,CODEX_THREAD_ID:'task'},hostedModel:'x/y'})).default.backend,'codex');
+ assert.equal((await resolveModels(plain,{}, {env:{PATH,CLAUDECODE:'1'},hostedModel:'x/y'})).default.backend,'claude');
+ // A step model name with no profile uses the same default.
+ assert.equal((await resolveModels(method,{}, {env:{PATH,CLAUDECODE:'1'},hostedModel:'x/y'})).writer.backend,'claude');
+});
+
+test('without a caller, an installed and signed-in agent is used: Claude Code when both are',async t=>{
+ assert.equal(await localAgent({PATH:await installed(t,{codex:true,claude:true})}),'claude');
+ assert.equal(await localAgent({PATH:await installed(t,{codex:true})}),'codex');
+ assert.equal(await localAgent({PATH:await installed(t,{claude:true})}),'claude');
+ // A signed-out agent is skipped.
+ assert.equal(await localAgent({PATH:await installed(t,{codex:true,claude:false})}),'codex');
+ // A caller that is not installed is skipped too.
+ assert.equal(await localAgent({PATH:await installed(t,{codex:true}),CLAUDECODE:'1'}),'codex');
+});
+
+test('hosted models are used only when no local agent can run the step',async t=>{
+ const none=await installed(t,{claude:false});
+ assert.deepEqual((await resolveModels(plain,{}, {env:{PATH:none},hostedModel:'x/y'})).default,{backend:'method',model:'x/y'});
+ assert.deepEqual((await resolveModels(plain,{}, {env:{},hostedModel:'x/y'})).default,{backend:'method',model:'x/y'});
+ await assert.rejects(resolveModels(plain,{}, {env:{PATH:none}}),error=>error.code==='needs_input'&&!/--agent/.test(error.message)&&/Claude Code or Codex/.test(error.message));
+});
+
+test('an explicitly named model keeps its backend; a bare local-agent default follows the rule',async t=>{
+ const PATH=await installed(t,{codex:true,claude:true});
+ const env={PATH,CLAUDECODE:'1'};
+ assert.deepEqual((await resolveModels({...method,models:{writer:'openai/gpt-x'}},{}, {env,hostedModel:'x/y'})).writer,{backend:'method',model:'openai/gpt-x'});
+ assert.deepEqual((await resolveModels({...method,models:{writer:{agent:'codex',model:'gpt-5',reasoning_effort:'low'}}},{}, {env})).writer,{backend:'codex',model:'gpt-5',reasoning_effort:'low'});
+ assert.equal((await resolveModels(method,{models:{writer:{backend:'openai-responses'}}},{env})).writer.backend,'openai-responses');
+ assert.equal((await resolveModels(plain,{models:{default:{backend:'codex',command:'my-codex'}}},{env})).default.command,'my-codex');
+ assert.equal((await resolveModels(plain,{models:{default:{backend:'codex'}}},{env})).default.backend,'claude');
+ assert.equal((await resolveModels(plain,{models:{default:{backend:'claude'}}},{env:{PATH,CODEX_THREAD_ID:'task'}})).default.backend,'codex');
+});
+
+test('resume keeps the saved profiles',async()=>{
+ assert.equal((await resolveModels(method,{}, {savedModels:{writer:{backend:'codex'}},env:{CLAUDECODE:'1'}})).writer.backend,'codex');
 });
 
 test('keeps the executable invocation path for virtual environments',async t=>{
  const {mkdtemp,symlink,rm}=await import('node:fs/promises');
- const {tmpdir}=await import('node:os');const {join}=await import('node:path');
  const {executable}=await import('../src/io.js');
  const root=await mkdtemp(join(tmpdir(),'method-executable-'));t.after(()=>rm(root,{recursive:true,force:true}));
  const alias=join(root,'python');await symlink(process.execPath,alias);
  assert.equal(await executable(alias),alias);
 });
 
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
-async function installed(t, names) {
- const dir=await mkdtemp(join(tmpdir(),'method-agents-'));
- const prior=process.env.PATH;process.env.PATH=dir;
- t.after(async()=>{process.env.PATH=prior;await rm(dir,{recursive:true,force:true});});
- for(const name of names)await writeFile(join(dir,name),'#!/bin/sh\nexit 99\n',{mode:0o700});
-}
-
-test('ambiguous callers with both agents require a choice even with an old preference',async t=>{
- await installed(t,['codex','claude']);
- await assert.rejects(resolveModels(method,{}, {env:{CLAUDECODE:'1',CODEX_THREAD_ID:'outer'},preference:'codex'}), {code:'needs_input'});
- await assert.rejects(resolveModels(method,{}, {env:{},preference:'claude'}), {code:'needs_input'});
+test('classification and scripts do not prepare an unused agent', async () => {
+ const method = {steps: {classify: {do: {kind: 'classify'}}, route: {do: {kind: 'run'}}}};
+ assert.deepEqual(await resolveModels(method, {models: {default: {backend: 'codex'}}}, {env: {CODEX_THREAD_ID: 'outer'}}), {});
 });
-
-test('uses the only available agent and requests setup when none is available',async t=>{
- await installed(t,['claude']);
- assert.equal((await resolveModels(method,{}, {env:{}})).writer.backend,'claude');
- await rm(join(process.env.PATH,'claude'));
- await assert.rejects(resolveModels(method,{}, {env:{}}),{code:'needs_input'});
-});
-
-test('never replaces a known caller with another installed agent',async t=>{
- await installed(t,['codex']);
- assert.equal((await resolveModels(method,{}, {env:{CLAUDECODE:'1'}})).writer.backend,'claude');
-});
-
- test('the default model follows the caller even when already configured, and an explicit agent comes first',async()=>{
- const m={steps:{work:{do:{kind:'agent',model:'default'}}}};
- assert.equal((await resolveModels(m,{models:{default:{backend:'claude'}}},{env:{CODEX_THREAD_ID:'task'}})).default.backend,'codex');
- assert.equal((await resolveModels(m,{models:{default:{backend:'codex'}}},{env:{CLAUDECODE:'1'}})).default.backend,'claude');
- assert.equal((await resolveModels(m,{models:{default:{backend:'claude'}}},{agent:'codex',env:{CLAUDECODE:'1'}})).default.backend,'codex');
- await assert.rejects(resolveModels(m,{}, {agent:'other'}),{code:'needs_input'});
- });
-
- test('classification and scripts do not prepare an unused agent', async () => {
-   const method = {steps: {classify: {do: {kind: 'classify'}}, route: {do: {kind: 'run'}}}};
-   assert.deepEqual(await resolveModels(method, {models: {default: {backend: 'codex'}}}, {env: {CODEX_THREAD_ID: 'outer'}}), {});
- });

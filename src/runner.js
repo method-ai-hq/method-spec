@@ -484,6 +484,8 @@ async function executeRun(file, config, options) {
               exec = { ...exec, prompt: rendered };
             }
             const phaseContext = { ...context, record: (event, data) => scopedRecord(event, { phase, ...data }) };
+            // The run record names the backend and model that ran each model phase.
+            if (['call', 'agent'].includes(exec.kind)) { const used = profiles[modelName(exec)]; await phaseContext.record('model.used', { model_name: modelName(exec), backend: used.backend, model: used.model ?? null }); }
             let result = exec.kind === 'classify' ? {[step.out]: await executeClassification(exec, input, config.classification, classifier, phaseContext)}
               : exec.kind === 'run' ? await executeScript(exec, input, bound.signal, phaseContext.record, operationId(phase), phase === 'action' ? value => { actionObserved = value; } : undefined)
               : profiles[modelName(exec)].backend === 'codex' ? await executeCodex(exec, input, schema, phaseContext)

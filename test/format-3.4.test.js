@@ -66,7 +66,7 @@ test('the document digest leaves out id', () => {
   assert.equal(withId.id, 'wf_3cfa2d6d2c00552ce5a4ab723a8248fe');
 });
 
-test('model resolution: Method models and model IDs are hosted, before configured profiles; --agent runs every step', async () => {
+test('model resolution: Method models and model IDs are hosted, before configured profiles', async () => {
   const doc = newsletter();
   const config = { models: { writer: { backend: 'openai-responses', model: 'gpt-x', api_key_env: 'OPENAI_API_KEY', max_output_tokens: 100 } } };
   const profiles = await resolveModels(doc, config, { hostedModel: 'account/default-model', env: {} });
@@ -77,13 +77,9 @@ test('model resolution: Method models and model IDs are hosted, before configure
   // Configured profiles fill names that the Method does not define.
   const legacy = newsletter(m => { delete m.models; m.steps.write.do.model = 'editor'; });
   assert.equal((await resolveModels(legacy, { models: { editor: { backend: 'claude' } } }, { hostedModel: 'a/b', env: {} })).editor.backend, 'claude');
-  // --agent overrides every model step.
-  const local = await resolveModels(doc, config, { agent: 'codex', hostedModel: 'a/b', env: {} });
-  assert.deepEqual(Object.keys(local).sort(), ['default', 'openai/gpt-6-luna', 'writer']);
-  assert.ok(Object.values(local).every(profile => profile.backend === 'codex'));
   // Resume keeps the saved profiles.
   const saved = { writer: { backend: 'claude' }, 'openai/gpt-6-luna': { backend: 'claude' }, default: { backend: 'claude' } };
-  assert.deepEqual(await resolveModels(doc, config, { savedModels: saved, agent: 'codex' }), saved);
+  assert.deepEqual(await resolveModels(doc, config, { savedModels: saved }), saved);
 });
 
 test('a saved package with runtime.json still runs: its models are used only when the document has no models', async t => {
@@ -182,17 +178,13 @@ test('a models entry can name a local agent; other agent fields are refused', ()
   assert.throws(() => validateMethod(mixed(m => { m.models.drafter = { agent: 'codex', model: 'x', command: '/bin/sh' }; })), /models/);
 });
 
-test('model resolution: an agent entry is a local-agent profile; --agent still runs every step', async () => {
+test('model resolution: an agent entry is a local-agent profile', async () => {
   const profiles = await resolveModels(mixed(), {}, { hostedModel: 'a/b', env: {} });
   assert.deepEqual(profiles.drafter, { backend: 'codex', reasoning_effort: 'low' });
   assert.deepEqual(profiles.editor, { backend: 'claude', model: 'claude-test', reasoning_effort: 'high' });
   assert.deepEqual(profiles.titler, { backend: 'method', model: 'openai/gpt-6-luna' });
   // The Method's entry comes before a configured profile of the same name.
   assert.deepEqual((await resolveModels(mixed(), { models: { drafter: { backend: 'claude' } } }, { env: {} })).drafter, { backend: 'codex', reasoning_effort: 'low' });
-  const claude = await resolveModels(mixed(), {}, { agent: 'claude', env: {} });
-  assert.deepEqual(claude, { drafter: { backend: 'claude' }, editor: { backend: 'claude', model: 'claude-test', reasoning_effort: 'high' }, titler: { backend: 'claude' } });
-  const codex = await resolveModels(mixed(), {}, { agent: 'codex', env: {} });
-  assert.deepEqual(codex, { drafter: { backend: 'codex', reasoning_effort: 'low' }, editor: { backend: 'codex' }, titler: { backend: 'codex' } });
 });
 
 test('a 3.4 Method that mixes hosted and agent entries runs each step on its own backend', async t => {

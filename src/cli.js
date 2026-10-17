@@ -32,12 +32,12 @@ Exit codes: 0 completed, 1 failed, 2 needs input, 3 unconfirmed (an external cha
 observe runs the observations that are due for finished runs with open effects. It never repeats an action.
 test replays recorded cases: unchanged steps return their recorded outputs, changed steps run, and a changed step that acts on an external system makes the case unverifiable.
 run never retries a failed action. This harness reads no configuration file: it runs local scripts with node and python3 from PATH,
-hosted models need the SDK, and --agent codex or --agent claude chooses the local agent. Programs pass RuntimeConfig to runMethod.
+steps that name no model run on the calling or installed Claude Code or Codex, and hosted models need the SDK. Programs pass RuntimeConfig to runMethod.
 Use --version for the runtime version. Documentation: spec/method-3.md
 `;
 try {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
-    agent: { type: 'string' }, help: { type: 'boolean' }, version: { type: 'boolean' }, inputs: { type: 'string' }, state: { type: 'string' }, resume: { type: 'boolean' }, retry: { type: 'string', multiple: true }, human: { type: 'string' },
+    help: { type: 'boolean' }, version: { type: 'boolean' }, inputs: { type: 'string' }, state: { type: 'string' }, resume: { type: 'boolean' }, retry: { type: 'string', multiple: true }, human: { type: 'string' },
     'run-dir': { type: 'string' },
     pending: { type: 'string', multiple: true }, case: { type: 'string', multiple: true }, baseline: { type: 'string' }, new: { type: 'string', multiple: true }, cases: { type: 'string' },
     run: { type: 'string' }, id: { type: 'string' }, note: { type: 'string' }, expect: { type: 'string' }, observations: { type: 'string' }, redact: { type: 'string' },
@@ -70,7 +70,7 @@ try {
     if (results.some(r => r.error)) process.exitCode = 1;
   } else if (command === 'test') {
     if (!file) throw new Error('Supply a Method file');
-    const report = await testSuite(file, await localConfig(), { casesDir: values.cases, ids: values.case, baseline: values.baseline, newIds: values.new ?? [], runOptions: { agent: values.agent } });
+    const report = await testSuite(file, await localConfig(), { casesDir: values.cases, ids: values.case, baseline: values.baseline, newIds: values.new ?? [] });
     console.log(JSON.stringify(report, null, 2));
     process.exitCode = report.passed ? 0 : 1;
   } else if (command === 'case') {
@@ -95,7 +95,7 @@ try {
     const stop = () => controller.abort(Object.assign(new Error('Interrupted by operator'), { code: 'interrupted' }));
     process.once('SIGINT', stop); process.once('SIGTERM', stop);
     const result = await runMethod(file, config, {
-      agent: values.agent, inputs: await json(values.inputs), state: await json(values.state), runDir: values['run-dir'], resume: values.resume, retry: values.retry, human: await json(values.human), signal: controller.signal,
+      inputs: await json(values.inputs), state: await json(values.state), runDir: values['run-dir'], resume: values.resume, retry: values.retry, human: await json(values.human), signal: controller.signal,
     });
     process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
     if (result.failure) console.error(`Failed: ${result.failure.headline}\nNext: ${result.failure.next.text}`);

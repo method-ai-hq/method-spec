@@ -139,14 +139,20 @@ test('a hosted profile sends the openrouter-chat request through the host and re
   assert.equal(result.status, 'completed'); assert.equal(result.result, 5);
   assert.equal(sent[0].model, 'test/hosted'); assert.equal(sent[0].response_format.type, 'json_schema');
   assert.equal(result.usage.cost_usd, 0.5);
+  // The run record names the backend and model that ran the step.
+  const { readFile } = await import('node:fs/promises');
+  const used = (await readFile(join(f.dir, 'hosted', 'events.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line)).filter(entry => entry.event === 'model.used');
+  assert.equal(used.length, 1); assert.equal(used[0].backend, 'method'); assert.equal(used[0].model, 'test/hosted'); assert.equal(used[0].phase, 'action');
 });
 
-test('a hosted model is chosen before the calling agent; --agent and configured profiles win', async () => {
+test('the calling agent is chosen before a hosted model; configured profiles win', async t => {
   const { resolveModels } = await import('../src/agents.js');
   const doc = method(step());
-  const env = { CLAUDECODE: '1' };
-  assert.deepEqual((await resolveModels(doc, {}, { hostedModel: 'x/y', env })).model, { backend: 'method', model: 'x/y' });
-  assert.deepEqual((await resolveModels(doc, {}, { hostedModel: 'x/y', env, agent: 'codex' })).model, { backend: 'codex' });
+  const bin = await mkdtemp(join(tmpdir(), 'method-caller-')); t.after(() => rm(bin, { recursive: true, force: true }));
+  await writeFile(join(bin, 'claude'), '#!/bin/sh\n', { mode: 0o700 });
+  const env = { CLAUDECODE: '1', PATH: bin };
+  assert.deepEqual((await resolveModels(doc, {}, { hostedModel: 'x/y', env })).model, { backend: 'claude' });
+  assert.deepEqual((await resolveModels(doc, {}, { hostedModel: 'x/y', env: {} })).model, { backend: 'method', model: 'x/y' });
   assert.equal((await resolveModels(doc, { models: { default: { backend: 'codex', command: 'my-codex' } } }, { hostedModel: 'x/y', env })).model.command, 'my-codex');
 });
 

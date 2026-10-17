@@ -154,7 +154,7 @@ export interface RunOptions {
     fresh?: boolean | string[] | undefined;
     /** Values of the Method's declared secrets. Without it, the process environment supplies them. */
     secrets?: Record<string, string> | undefined;
-    /** The model that unconfigured call and agent steps use through hostedModels. */
+    /** The hosted model (account credit) for steps that name no model, used only when no local agent can run them. */
     hostedModel?: string | undefined;
     hostedModels?: HostedModels | undefined;
     human?: {
@@ -162,7 +162,6 @@ export interface RunOptions {
             outputs: Record<string, Json>;
         }>;
     } | undefined;
-    agent?: 'codex' | 'claude' | undefined;
     signal?: AbortSignal | undefined;
     sourceRoot?: string | undefined;
     processPath?: string | undefined;
