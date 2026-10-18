@@ -5,11 +5,11 @@ A Method is a YAML file that describes a reusable procedure: inputs, steps, outp
 This public MIT repository contains two parts:
 
 - **Format and validator:** JSON Schema plus semantic checks for references, types, effects, and dependency cycles.
-- **Executor (`@withmethod/runtime` 0.14.1):** local script, model, and agent execution; checks; state; run records; and checkpoint resume.
+- **Executor (`@withmethod/runtime` 0.15.0):** local script, model, and agent execution; checks; state; run records; and checkpoint resume.
 
 New methods use `format: method/3.4`. Existing `method/3.1`, `method/3.2`, and `method/3.3` documents load and run unchanged. Method 3.3 adds effect contracts (observed external results) and recorded cases (`method test`).
 
-The full [Method SDK and CLI](https://docs.withmethod.ai/sdk/overview) uses a pinned revision of this runtime and adds authoring, account access, saved versions, and dashboard uploads. The SDK source and releases are public at [method-sdk](https://github.com/method-ai-hq/method-sdk). The hosted application repository is private. The YAML format itself does not require an account or a hosted service.
+The full [Method SDK and CLI](https://docs.withmethod.ai/sdk/overview) uses a pinned release of this runtime and adds authoring, account access, saved versions, and dashboard uploads. The SDK source and releases are public at [method-sdk](https://github.com/method-ai-hq/method-sdk). The hosted application repository is private. The YAML format itself does not require an account or a hosted service.
 
 ## Try the public runtime
 
