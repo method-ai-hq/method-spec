@@ -173,11 +173,19 @@ export interface RunOptions {
         state: Record<string, Json>;
         runDir: string;
     }) => void | Promise<void>) | undefined;
-    /** Replay a recorded case: unchanged steps return recorded outputs and effects are judged on recorded observations. */
+    /** Replay a recorded case: unchanged steps return recorded outputs and effects are judged on recorded observations.
+     * paths maps each scratch copy to the path that the recorded run saw, copies maps the other way; missing lists paths
+     * that the case could not keep; live names steps that run even when they match; scratch is the attempt's own folder. */
     replay?: {
         recording: any;
         observations?: Record<string, any[]>;
         artifacts?: string | undefined;
+        only?: string[] | undefined;
+        paths?: Record<string, string> | undefined;
+        copies?: Record<string, string> | undefined;
+        missing?: string[] | undefined;
+        live?: string[] | undefined;
+        scratch?: string | undefined;
     } | undefined;
     /** Test/provider adapter for Responses requests. */
     transport?: ((...args: any[]) => Promise<any>) | undefined;

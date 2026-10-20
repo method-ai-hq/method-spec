@@ -3,6 +3,7 @@ import { resolve as pathResolve, dirname, posix } from 'node:path';
 import { effectiveOutputs, shape, modelName } from './semantics.js';
 import { executionTools } from './tool-connections.js';
 import { hash, containedFile, relativeFile } from './io.js';
+import { learnedFile } from './learned.js';
 
 // Display text does not change execution, so it does not change the key.
 const executable = ({ name, purpose, reading, ...definition }) => definition;
@@ -27,9 +28,10 @@ function stepScripts(step, tools) {
 /**
  * Everything that determines what an iteration returns: its definition, its resolved inputs, and what it executes.
  * A script step's key covers its own entrypoints and every bundle file that is not another step's entrypoint,
- * because the runtime does not trace which helper files a script imports.
+ * because the runtime does not trace which helper files a script imports. learned.json is not such a file: only the
+ * step's own active rules (rules) are part of its key.
  */
-export function iterationKey({ method, step, bindings, iteration, profiles, config, runtimeInfo, manifest }) {
+export function iterationKey({ method, step, bindings, iteration, profiles, config, runtimeInfo, manifest, rules = [] }) {
   const tools = config.tools ?? {};
   const { execs, used, scripts } = stepScripts(step, tools);
   const own = new Set(scripts.map(script => script.entrypoint));
@@ -40,7 +42,8 @@ export function iterationKey({ method, step, bindings, iteration, profiles, conf
     classification: execs.some(exec => exec.kind === 'classify') ? config.classification ?? null : null,
     tools: used.map(name => [name, tools[name]]),
     runtimes: [...new Set(scripts.map(script => script.runtime))].sort().map(name => runtimeInfo[name] ?? null),
-    bundle: scripts.length ? Object.fromEntries(Object.entries(manifest).filter(([file]) => !others.has(file))) : null,
+    bundle: scripts.length ? Object.fromEntries(Object.entries(manifest).filter(([file]) => !others.has(file) && file !== learnedFile)) : null,
+    ...(rules.length ? { learned: rules } : {}),
   });
 }
 

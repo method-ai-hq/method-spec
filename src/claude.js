@@ -1,11 +1,31 @@
 import { modelName } from './semantics.js';
 import { mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { executable, executeProcess, writeJSON } from './io.js';
 import { fail, safeData, assertSchema } from './validate.js';
 import { startMethodTools } from './method-tools.js';
 import { agentEvent } from './progress.js';
 import { agentNotice } from './event-text.js';
+
+// An absolute path in a Claude Code permission rule starts with //.
+const under = (tool, dir) => `${tool}(/${resolve(dir)}/**)`;
+/**
+ * The Claude Code arguments of one step. A live run allows the file tools everywhere. A replay allows reading only in
+ * its scratch folder and its run folder, writing only in its scratch folder and the run's artifacts, and no shell.
+ */
+export function claudeArgs({ schema, mcpConfig, profile = {}, artifacts, replay = null }) {
+  const allowed = replay
+    ? [...['Read', 'Glob', 'Grep'].flatMap(tool => [under(tool, replay.scratch), under(tool, replay.runDir)]),
+      ...['Write', 'Edit'].flatMap(tool => [under(tool, artifacts), under(tool, replay.scratch)]), 'mcp__method_step__*']
+    : ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'mcp__method_step__*'];
+  const args = ['--print', '--output-format', 'stream-json', '--verbose', '--no-session-persistence',
+    '--json-schema', JSON.stringify(schema), '--strict-mcp-config', '--mcp-config', mcpConfig,
+    '--permission-mode', 'dontAsk', '--allowedTools', allowed.join(',')];
+  if (replay) args.push('--disallowedTools', 'Bash');
+  if (profile.model) args.push('--model', profile.model);
+  if (profile.reasoning_effort) args.push('--effort', profile.reasoning_effort);
+  return args;
+}
 
 export async function executeClaude(execution, input, schema, context) {
   const profile = context.models[modelName(execution)];
@@ -17,11 +37,7 @@ export async function executeClaude(execution, input, schema, context) {
   const prompt = [execution.prompt, 'Step inputs:', JSON.stringify(input),
     'Do only this step; Method runs the other steps. Use the Method tools for the operations they declare. Do not change the Method, its scripts, or its input files.',
     `Save any output files under ${context.artifacts}. Return the step output in the requested JSON format.`].join('\n\n');
-  const args = ['--print', '--output-format', 'stream-json', '--verbose', '--no-session-persistence',
-    '--json-schema', JSON.stringify(schema), '--strict-mcp-config', '--mcp-config', join(directory, 'mcp.json'),
-    '--permission-mode', 'dontAsk', '--allowedTools', 'Read,Write,Edit,Glob,Grep,mcp__method_step__*'];
-  if (profile.model) args.push('--model', profile.model);
-  if (profile.reasoning_effort) args.push('--effort', profile.reasoning_effort);
+  const args = claudeArgs({ schema, mcpConfig: join(directory, 'mcp.json'), profile, artifacts: context.artifacts, replay: context.replay });
   // Tokens stay in a private file, never process arguments or run events.
   await writeJSON(join(directory, 'mcp.json'), { mcpServers: { method_step: { type: 'http', url: bridge.url, headers: { Authorization: `Bearer ${bridge.token}` } } } });
   const events = [];

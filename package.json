@@ -1,6 +1,6 @@
 {
   "name": "@withmethod/runtime",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "Open-source Method validator and local executor",
   "type": "module",
   "license": "MIT",
@@ -23,6 +23,7 @@
     "spec/method-3.md",
     "spec/method-3.schema.json",
     "spec/runtime-config.schema.json",
+    "spec/method-learned.schema.json",
     "examples",
     "README.md",
     "VALIDATION.md",

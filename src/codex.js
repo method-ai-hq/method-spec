@@ -8,6 +8,27 @@ import { fail, safeData, assertSchema } from './validate.js';
 import { codexProgress, agentEvent } from './progress.js';
 import { agentNotice } from './event-text.js';
 
+/**
+ * The Codex arguments of one step. A live run bypasses the sandbox, as before. A replay runs in Codex's workspace-write
+ * sandbox rooted at its scratch folder, with the run's artifacts as the only other writable folder and no network.
+ */
+export function codexArgs({ schemaFile, output, url, profile = {}, artifacts, replay = null }) {
+  const sandbox = replay
+    ? ['--sandbox', 'workspace-write', '-C', replay.scratch, '--add-dir', artifacts, '-c', 'sandbox_workspace_write.network_access=false',
+      // Codex also lets a workspace-write sandbox write to /tmp and $TMPDIR unless told not to; a replay must not.
+      '-c', 'sandbox_workspace_write.exclude_tmpdir_env_var=true', '-c', 'sandbox_workspace_write.exclude_slash_tmp=true']
+    : ['--dangerously-bypass-approvals-and-sandbox'];
+  const args = ['exec', '--ephemeral', ...sandbox, '--skip-git-repo-check',
+    '--json', '--output-schema', schemaFile, '--output-last-message', output,
+    '-c', `mcp_servers.method_step.url=${JSON.stringify(url)}`,
+    '-c', 'mcp_servers.method_step.bearer_token_env_var="METHOD_CODEX_TOOL_TOKEN"',
+    '-c', 'mcp_servers.method_step.required=true'];
+  if (profile.model) args.push('--model', profile.model);
+  if (profile.reasoning_effort) args.push('-c', `model_reasoning_effort=${JSON.stringify(profile.reasoning_effort)}`);
+  args.push('-');
+  return args;
+}
+
 export async function executeCodex(execution, input, schema, context) {
   const profile = context.models[modelName(execution)];
   const command = await executable(profile.command ?? 'codex');
@@ -22,14 +43,7 @@ export async function executeCodex(execution, input, schema, context) {
   if (Buffer.byteLength(prompt) > context.maxRequestBytes) fail('limit', 'Codex prompt exceeds request limit', 'input_limit', { limit: 'request size', value: context.maxRequestBytes });
   await writeFile(join(directory, 'prompt.md'), prompt, { mode: 0o600 });
   const bridge = await startMethodTools(execution, context);
-  const args = ['exec', '--ephemeral', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check',
-    '--json', '--output-schema', join(directory, 'schema.json'), '--output-last-message', output,
-    '-c', `mcp_servers.method_step.url=${JSON.stringify(bridge.url)}`,
-    '-c', 'mcp_servers.method_step.bearer_token_env_var="METHOD_CODEX_TOOL_TOKEN"',
-    '-c', 'mcp_servers.method_step.required=true'];
-  if (profile.model) args.push('--model', profile.model);
-  if (profile.reasoning_effort) args.push('-c', `model_reasoning_effort=${JSON.stringify(profile.reasoning_effort)}`);
-  args.push('-');
+  const args = codexArgs({ schemaFile: join(directory, 'schema.json'), output, url: bridge.url, profile, artifacts: context.artifacts, replay: context.replay });
   const env = { ...process.env, METHOD_CODEX_TOOL_TOKEN: bridge.token,
     PATH: [dirname(command), process.env.PATH ?? ''].join(delimiter), METHOD_OUTPUT_DIR: context.artifacts };
   try {

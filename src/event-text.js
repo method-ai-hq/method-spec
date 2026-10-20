@@ -107,6 +107,8 @@ export function eventText(event, data, { place, checkName, methodName }) {
     case 'tool.dispatched': return `${capital(where)} calls the tool ${data.tool}.`;
     case 'tool.completed': return data.isError ? `The tool ${data.tool} returned an error.` : `The tool ${data.tool} finished.`;
     case 'tool.failed': return `The tool ${data.tool} failed.`;
+    case 'tool.standin': return `In this replay, the tool ${data.tool} did not run; it returned a stand-in.`;
+    case 'learned.applied': return `${capital(where)} uses ${data.applied.length} of ${data.considered.length} learned rule${data.considered.length === 1 ? '' : 's'}.`;
     case 'model.used': return `${capital(where)} runs on ${{ claude: 'Claude Code', codex: 'Codex' }[data.backend] ?? (data.backend === 'method' ? `the hosted model ${data.model} (account credit)` : `${data.backend} ${data.model ?? ''}`.trim())}${data.model && ['claude', 'codex'].includes(data.backend) ? ` (${data.model})` : ''}.`;
     case 'human.required': return `${capital(where)} waits for your answer.`;
     case 'effect.observed': {

@@ -7,35 +7,75 @@ import { executionTools } from './tool-connections.js';
 import { fail } from './validate.js';
 import { hash } from './io.js';
 import { readLedger, currentEffects } from './effects.js';
+import { readLearned, activeRules } from './learned.js';
 
 /**
  * Everything that decides what a step does, apart from its inputs. Display text and effect contracts do not change
  * the action, so they do not change the key. Runtime binaries are left out: a Node update does not make a recording
- * stale, but a changed script, prompt, model profile or tool does.
+ * stale, but a changed script, prompt, model profile, tool, declared helper file (helpers, the Method's files) of a
+ * step that runs a script, or active learned rule of this step (rules) does.
  */
-export function stepKey(step, { files = {}, profiles = {}, tools = {} }) {
+export function stepKey(step, { files = {}, profiles = {}, tools = {}, helpers = [], rules = [] }) {
   const { name, reading, purpose, effects, ...definition } = step;
   const parts = [definition];
+  let scripts = false;
   for (const exec of [step.do, step.check]) if (exec?.kind) {
     if (['call', 'agent'].includes(exec.kind)) parts.push(['model', modelName(exec), profiles[modelName(exec)] ?? null]);
-    if (exec.kind === 'run') parts.push(['file', exec.entrypoint, files[exec.entrypoint] ?? null]);
+    if (exec.kind === 'run') { scripts = true; parts.push(['file', exec.entrypoint, files[exec.entrypoint] ?? null]); }
     for (const tool of executionTools(exec, tools)) {
       parts.push(['tool', tool, tools[tool] ?? null]);
-      if (tools[tool]?.run) parts.push(['file', tools[tool].run.entrypoint, files[tools[tool].run.entrypoint] ?? null]);
+      if (tools[tool]?.run) { scripts = true; parts.push(['file', tools[tool].run.entrypoint, files[tools[tool].run.entrypoint] ?? null]); }
     }
   }
+  // The runtime does not trace which helper files a script reads, so every declared one is part of its key.
+  if (scripts && helpers.length) parts.push(['helpers', [...new Set(helpers)].sort().map(file => [file, files[file] ?? null])]);
+  if (rules.length) parts.push(['learned', hash(rules)]);
   return hash(parts);
 }
 
-/** The recorded output for this iteration, when the step and its inputs are unchanged. */
-export function replayedCandidate(replay, { id, step, iteration, bindings, manifest, profiles, tools }) {
+/** Every key of a Method: the keys of each step with its own learned rules. */
+export const stepKeys = (method, { files, profiles, tools, learned }) => Object.fromEntries(Object.entries(method.steps).map(([id, step]) =>
+  [id, stepKey(step, { files, profiles, tools, helpers: method.files ?? [], rules: activeRules(learned, id) })]));
+
+const pathEnd = /[A-Za-z0-9._~-]/;
+/** Whether path starts in text at i, as a whole path or the start of a path below it, and not inside a longer path. */
+const pathAt = (text, path, i) => text.startsWith(path, i) && !pathEnd.test(text[i + path.length] ?? '') && !/[A-Za-z0-9._~/-]/.test(text[i - 1] ?? '');
+const strings = value => typeof value === 'string' ? [value] : value && typeof value === 'object' ? Object.values(value).flatMap(strings) : [];
+/**
+ * Replace each path in map (from -> to) wherever it appears in a value: a whole string, a path below it, or the path
+ * inside text. Longer paths are replaced first, so a path inside another copied folder keeps its own copy.
+ */
+export function rewritePaths(value, map) {
+  const pairs = Object.entries(map ?? {}).filter(([from]) => from).sort((a, b) => b[0].length - a[0].length);
+  if (!pairs.length) return value;
+  const text = string => {
+    let out = '', i = 0;
+    outer: while (i < string.length) {
+      for (const [from, to] of pairs) if (pathAt(string, from, i)) { out += to; i += from.length; continue outer; }
+      out += string[i++];
+    }
+    return out;
+  };
+  const visit = v => typeof v === 'string' ? text(v) : Array.isArray(v) ? v.map(visit) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, visit(x)])) : v;
+  return visit(value);
+}
+/** The first path of the list that a value names (itself or a path below it), or null. */
+export function namedPath(value, paths) {
+  for (const text of strings(value)) for (const path of paths) for (let i = text.indexOf(path); i >= 0; i = text.indexOf(path, i + 1)) if (pathAt(text, path, i)) return path;
+  return null;
+}
+
+/**
+ * The recorded output for this iteration, when the step and its inputs are unchanged and the step is not forced to run
+ * live. A scratch copy stands in for each recorded path: bindings are compared after mapping the copies back
+ * (replay.paths), and a served output names the copies (replay.copies).
+ */
+export function replayedCandidate(replay, { id, step, iteration, bindings, key }) {
   const recording = replay.recording;
-  if (recording.keys[id] !== stepKey(step, { files: manifest, profiles, tools })) return null;
+  if (replay.live?.includes(id) || recording.keys[id] !== key) return null;
   const saved = recording.iterations[id]?.[iteration];
-  // A scratch folder stands in for a real one; compare with the path that the recorded run saw.
-  const seen = replay.paths ? JSON.parse(JSON.stringify(bindings, (key, value) => typeof value === 'string' && replay.paths[value] ? replay.paths[value] : value)) : bindings;
-  if (!saved || !isDeepStrictEqual(saved.inputs, seen)) return null;
-  return structuredClone(saved.candidate);
+  if (!saved || !isDeepStrictEqual(saved.inputs, rewritePaths(bindings, replay.paths))) return null;
+  return rewritePaths(structuredClone(saved.candidate), replay.copies);
 }
 export function unverifiable(id, iteration, step) {
   const why = step.ask ? 'it asks a person' : 'it changes an external system';
@@ -58,13 +98,13 @@ export async function recordRun(runDir) {
     else if (event.event === 'step.accepted' && open[at] && (open[at].candidate || event.reused_from)) (iterations[event.step] ??= [])[event.iteration] = { inputs: open[at].inputs, candidate: open[at].candidate ?? event.outputs };
   }
   const tools = started.config?.tools ?? {};
-  const keys = Object.fromEntries(Object.entries(method.steps).map(([id, step]) => [id, stepKey(step, { files: manifest.files, profiles: manifest.models, tools })]));
+  const keys = stepKeys(method, { files: manifest.files, profiles: manifest.models, tools, learned: await readLearned(pathResolve(runDir, 'bundle')) });
   const observations = {};
   for (const entry of currentEffects((await readLedger(runDir)).filter(entry => entry.observations))) {
     observations[entry.effect] = (await read(entry.observations)).observations;
   }
   return {
-    format: 'method-recording/1', method_sha256: hash(documentForDigest(method)), execution_id: started.execution_id,
+    format: 'method-recording/1', method_sha256: hash(documentForDigest(method)), execution_id: started.execution_id, source_run_dir: pathResolve(runDir),
     inputs: started.inputs ?? {}, initial_state: started.initial_state ?? {}, environment: started.config?.environment ?? {}, keys, iterations, observations, method,
   };
 }

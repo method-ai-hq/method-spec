@@ -34,7 +34,9 @@ const judgeMethod = {
 const normalize = text => text.replace(/\s+/g, ' ').trim().toLowerCase();
 export const valueText = value => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 
-async function cached(key, compute, cacheDir) {
+/** A judgment by its key. use: false skips the cache, so the judge votes again and nothing is saved. */
+async function cached(key, compute, cacheDir, use = true) {
+  if (!use) return compute();
   const dir = join(cacheDir ?? process.env.METHOD_CACHE_DIR ?? join(homedir(), '.cache', 'method'), 'judgments');
   const file = join(dir, `${key}.json`);
   try { return JSON.parse(await readFile(file, 'utf8')); } catch { /* not cached */ }
@@ -82,6 +84,10 @@ async function classifyPass(text, criterion, options) {
 
 /**
  * Judge a value. Returns {status: pass|fail, criteria: [{id, text, pass, judge, votes|probability, reason}]}.
+ * options.judgeCache: false judges again instead of reading the judgment cache.
+ * options.judges: a list of judge model profiles (for example the user's Claude Code and Codex). Each one judges the
+ * model criteria; a criterion passes only when every judge passes it. When the judges disagree, the criterion fails
+ * with the reason "unsure" (unsure: true). Without it, the config's judge profile judges alone.
  * @param {{value: any, criteria: Array<{id: string, text: string}>, context?: any, judges?: Record<string, string>, config: any, options?: any}} input
  */
 export async function judgeRubric({ value, criteria, context, judges = {}, config, options = {} }) {
@@ -89,28 +95,41 @@ export async function judgeRubric({ value, criteria, context, judges = {}, confi
   const text = valueText(value ?? '');
   if (Buffer.byteLength(text) > settings.max_value_bytes) fail('limit', `The judged value exceeds ${settings.max_value_bytes} bytes`, 'judge_failed');
   const modelCriteria = criteria.filter(c => judges[c.id] !== 'classify');
-  // The agent that resolves the default judge is part of the key, so a different judge does not reuse old answers.
-  const profile = config?.models?.judge ?? { agent: config?.models?.default ?? null };
   const contextText = context === undefined || context === null ? '' : valueText(context);
-  const key = hash(['rubric/2', text, contextText, modelCriteria, profile, settings.judge_runs]);
+  const panel = Array.isArray(options.judges) && options.judges.length ? options.judges : [null];
   let calls = 0;
-  const votes = modelCriteria.length ? await cached(key, async () => {
-    calls = settings.judge_runs;
-    const all = await Promise.all(Array.from({ length: settings.judge_runs }, () => modelVote(text, modelCriteria, config, options, contextText)));
-    return modelCriteria.map((c, i) => all.map(run => run[i]));
-  }, options.cacheDir) : [];
+  /** The votes of one judge profile on every model criterion (null: the config's own judge). */
+  const votesOf = async judge => {
+    const judgeConfig = judge ? { ...config, models: { ...config?.models, judge } } : config;
+    // The agent that resolves the default judge is part of the key, so a different judge does not reuse old answers.
+    const profile = judgeConfig?.models?.judge ?? { agent: judgeConfig?.models?.default ?? null };
+    const key = hash(['rubric/2', text, contextText, modelCriteria, profile, settings.judge_runs]);
+    return cached(key, async () => {
+      calls += settings.judge_runs;
+      const all = await Promise.all(Array.from({ length: settings.judge_runs }, () => modelVote(text, modelCriteria, judgeConfig, options, contextText)));
+      return modelCriteria.map((c, i) => all.map(run => run[i]));
+    }, options.cacheDir, options.judgeCache !== false);
+  };
+  const panelVotes = modelCriteria.length ? await Promise.all(panel.map(votesOf)) : [];
   const results = [];
   for (const c of criteria) {
     if (judges[c.id] === 'classify') {
       const probability = await classifyPass(text, c, options);
       results.push({ id: c.id, text: c.text, judge: 'classify', probability, pass: probability >= settings.classify_threshold,
         reason: `Classification probability ${probability.toFixed(2)}; at least ${settings.classify_threshold} needed.` });
-    } else {
-      const own = votes[modelCriteria.indexOf(c)];
-      const failed = own.find(v => !v.pass);
-      results.push({ id: c.id, text: c.text, judge: 'model', votes: own, pass: !failed,
-        reason: failed ? failed.reason : `${own.length} of ${own.length} votes pass${own.find(v => v.quote) ? `: "${own.find(v => v.quote).quote.slice(0, 120)}"` : ''}.` });
+      continue;
     }
+    const i = modelCriteria.indexOf(c);
+    const each = panelVotes.map(votes => votes[i]);
+    const verdicts = each.map(own => !own.find(v => !v.pass));
+    const own = each.flat();
+    const failed = own.find(v => !v.pass);
+    if (verdicts.some(Boolean) && !verdicts.every(Boolean)) {
+      results.push({ id: c.id, text: c.text, judge: 'model', votes: own, pass: false, unsure: true, reason: 'unsure' });
+      continue;
+    }
+    results.push({ id: c.id, text: c.text, judge: 'model', votes: own, pass: !failed,
+      reason: failed ? failed.reason : `${own.length} of ${own.length} votes pass${own.find(v => v.quote) ? `: "${own.find(v => v.quote).quote.slice(0, 120)}"` : ''}.` });
   }
   return { status: results.every(r => r.pass) ? 'pass' : 'fail', criteria: results, judge_calls: calls };
 }

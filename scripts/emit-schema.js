@@ -1,6 +1,6 @@
 import { writeFile, readFile } from 'node:fs/promises';
-import { methodSchema, configSchema } from '../src/schema.js';
-for (const [name, schema] of [['method-3', methodSchema], ['runtime-config', configSchema]]) {
+import { methodSchema, configSchema, learnedSchema } from '../src/schema.js';
+for (const [name, schema] of [['method-3', methodSchema], ['runtime-config', configSchema], ['method-learned', learnedSchema]]) {
   const text = JSON.stringify(schema, null, 2) + '\n';
   const file = new URL(`../spec/${name}.schema.json`, import.meta.url);
   if (process.argv.includes('--check')) {

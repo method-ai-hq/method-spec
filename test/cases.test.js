@@ -144,6 +144,14 @@ test('recorded observations replay the bounce, and the run then fails', async t 
   assert.deepEqual(report.cases.map(c => [c.id, c.verdict]), [['bounce', 'pass']]);
 });
 
+test('result and effect refs name the whole result and the inputs of a declared effect', async t => {
+  const { cfg, current, pin } = await setup(t);
+  await pin('whole-result', [{ kind: 'equals', ref: 'result', value: 'Paid 10; summary sent' }]);
+  await pin('delivery-to', [{ kind: 'equals', ref: 'effect:send/0/delivered', value: { to: 'ap@example.com' } }, { kind: 'equals', ref: 'effect:delivered', value: { to: 'ap@example.com' } }]);
+  const report = await testSuite(current, cfg);
+  assert.deepEqual(report.cases.map(c => [c.id, c.verdict]).sort(), [['delivery-to', 'pass'], ['whole-result', 'pass']]);
+});
+
 test('vacuous expectations and duplicate IDs are refused', async t => {
   const { current, pin } = await setup(t);
   await assert.rejects(pin('vacuous', [{ kind: 'status', in: ['completed'] }]), /passes on an empty result/);
@@ -331,4 +339,48 @@ test('a case that can pass only by breaking an instruction is refused until the 
   quote = 'Always state a jurisdiction.';
   const kept = await make('jurisdiction-2');
   assert.equal(kept.accepted_conflicts, undefined);
+});
+
+test('a list of judges must agree: a disagreement fails the criterion as unsure, and testSuite passes the list on', async t => {
+  const { dir, cfg, current } = await setup(t);
+  const { judgeRubric } = await import('../src/index.js');
+  // Judge a passes every criterion; judge b passes only text that mentions delivery.
+  const transport = async body => {
+    const text = String(body.instructions).slice(String(body.instructions).indexOf('Text:'));
+    const pass = body.model === 'judge-a' || text.includes('delivery');
+    const verdicts = [{ id: 'c1', pass, quote: '', reason: pass ? 'It says so.' : 'It does not.' }];
+    return { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ verdicts }) }] }], usage: { input_tokens: 1, output_tokens: 1 } };
+  };
+  const profile = model => ({ backend: 'openai-responses', model, api_key_env: 'METHOD_TEST_UNUSED_KEY', max_output_tokens: 100 });
+  const judged = withJudge(cfg), judges = [profile('judge-a'), profile('judge-b')];
+  const criteria = [{ id: 'c1', text: 'The report says whether delivery is confirmed.' }];
+  const options = { runOptions: { transport }, judgeCache: false, judges };
+  const split = await judgeRubric({ value: 'Paid 10', criteria, config: judged, options });
+  assert.equal(split.status, 'fail'); assert.equal(split.criteria[0].unsure, true); assert.equal(split.criteria[0].reason, 'unsure');
+  const agreed = await judgeRubric({ value: 'Paid 10, delivery not yet confirmed', criteria, config: judged, options });
+  assert.equal(agreed.status, 'pass'); assert.equal(agreed.criteria[0].votes.length, 6);
+  // One judge alone (a) would pass the bad run; with both, the case is not green.
+  await createCase({ methodFile: current, passingRun: join(dir, 'run'), id: 'says-paid', note: 'Keep it.', expect: [{ kind: 'rubric', ref: 'outputs.report', criteria }],
+    config: { ...judged, models: { judge: profile('judge-a') } }, options: { runOptions: { transport }, cacheDir: join(dir, 'cache') } });
+  const alone = await testSuite(current, { ...judged, models: { judge: profile('judge-a') } }, { runOptions: { transport }, judgeCache: false });
+  assert.equal(alone.cases[0].verdict, 'pass');
+  const both = await testSuite(current, judged, { runOptions: { transport }, judgeCache: false, judges });
+  assert.equal(both.cases[0].verdict, 'fail');
+  assert.equal(both.cases[0].candidate.attempts[0].results[0].criteria[0].reason, 'unsure');
+});
+
+test('a check script reads the files the run wrote and the arguments of its tool calls', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'method-predicate-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(join(dir, 'write.mjs'), 'import{writeFileSync}from"node:fs";writeFileSync(process.env.METHOD_OUTPUT_DIR+"/memo.txt","no redline here");console.log(JSON.stringify({done:"yes"}))');
+  await writeFile(join(dir, 'check.mjs'), 'import{readFileSync}from"node:fs";const o=JSON.parse(readFileSync(0,"utf8"));const f=o.files["memo.txt"];const t=f?readFileSync(f,"utf8"):"";console.log(JSON.stringify({pass:t.includes("redline:"),reason:f?"read "+t:"no file "+JSON.stringify(Object.keys(o.files)),calls:Array.isArray(o.tool_calls)}))');
+  const doc = { format: 'method/3.3', name: 'Memo', goal: 'Write a memo.', steps: { write: { name: 'Write', purpose: 'Write the memo.', do: script('write.mjs'), out: { done: text } } }, result: 'done' };
+  const file = join(dir, 'm.method'); await writeFile(file, JSON.stringify(doc));
+  const cfg = config({});
+  const run = await runMethod(file, cfg, { runDir: join(dir, 'run') });
+  assert.equal(run.status, 'completed');
+  const { evaluate, outcomeOfRun } = await import('../src/cases.js');
+  const outcome = await outcomeOfRun(join(dir, 'run'));
+  const checked = await evaluate([{ kind: 'predicate', runtime: 'node', entrypoint: 'check.mjs' }], outcome, { caseDir: dir, config: cfg });
+  assert.equal(checked.status, 'fail'); assert.match(checked.results[0].reason, /read no redline here/);
 });

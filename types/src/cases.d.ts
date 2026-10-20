@@ -24,14 +24,25 @@ export function evaluate(expect: any, outcome: any, { caseDir, config, options }
             pass: boolean;
             reason: string;
             votes?: undefined;
+            unsure?: undefined;
         } | {
             id: string;
             text: string;
             judge: string;
-            votes: any;
+            votes: any[];
+            pass: boolean;
+            unsure: boolean;
+            reason: string;
+            probability?: undefined;
+        } | {
+            id: string;
+            text: string;
+            judge: string;
+            votes: any[];
             pass: boolean;
             reason: any;
             probability?: undefined;
+            unsure?: undefined;
         })[];
         judge_calls?: number;
         kind: any;
@@ -40,28 +51,18 @@ export function evaluate(expect: any, outcome: any, { caseDir, config, options }
         text?: any;
     }[];
 }>;
-/** What a finished run produced, as a case sees it. */
-export function outcomeOfRun(runDir: any): Promise<{
-    status: any;
-    failure: any;
-    result: any;
-    inputs: any;
-    outputs: {
-        [k: string]: any;
-    };
-    effects: {
-        effect: any;
-        verdict: any;
-        final: any;
-        reason: any;
-        observed_at: any;
-        next_observation_at: any;
-        horizon_at: any;
-        action_outcome: any;
-    }[];
-    artifacts: string;
-    files: {};
-}>;
+/**
+ * What a finished run produced, as a case sees it: its status, result, inputs and outputs, effects, the files it wrote
+ * (files: path -> kept copy), the calls of its Method tools (tool_calls, with each stand-in of a replay) and the
+ * inputs of its declared effects (effect_inputs). A replay passes paths (copy -> original), so the outcome names the
+ * paths that the recorded run saw, and copies (original -> copy), so a file ref reads the attempt's copy.
+ * @param {string} runDir
+ * @param {{paths?: Record<string, string>, copies?: Record<string, string>}} [replay]
+ */
+export function outcomeOfRun(runDir: string, { paths, copies }?: {
+    paths?: Record<string, string>;
+    copies?: Record<string, string>;
+}): Promise<any>;
 /**
  * Record a case from a run that went wrong. The case must fail on that run: otherwise it does not capture the
  * problem, or the note does not match the run. With a passing run (the output the person accepted after the fix),
@@ -104,14 +105,25 @@ export function createCase({ methodFile, runDir, id, note, author, expect, rubri
             pass: boolean;
             reason: string;
             votes?: undefined;
+            unsure?: undefined;
         } | {
             id: string;
             text: string;
             judge: string;
-            votes: any;
+            votes: any[];
+            pass: boolean;
+            unsure: boolean;
+            reason: string;
+            probability?: undefined;
+        } | {
+            id: string;
+            text: string;
+            judge: string;
+            votes: any[];
             pass: boolean;
             reason: any;
             probability?: undefined;
+            unsure?: undefined;
         })[];
         judge_calls?: number;
         kind: any;
@@ -128,14 +140,25 @@ export function createCase({ methodFile, runDir, id, note, author, expect, rubri
             pass: boolean;
             reason: string;
             votes?: undefined;
+            unsure?: undefined;
         } | {
             id: string;
             text: string;
             judge: string;
-            votes: any;
+            votes: any[];
+            pass: boolean;
+            unsure: boolean;
+            reason: string;
+            probability?: undefined;
+        } | {
+            id: string;
+            text: string;
+            judge: string;
+            votes: any[];
             pass: boolean;
             reason: any;
             probability?: undefined;
+            unsure?: undefined;
         })[];
         judge_calls?: number;
         kind: any;
@@ -147,6 +170,8 @@ export function createCase({ methodFile, runDir, id, note, author, expect, rubri
     dir: string;
     retention_until: string;
     redacted: boolean;
+    snapshots: any;
+    snapshot_missing: any;
     files?: {};
     accepted_conflicts?: {
         answer: any;
@@ -183,25 +208,48 @@ export function retireCase(methodFile: string, id: string, { by, reason, casesDi
     casesDir?: string | undefined;
 }): Promise<void>;
 /**
- * Replay one case against a Method file. Files connections are bound to fresh scratch folders, so a changed step
- * that writes files can run safely. Only the steps the expectations need run. A strict case stops at its first
- * failed run. once: one run decides, for a quick check such as the improvement loop's.
+ * Replay one case against a Method file. Each attempt has its own scratch folder: it holds a copy of every snapshot
+ * of the case and of each files connection that a step writes, and the recorded paths are rewritten to these copies,
+ * so attempts never share a folder and a replay never changes the source run or the real folders. Only the steps the
+ * expectations need run. A strict case stops at its first failed run.
+ * once: one run decides (runs: 1). runs and minPass replace the case's own. live: steps that run live even when they
+ * match the recording; target_live says whether they did. judgeCache: false judges again. keepDir: a folder that
+ * keeps each attempt's run folder (attempt.run_dir). judges: a list of judge model profiles that must all pass a
+ * rubric criterion; a disagreement fails it as unsure.
  * @param {string} methodFile
  * @param {any} config
  * @param {any} testCaseValue
  * @param {any} [runOptions]
- * @param {{once?: boolean}} [check]
+ * @param {{once?: boolean, runs?: number | undefined, minPass?: number | undefined, live?: string[] | undefined, judgeCache?: boolean | undefined, keepDir?: string | undefined, judges?: any[] | undefined}} [check]
  */
-export function testCase(methodFile: string, config: any, testCaseValue: any, runOptions?: any, { once }?: {
+export function testCase(methodFile: string, config: any, testCaseValue: any, runOptions?: any, { once, runs, minPass, live, judgeCache, keepDir, judges }?: {
     once?: boolean;
+    runs?: number | undefined;
+    minPass?: number | undefined;
+    live?: string[] | undefined;
+    judgeCache?: boolean | undefined;
+    keepDir?: string | undefined;
+    judges?: any[] | undefined;
 }): Promise<{
     attempts: ({
+        run_dir: string;
+        standins: {
+            step: any;
+            iteration: any;
+            tool: any;
+            arguments: any;
+        }[];
+        judge_calls: number;
+        target_live?: boolean;
         live_steps: any[];
         live_model_steps: any[];
-        judge_calls: number;
         failure?: {
             code: any;
             headline: any;
+        };
+        output: {
+            result: any;
+            files: {};
         };
         run_status: "completed" | "unconfirmed" | "failed" | "needs_input";
         status: string;
@@ -214,14 +262,83 @@ export function testCase(methodFile: string, config: any, testCaseValue: any, ru
                 pass: boolean;
                 reason: string;
                 votes?: undefined;
+                unsure?: undefined;
             } | {
                 id: string;
                 text: string;
                 judge: string;
-                votes: any;
+                votes: any[];
+                pass: boolean;
+                unsure: boolean;
+                reason: string;
+                probability?: undefined;
+            } | {
+                id: string;
+                text: string;
+                judge: string;
+                votes: any[];
                 pass: boolean;
                 reason: any;
                 probability?: undefined;
+                unsure?: undefined;
+            })[];
+            judge_calls?: number;
+            kind: any;
+            status: string;
+            reason: string;
+            text?: any;
+        }[];
+        reason?: undefined;
+    } | {
+        run_dir?: undefined;
+        standins: {
+            step: any;
+            iteration: any;
+            tool: any;
+            arguments: any;
+        }[];
+        judge_calls: number;
+        target_live?: boolean;
+        live_steps: any[];
+        live_model_steps: any[];
+        failure?: {
+            code: any;
+            headline: any;
+        };
+        output: {
+            result: any;
+            files: {};
+        };
+        run_status: "completed" | "unconfirmed" | "failed" | "needs_input";
+        status: string;
+        results: {
+            criteria?: ({
+                id: string;
+                text: string;
+                judge: string;
+                probability: any;
+                pass: boolean;
+                reason: string;
+                votes?: undefined;
+                unsure?: undefined;
+            } | {
+                id: string;
+                text: string;
+                judge: string;
+                votes: any[];
+                pass: boolean;
+                unsure: boolean;
+                reason: string;
+                probability?: undefined;
+            } | {
+                id: string;
+                text: string;
+                judge: string;
+                votes: any[];
+                pass: boolean;
+                reason: any;
+                probability?: undefined;
+                unsure?: undefined;
             })[];
             judge_calls?: number;
             kind: any;
@@ -233,8 +350,23 @@ export function testCase(methodFile: string, config: any, testCaseValue: any, ru
     } | {
         status: string;
         reason: any;
+    } | {
+        run_dir: string;
+        status: string;
+        reason: string;
+        path: any;
+    } | {
+        run_dir?: undefined;
+        status: string;
+        reason: string;
+        path: any;
+    } | {
+        run_dir: string;
+        status: string;
+        reason: string;
     })[];
     duration_ms: number;
+    target_live?: boolean;
     unreliable?: string;
     id: any;
     status: string;
@@ -242,15 +374,19 @@ export function testCase(methodFile: string, config: any, testCaseValue: any, ru
     runs: number;
     min_pass: any;
 }>;
+/** Remove a folder that may hold read-only copies (a run can make its own folders read-only): make it writable first. */
+export function _removeTree(path: any): Promise<void>;
 /**
  * Test a Method version against its active cases. Every active case must pass. With a baseline (the version
  * before a change), each case also runs on the old version, to show what the change fixed or broke. New cases
- * must fail on the baseline and pass on the candidate. once: each case runs once, even when a model step runs live.
+ * must fail on the baseline and pass on the candidate. once, runs, minPass, live, judgeCache, keepDir and judges apply to each
+ * case run, on both versions, as in testCase.
  * @param {string} methodFile
  * @param {any} config
- * @param {{casesDir?: string | undefined, ids?: string[] | undefined, baseline?: string | undefined, newIds?: string[] | undefined, runOptions?: any, concurrency?: number | undefined, once?: boolean | undefined}} [options]
+ * @param {{casesDir?: string | undefined, ids?: string[] | undefined, baseline?: string | undefined, newIds?: string[] | undefined, runOptions?: any, concurrency?: number | undefined, once?: boolean | undefined,
+ *   runs?: number | undefined, minPass?: number | undefined, live?: string[] | undefined, judgeCache?: boolean | undefined, keepDir?: string | undefined, judges?: any[] | undefined}} [options]
  */
-export function testSuite(methodFile: string, config: any, { casesDir, ids, baseline, newIds, runOptions, concurrency, once }?: {
+export function testSuite(methodFile: string, config: any, { casesDir, ids, baseline, newIds, runOptions, concurrency, once, runs, minPass, live, judgeCache, keepDir, judges }?: {
     casesDir?: string | undefined;
     ids?: string[] | undefined;
     baseline?: string | undefined;
@@ -258,6 +394,12 @@ export function testSuite(methodFile: string, config: any, { casesDir, ids, base
     runOptions?: any;
     concurrency?: number | undefined;
     once?: boolean | undefined;
+    runs?: number | undefined;
+    minPass?: number | undefined;
+    live?: string[] | undefined;
+    judgeCache?: boolean | undefined;
+    keepDir?: string | undefined;
+    judges?: any[] | undefined;
 }): Promise<{
     counts: {
         [k: string]: number;

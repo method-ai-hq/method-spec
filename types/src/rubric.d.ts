@@ -1,5 +1,9 @@
 /**
  * Judge a value. Returns {status: pass|fail, criteria: [{id, text, pass, judge, votes|probability, reason}]}.
+ * options.judgeCache: false judges again instead of reading the judgment cache.
+ * options.judges: a list of judge model profiles (for example the user's Claude Code and Codex). Each one judges the
+ * model criteria; a criterion passes only when every judge passes it. When the judges disagree, the criterion fails
+ * with the reason "unsure" (unsure: true). Without it, the config's judge profile judges alone.
  * @param {{value: any, criteria: Array<{id: string, text: string}>, context?: any, judges?: Record<string, string>, config: any, options?: any}} input
  */
 export function judgeRubric({ value, criteria, context, judges, config, options }: {
@@ -22,14 +26,25 @@ export function judgeRubric({ value, criteria, context, judges, config, options 
         pass: boolean;
         reason: string;
         votes?: undefined;
+        unsure?: undefined;
     } | {
         id: string;
         text: string;
         judge: string;
-        votes: any;
+        votes: any[];
+        pass: boolean;
+        unsure: boolean;
+        reason: string;
+        probability?: undefined;
+    } | {
+        id: string;
+        text: string;
+        judge: string;
+        votes: any[];
         pass: boolean;
         reason: any;
         probability?: undefined;
+        unsure?: undefined;
     })[];
     judge_calls: number;
 }>;

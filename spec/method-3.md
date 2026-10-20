@@ -1,6 +1,6 @@
 # Method reference
 
-Implemented by `@withmethod/runtime` 0.15.0. The full Method SDK uses this runtime at a released version. New methods use this format under the same Method product and command.
+Implemented by `@withmethod/runtime` 0.16.0. The full Method SDK uses this runtime at a released version. New methods use this format under the same Method product and command.
 
 Use `format: method/3.4` for new documents. Existing `method/3.1`, `method/3.2`, and `method/3.3` documents load and run unchanged. All formats share one set of rules, with two exceptions that keep saved documents running: before `method/3.3`, an external change needs no effect; before `method/3.4`, a plain model name can name a configured profile (or a saved package's `runtime.json` model). Method 3.3 adds effect contracts: an external change is confirmed by an observer, not by the action's receipt. Method 3.4 adds the Method ID, the Method's own `models`, `limits`, and `tools`, model IDs on steps, and accepted warnings (see [Method 3.4](#method-34)). The machine-readable grammar is [method-3.schema.json](method-3.schema.json). Operator configuration uses [runtime-config.schema.json](runtime-config.schema.json). The validator also checks references, dependencies, data declarations, loop conditions, and effects; JSON Schema alone is insufficient.
 
@@ -392,6 +392,15 @@ method case retire task.method old-rule --by new-rule --reason "Policy changed o
 
 A case keeps the copies of the files that its source run wrote, and a rubric judges a path inside a files connection by that run's copy, not by the file on disk now.
 
+A case also keeps a copy of everything its run read, so that it still replays after the run folder or the input folders move, change, or are deleted:
+
+- Each text value in the run's inputs and in each step iteration's inputs and outputs that is an absolute path to an existing file or folder is copied. A path inside the source run folder goes to `snapshot/run/PATH` (PATH relative to the run folder); any other path goes to `snapshot/ext/N/NAME`.
+- Each `files` connection that no step writes is copied to `snapshot/env/NAME`.
+- A path inside a copied folder uses that copy. A folder that holds the run folder (such as the home folder or the temporary folder) is not copied.
+- All copies of a case together hold at most 5,000 files and 100 MB. `.git`, `node_modules`, `.venv` and `__pycache__` are left out. A path that does not fit is listed in `snapshot_missing`.
+
+`case.json` lists the copies as `snapshots: [{original, copy, kind: run|ext|env}]` and the paths that did not fit as `snapshot_missing: [PATH]`. `recording.json` names the source run folder as `source_run_dir`. Copies stay on the computer with the case.
+
 `--run` is the run that went wrong. The case must **fail** on it; otherwise the case does not capture the problem, or the note does not match what the run did, and `case new` refuses it (`case_not_red`). `--passing-run` is the run that the person accepted after the fix; the case must **pass** on it (`case_not_green`). A case with only `--passing-run` pins behaviour that is already right.
 
 `case new` also checks the case against the instructions of the Method's model steps and the information each step received on the recorded run. When a rule can be met only by breaking an instruction (for example, the rule needs a fact that the inputs do not give and a prompt says not to invent facts, or the rule requires what a prompt forbids), `case new` refuses the case (`case_conflicts`) and names the rule and the instruction. Ask the person which one is right. When the case is right, change the instruction first. To keep both, add `--accept-conflict "the person's answer"`; `case.json` keeps the answer and the conflicts in `accepted_conflicts`.
@@ -400,19 +409,57 @@ A case keeps the copies of the files that its source run wrote, and a rubric jud
 
 Expectations (`--expect` is a JSON list):
 
-- `{"kind": "equals", "ref": "outputs.report", "value": ...}` compares a step output, or `result`.
+- `{"kind": "equals", "ref": "outputs.report", "value": ...}` compares a step output, or another ref (see below).
 - `{"kind": "status", "in": ["failed"]}` checks the run status.
 - `{"kind": "effect", "effect": "send/0/delivered", "verdict": ["contradicted"]}` checks an effect verdict.
-- `{"kind": "predicate", "runtime": "node", "entrypoint": "check.mjs"}` runs a script on `{status, code, result, outputs, effects}` that returns `{"pass": true|false, "reason": "..."}`. The script is copied into the case.
+- `{"kind": "predicate", "runtime": "node", "entrypoint": "check.mjs"}` runs a script on `{status, failure, result, inputs, outputs, effects, tools, tool_calls, effect_inputs, files}` that returns `{"pass": true|false, "reason": "..."}`. The script is copied into the case. `tool_calls` lists each call of a Method tool as `{tool, step, iteration, arguments, standin}`, stand-ins of a replay included (`standin: true`); `effect_inputs` lists the recorded inputs of declared effects; `files` maps each file the run wrote (a path under `artifacts/`, or a path in a `files` connection) to an absolute path that the script can read.
 - `{"kind": "rubric", "ref": "outputs.report", "criteria": [{"id": "c1", "text": "..."}]}` judges text, a record (as JSON), or a text file output against plain sentences. `--rubric SENTENCE` (repeatable) makes one; `--ref` defaults to the Method's result. `"context": ["outputs.material", "inputs.claim"]` (`--context REF`, repeatable) gives the judge other values to check against, such as the sources or the person's words; the judge reads them but does not judge them, and quotes come only from the judged value.
+
+The `ref` of an `equals` or `rubric` expectation, and each `context` ref, names what the person saw:
+
+- `outputs.NAME` (or a field below it): a step output. `inputs.NAME`: a run input.
+- `result`: the whole run result.
+- `file:PATH`: the text of a file that the run wrote. A relative PATH is under the run's `artifacts/`. An absolute PATH is a file in a `files` connection (the copy that the runtime kept), in a folder that the case copied (the attempt's own copy), or in the run folder.
+- `effect:NAME`: for a Method tool, the list of the arguments of each of its calls, stand-ins included; for a declared effect, by key (`send/0/delivered`) or by name (`delivered`), its recorded inputs.
+
+A case whose refs are all `outputs.NAME` or `inputs.NAME` runs only the steps that produce them; another ref runs the whole Method.
 
 Each expectation can carry `text`, a plain-language statement for people. A case is refused if its non-rubric expectations pass on an empty result: such a case cannot detect the error.
 
-**Rubric judge.** A model judges each criterion and quotes the words that decide it, or gives an empty quote when no single passage decides it (for example, when something must be absent). A quote that is not in the value fails the criterion. By default the judge runs 3 times and a criterion passes only when every vote passes. The judge uses the model profile `judge` when the configuration has one, otherwise the default agent. Operator configuration can change `rubric: {judge_runs, classify_threshold, max_value_bytes}`. Judgments are cached by value, criteria, and judge profile under `~/.cache/method/judgments` (or `METHOD_CACHE_DIR`). At `case new`, the judge's verdicts on the run that went wrong and the pass on the accepted run are saved as `examples.json`. When a classification provider is configured, the faster classification judge is used for a criterion only when it agrees with those examples, including at least one pass and one fail; otherwise the model judge stays.
+**Rubric judge.** A model judges each criterion and quotes the words that decide it, or gives an empty quote when no single passage decides it (for example, when something must be absent). A quote that is not in the value fails the criterion. By default the judge runs 3 times and a criterion passes only when every vote passes. The judge uses the model profile `judge` when the configuration has one, otherwise the default agent. Operator configuration can change `rubric: {judge_runs, classify_threshold, max_value_bytes}`. With `options.judges` (a list of judge profiles), each profile judges every criterion; a criterion passes only when every judge passes it, and a disagreement fails it with the reason `unsure`. Judgments are cached by value, criteria, and judge profile under `~/.cache/method/judgments` (or `METHOD_CACHE_DIR`). At `case new`, the judge's verdicts on the run that went wrong and the pass on the accepted run are saved as `examples.json`. When a classification provider is configured, the faster classification judge is used for a criterion only when it agrees with those examples, including at least one pass and one fail; otherwise the model judge stays.
 
-**Replay.** `method test` runs the Method once per case run, with the recorded inputs. A step whose key (its definition, script files, model profiles, and tools; not its name, reading, purpose, or effects) and inputs match the recording returns the recorded outputs and records `step.replayed`. Other steps run. Each `files` connection that a step writes is replaced by a scratch copy of the real folder (up to 5,000 files and 100 MB; a larger folder makes the case `unverifiable`), so a changed step that writes files runs safely and the real folder is not touched. Folders that are only read stay as they are. A path in a step's inputs is compared with the path that the recorded run saw. When every expectation refers to `outputs.NAME`, only the steps that produce those outputs, and the steps they depend on, run. A changed step that asks a person or changes another kind of connection cannot run in a test: the case is `unverifiable`. Effects are judged on recorded observations only; observers never read the live system in a test. Without recorded observations, an effect is `not_replayed`. With them, an absence of evidence stays `pending`.
+**Replay.** `method test` runs the Method once per case run, with the recorded inputs. A step whose key (its definition, script files, the Method's declared `files` when the step runs a script, model profiles, tools, and its own active learned rules; not its name, reading, purpose, or effects) and inputs match the recording returns the recorded outputs and records `step.replayed`. Other steps run.
 
-**Results.** Every active case must pass. Without `--runs`, a case runs once when only scripts run, and three times when a model step runs live, because a model can answer differently each time; every run must pass. A case that passes some runs and fails another is reported as `unreliable`: the Method does not follow the rule every time. With `--runs N --min-pass M`, the case passes when at least M of N runs pass. A case stops as soon as its result is decided. The report's `totals` give the time, the model steps that ran live, and the judge calls that were not cached. Cases run 4 at a time; cases whose recorded steps differ from this version run first. Each case reports `duration_ms`. With `--baseline OLD`, each case also runs on the old version, to show what the change fixed or broke:
+Each attempt has its own scratch folder, so two attempts never share a folder:
+
+- The case's snapshots are copied into it. The recorded inputs and each served step output name these copies in place of the recorded paths (a whole path, a path below it, or a path inside text). Each `files` connection that no step writes is bound to its copy.
+- Each `files` connection that a step writes is replaced by a scratch copy of the real folder (up to 5,000 files and 100 MB; a larger folder makes the case `unverifiable`), so a changed step that writes files runs safely and the real folder is not touched.
+- A path in a step's inputs is compared with the path that the recorded run saw.
+- A live step whose inputs name a path in `snapshot_missing` makes the attempt `unverifiable`, with the reason `missing_file` and the path.
+
+A replay cannot change anything outside its scratch folder:
+
+- Claude Code may use `Read`, `Glob` and `Grep` only in the scratch folder and the replay's run folder, and `Write` and `Edit` only in the run's `artifacts/` and the scratch folder. It has the Method tools and no `Bash`.
+- Codex runs in its `workspace-write` sandbox with the scratch folder as its working folder, the run's `artifacts/` as the only other writable folder, and no network.
+- A Method tool with `effects` does not run. It returns `{"replayed": true}`, and a `tool.standin` event records the tool and its arguments.
+- A script that runs live gets `HOME` and `TMPDIR` inside the scratch folder and `METHOD_REPLAY=1`.
+
+A changed step that asks a person, or a changed script step that changes a connection other than `files`, cannot run in a test: the case is `unverifiable`. When every expectation refers to `outputs.NAME`, only the steps that produce those outputs, and the steps they depend on, run. Effects are judged on recorded observations only; observers never read the live system in a test. Without recorded observations, an effect is `not_replayed`. With them, an absence of evidence stays `pending`. Live runs (not replays) are not limited in these ways.
+
+**Results.** Every active case must pass. Without `--runs`, a case runs once when only scripts run, and three times when a model step runs live, because a model can answer differently each time; every run must pass. A case that passes some runs and fails another is reported as `unreliable`: the Method does not follow the rule every time. With `--runs N --min-pass M`, the case passes when at least M of N runs pass. A case stops as soon as its result is decided. The report's `totals` give the time, the model steps that ran live, and the judge calls that were not cached. Cases run 4 at a time; cases whose recorded steps differ from this version run first. Each case reports `duration_ms`. Each attempt reports `live_steps` (the steps that ran live), `standins` (`[{step, iteration, tool, arguments}]`), and `output`: what a person would have seen, `{result, files}`, with the text of up to 10 files that the attempt wrote, by the path that the recorded run used. A `file:PATH` ref with a relative path reads the attempt's copy of the recorded run's artifacts first, where the live steps wrote.
+
+`testCase` and `testSuite` accept these options:
+
+| Option | Meaning |
+|---|---|
+| `once` | One run decides (`runs: 1`). |
+| `runs`, `minPass` | Run the case `runs` times; it passes when at least `minPass` runs pass. They replace the case's own values. |
+| `live: [STEP]` | These steps run live even when they match the recording. The result and each attempt report `target_live`: true when every named step ran live. |
+| `judgeCache: false` | The rubric judge votes again instead of reading the judgment cache. |
+| `keepDir` | A folder that keeps each attempt's run folder and scratch folder; each attempt reports its `run_dir`. |
+| `judges: [PROFILE]` | Rubric criteria are judged by each of these judge model profiles (for example the user's Claude Code and Codex). A criterion passes only when every judge passes it; when the judges disagree, it fails with the reason `unsure` (`unsure: true`). `evaluate`, `createCase` and `judgeRubric` take the same `options.judges`. |
+
+With `--baseline OLD`, each case also runs on the old version, to show what the change fixed or broke:
 
 | Verdict | Meaning | Blocks the gate |
 |---|---|---|
@@ -423,6 +470,28 @@ Each expectation can carry `text`, a plain-language statement for people. A case
 | `not_red` / `not_fixed` | A `--new` case passed before the change, or still fails after it | Yes |
 
 `method test` exits 0 when no case blocks the gate. Retired cases stay on disk with their reason and the case that superseded them, and are not run. Cases past their retention date are listed as expired.
+
+## Learned rules
+
+`learned.json` beside the Method file keeps rules learned from corrections, by step:
+
+```json
+{"format": "method-learned/1", "steps": {"write": [
+  {"id": "lr_0123456789ab", "when": "the claim is about sanctions", "then": "Name the regulation.", "by": "Ryan",
+   "from": {"judgment": "jdg_...", "case": "correction-..."}, "status": "active",
+   "created": "2026-10-19T10:00:00Z", "retired_at": null, "retired_reason": null}]}}
+```
+
+`spec/method-learned.schema.json` is its schema. The file is part of the bundle and the manifest. A file that does not match the schema stops the run before any step.
+
+Before a `call` or `agent` step runs, the runtime selects the active rules of that step:
+
+- A rule with `when: null` always applies.
+- One model call on the step's own model profile decides the others. Its input is `{inputs, conditions: [{id, when}]}`; its output is the list of ids that apply. Without conditional rules, there is no call.
+
+The rules that apply are added at the end of the step's prompt under "Rules learned from corrections:". A `learned.applied` event records `{step, iteration, considered, applied}` (rule ids). A retired rule never applies.
+
+The step's key, for replay and for reuse, includes the active rules of that step only, so a rule changes nothing for other steps. In a replay, the selection call runs only for a step that runs live.
 
 ## Loops and stopping
 
@@ -448,7 +517,7 @@ Run `elapsed_ms` starts after document/configuration validation, initial-value c
 
 ## Files, traces, and recovery
 
-`files` explicitly lists additional helper/dependency files. Direct script and tool entrypoints are included automatically. Files are copied into the run's bundle and hashed. Relative paths cannot escape the source directory, including through symlinks. Large model weights should be external with their version/hash supplied through an explicit input or locked helper dependency; there is no managed model registry.
+`files` explicitly lists additional helper/dependency files. Direct script and tool entrypoints, and `learned.json` when it exists, are included automatically. Files are copied into the run's bundle and hashed. Relative paths cannot escape the source directory, including through symlinks. Large model weights should be external with their version/hash supplied through an explicit input or locked helper dependency; there is no managed model registry.
 
 The runner verifies bundle hashes before each script execution. It records the Method and configuration hashes, runtime binary hashes, inputs, candidate outputs, state changes, checks, model requests/responses, tool dispatches/results, errors, and timestamps. User-supplied model aliases resolve to the recorded settings. Hosted model weights can still change behind a provider identifier.
 
@@ -478,7 +547,7 @@ failure: {
 
 The owner says whose problem it is: the Method's code (a script, check, tool, observer, or judge returned data in the wrong form or exited with an error), the agent's work (a model or agent returned data in the wrong form, or a declared check did not pass), a service outside Method (after the retries), a limit, the setup (a secret, model, tool, connection, run lock, or resume mismatch), an answer that a person must give, or a problem in Method itself. Each owner has one headline template and one next action. The headline and `next.text` never contain inputs, outputs, prompts, or URLs. A data error names the producer, the field, the kind of value found, and the kind expected, for example "the check script check.mjs returned evidence[0] as an object, but it must be text". A run that cannot start (an invalid Method, a missing secret, a locked run) rejects with an error whose `failure` is the same record.
 
-`events.jsonl` events that a person reads carry `message`, one plain sentence: `run.started`, `run.completed`, `run.failed` (the headline), `step.started`, `step.accepted`, `step.retry`, `check.completed`, `tool.dispatched`, `tool.completed`, `tool.failed`, `human.required`, `effect.observed`, and `notice`. Tasks are 1-based in text ("task 5 of 12") and 0-based in `iteration`. `step.started` of an `each` step has `total`, the number of tasks. A `notice` event (`{step?, iteration?, key, kind, message, attempt?, attempts?}`) records a problem that the run handles itself: a retry (`kind: retry`), an error-type or warning-type event in the Codex or Claude Code event stream (`kind: agent`, with the agent's own message), or 80% use of a run or step limit for time, model requests, tool calls, or invocations (`kind: limit`, once per limit). `key` is `STEP:ITERATION:KIND:NAME`, the same for each repeat of the same problem, so a reader shows the newest one. Lines that an agent writes only to its standard error are not notices.
+`events.jsonl` events that a person reads carry `message`, one plain sentence: `run.started`, `run.completed`, `run.failed` (the headline), `step.started`, `step.accepted`, `step.retry`, `check.completed`, `tool.dispatched`, `tool.completed`, `tool.failed`, `tool.standin`, `learned.applied`, `human.required`, `effect.observed`, and `notice`. Tasks are 1-based in text ("task 5 of 12") and 0-based in `iteration`. `step.started` of an `each` step has `total`, the number of tasks. A `notice` event (`{step?, iteration?, key, kind, message, attempt?, attempts?}`) records a problem that the run handles itself: a retry (`kind: retry`), an error-type or warning-type event in the Codex or Claude Code event stream (`kind: agent`, with the agent's own message), or 80% use of a run or step limit for time, model requests, tool calls, or invocations (`kind: limit`, once per limit). `key` is `STEP:ITERATION:KIND:NAME`, the same for each repeat of the same problem, so a reader shows the newest one. Lines that an agent writes only to its standard error are not notices.
 
 To continue the same run with its original files, resume:
 
@@ -498,7 +567,7 @@ For new evidence or changed inputs, use a new run. `--state prior-run/state.json
 
 ### Reuse unchanged steps
 
-A host can pass earlier run directories as `cacheFrom`. Before an iteration runs, the runner computes its key: the step definition without display text (`name`, `purpose`, `reading`), the resolved inputs (including the `each` item), the model profiles, classification setup, tool definitions, and runtime profiles that it uses, and, for a step that runs a script, its own entrypoints and every bundle file that is not another step's entrypoint (the runtime does not trace which helper files a script imports). When an earlier run accepted an iteration with the same key, the runner copies its declared file outputs (and the assets of a `method-website` file), checks their hashes, and accepts its outputs without executing anything. Its `step.started` and `step.accepted` events have `reused_from`, and the summary's `reused` counts the reused iterations of each step.
+A host can pass earlier run directories as `cacheFrom`. Before an iteration runs, the runner computes its key: the step definition without display text (`name`, `purpose`, `reading`), the resolved inputs (including the `each` item), the model profiles, classification setup, tool definitions, and runtime profiles that it uses, and, for a step that runs a script, its own entrypoints and every bundle file that is not another step's entrypoint or `learned.json` (the runtime does not trace which helper files a script imports), and the step's own active learned rules. When an earlier run accepted an iteration with the same key, the runner copies its declared file outputs (and the assets of a `method-website` file), checks their hashes, and accepts its outputs without executing anything. Its `step.started` and `step.accepted` events have `reused_from`, and the summary's `reused` counts the reused iterations of each step.
 
 A step is never reused when it has `ask` or `effects`, changes state or an external system, or uses a tool with effects. A step that reads `run.started_at` gets new inputs on each run, so it runs again. `fresh: true` runs every step; `fresh: [STEP]` runs those steps again even when a match exists. A fix to one step therefore needs no special command: run the Method again, and the steps whose definition and inputs did not change are reused. Steps after a changed step are reused when their inputs are the same as before.
 

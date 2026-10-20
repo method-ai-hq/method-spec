@@ -27,3 +27,9 @@ export namespace observationSchema {
 export const builtinObserverKinds: string[];
 export namespace judgmentSchema { }
 export namespace checkResultSchema { }
+/**
+ * learned.json beside a Method file: rules learned from corrections, by step. A rule with when null always applies;
+ * a retired rule is kept for its history and never applies.
+ * @type {Record<string, any>}
+ */
+export const learnedSchema: Record<string, any>;

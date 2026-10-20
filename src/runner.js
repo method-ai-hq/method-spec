@@ -23,7 +23,8 @@ import { progressMessage } from './progress.js';
 import { cacheable, iterationKey, readCache, copyOutputFiles } from './cache.js';
 import { effectKey, connectionsFor, testFixtures, runObserverScript, observeEffect, readLedger, appendLedger, currentEffects, effectSummary, statusWithEffects, waitUntil, nextObservation, horizonAt, previousObservations, listFolder, observeFiles, isBuiltin } from './effects.js';
 import { observerConnection } from './semantics.js';
-import { replayedCandidate, unverifiable } from './replay.js';
+import { replayedCandidate, unverifiable, stepKey, namedPath } from './replay.js';
+import { readLearned, activeRules, rulesText, selectionPrompt, selectionSchema } from './learned.js';
 import { prepareObservation } from './observed-effects.js';
 import { failureRecord } from './failure.js';
 import { eventText, placeText, retryNotice, agentNotice, limitNotice } from './event-text.js';
@@ -241,6 +242,10 @@ async function executeRun(file, config, options) {
     };
     await options.prepareBundle?.(bundle);
     await verifyBundle();
+    const learned = await readLearned(bundle);
+    // A replay's own folder: scripts that run live get their HOME and TMPDIR here, and agents may write only here and in artifacts.
+    const scratch = options.replay ? pathResolve(options.replay.scratch ?? pathResolve(runDir, 'scratch')) : null;
+    if (scratch) for (const dir of ['home', 'tmp']) await mkdir(pathResolve(scratch, dir), { recursive: true, mode: 0o700 });
     if (saved) {
       const prior = JSON.parse(await readFile(pathResolve(runDir, 'summary.json'), 'utf8'));
       if (['completed', 'unconfirmed'].includes(prior.status)) {
@@ -261,6 +266,7 @@ async function executeRun(file, config, options) {
       const basic = Object.fromEntries(callerVariables.flatMap(name => process.env[name] ? [[name, process.env[name]]] : []));
       const environment = { ...basic, PATH: options.processPath ?? process.env.PATH ?? '', LANG: 'C.UTF-8', METHOD_OUTPUT_DIR: artifacts, METHOD_ENVIRONMENT: JSON.stringify(connectionsFor(method, config.environment)) };
       if (operationId) environment.METHOD_OPERATION_ID = operationId;
+      if (scratch) Object.assign(environment, { HOME: pathResolve(scratch, 'home'), TMPDIR: pathResolve(scratch, 'tmp'), METHOD_REPLAY: '1' });
       // Preflight checked that every declared secret has a value.
       for (const name of Object.keys(method.secrets ?? {})) environment[name] = secretValue(options, name);
       if (Buffer.byteLength(JSON.stringify(input)) > config.limits.max_request_bytes) fail('limit', 'Script input exceeds request limit', 'input_limit', { limit: 'request size', value: config.limits.max_request_bytes });
@@ -326,7 +332,9 @@ async function executeRun(file, config, options) {
       current = id;
       const step = method.steps[id];
       const stepOutputs = effectiveOutputs(step);
-    const limits = { ...config.step_defaults, ...step.limits };
+      const limits = { ...config.step_defaults, ...step.limits };
+      const rules = activeRules(learned, id);
+      const replayKey = options.replay ? stepKey(step, { files: manifest, profiles, tools, helpers: method.files ?? [], rules }) : null;
       if (skipped.includes(id)) continue;
       if (!accepted[id]?.length && step.when && resolve(root, step.when) === false) { skipped.push(id); await record('step.skipped', { step: id }); continue; }
       const eachEntry = Object.entries(step.each ?? {})[0];
@@ -350,7 +358,7 @@ async function executeRun(file, config, options) {
         }
         const bindings = Object.fromEntries(Object.entries(step.in ?? {}).map(([k, ref]) => [k, structuredClone(resolve(root, ref))]));
         if (eachEntry) bindings[eachEntry[0]] = collection[iteration];
-        const key = cacheable(step, tools) ? iterationKey({ method, step, bindings, iteration, profiles, config, runtimeInfo, manifest }) : null;
+        const key = cacheable(step, tools) ? iterationKey({ method, step, bindings, iteration, profiles, config, runtimeInfo, manifest, rules }) : null;
         const hit = key && !fresh.has(id) ? cache.get(key) : undefined;
         if (hit) {
           // An earlier run accepted this exact iteration. Its outputs and files are reused; nothing executes.
@@ -381,7 +389,7 @@ async function executeRun(file, config, options) {
         if (stateNames.length) outputDefs.state = { type: 'record', fields: Object.fromEntries(stateNames.map(k => [k, method.state[k]])) };
         const schema = outputSchema(outputDefs);
         const context = {
-          models: profiles, artifacts, signal: bound.signal, maxAgentTurns: limits.max_agent_turns,
+          models: profiles, artifacts, signal: bound.signal, maxAgentTurns: limits.max_agent_turns, replay: scratch ? { scratch, runDir } : null,
           maxRequestBytes: config.limits.max_request_bytes, maxOutputBytes: config.limits.max_output_bytes,
           transport: options.transport, hosted: options.hostedModels, secret: name => secretValue(options, name), record: scopedRecord, guard,
           cost(value) { if (Number.isFinite(value) && value >= 0) costUsd = (costUsd ?? 0) + value; },
@@ -419,6 +427,12 @@ async function executeRun(file, config, options) {
             watchRunLimits();
             const tool = tools[name];
             assertSchema(tool.parameters ?? outputSchema(tool.in), args, 'Tool arguments', { producer: `the agent's call of the tool ${name}`, owner: 'agent_work' });
+            // A replay never changes the outside world: a tool with effects does not run, and the record keeps what it was asked to do.
+            if (options.replay && tool.effects?.length) {
+              await this.record('tool.standin', { tool: name, call_id: callId, arguments: args, effects: tool.effects });
+              const standin = { replayed: true };
+              return tool.connection ? { content: [{ type: 'text', text: JSON.stringify(standin) }] } : standin;
+            }
             if (tool.connection) {
               // Page content is returned to the agent, never session secrets or raw provider logs.
               await this.record('tool.dispatched', {tool:name,call_id:callId,effects:tool.effects});
@@ -465,6 +479,8 @@ async function executeRun(file, config, options) {
         };
         // The owner of a wrong value: a script is the Method's code; a model, an agent, or a classification is the agent's work.
         const ownerOf = exec => exec.kind === 'run' ? 'method_code' : 'agent_work';
+        // The learned rules that apply to this iteration end the action prompt.
+        let learnedText = '';
         /** Run one phase. feedback is appended to the rendered prompt of a second attempt. */
         const execute = async (exec, input, schema, phase, feedback) => {
           const producer = producerOf(exec, phase);
@@ -476,6 +492,7 @@ async function executeRun(file, config, options) {
               let rendered;
               try { rendered = renderPrompt(template, input); }
               catch (error) { fail('method_code', `${id}.${phase}.prompt: ${error.message}`, 'invalid_prompt', { producer: `the prompt of the ${phase}`, problem: 'refers to a value that the step does not receive' }); }
+              if (phase === 'action' && learnedText) rendered += `\n\n${learnedText}`;
               if (feedback) rendered += `\n\n${feedback}`;
               if (Buffer.byteLength(rendered) + Buffer.byteLength(JSON.stringify(input)) > config.limits.max_request_bytes) fail('limit', 'Expanded prompt exceeds request limit', 'input_limit', { limit: 'request size', value: config.limits.max_request_bytes });
               await scopedRecord('prompt.rendered', { phase, template, rendered });
@@ -510,9 +527,16 @@ async function executeRun(file, config, options) {
           await scopedRecord('step.started', { ...(eachEntry ? { total: count } : {}), inputs: bindings, state_before: state, external_effects_possible: (step.changes ?? []).some(x => x.startsWith('environment.')) });
           const answer = options.human?.steps?.[active];
           // A replay serves recorded outputs for unchanged steps; a changed step that acts on the world cannot be replayed.
-          const replayed = options.replay ? replayedCandidate(options.replay, { id, step, iteration, bindings, manifest, profiles, tools }) : null;
-          // In a replay, files connections are scratch folders, so a changed step that writes files can run.
-          if (options.replay && !replayed && (step.ask || (step.changes ?? []).some(x => x.startsWith('environment.') && method.environment?.[x.slice(12)]?.type !== 'files'))) unverifiable(id, iteration, step);
+          const replayed = options.replay ? replayedCandidate(options.replay, { id, step, iteration, bindings, key: replayKey }) : null;
+          // A live step that names a path that the case could not keep would read a file that is gone or has changed.
+          const missing = options.replay && !replayed ? namedPath(bindings, options.replay.missing ?? []) : null;
+          if (missing) {
+            await scopedRecord('replay.missing_file', { path: missing });
+            fail('setup', `Cannot replay ${id}:${iteration}: its inputs name ${missing}, which the case could not keep.`, 'unverifiable');
+          }
+          // In a replay, files connections are scratch folders and Method tools with effects return stand-ins, so a changed
+          // agent step can run. A script that changes another kind of connection, or a step that asks a person, cannot.
+          if (options.replay && !replayed && (step.ask || (step.do?.kind === 'run' && (step.changes ?? []).some(x => x.startsWith('environment.') && method.environment?.[x.slice(12)]?.type !== 'files')))) unverifiable(id, iteration, step);
           const folders = (step.changes ?? []).filter(x => x.startsWith('environment.') && method.environment?.[x.slice(12)]?.type === 'files').map(x => x.slice(12));
           const before = {};
           for (const name of folders) before[name] = tooLarge.has(name) ? null : await listFolder(pathResolve(config.environment[name]), [runDir]);
@@ -570,6 +594,18 @@ async function executeRun(file, config, options) {
           // A model or an agent gets one more attempt when its work does not pass the check: it sees the check's reason
           // and evidence. A step that changes the outside world is not run twice.
           const retryable = ['agent', 'call'].includes(step.do?.kind) && !replayed && !step.effects && !(step.changes ?? []).some(x => x.startsWith('environment.'));
+          // Learned rules: a rule without a condition always applies; one call on the step's own model decides the others.
+          if (rules.length && !replayed && ['agent', 'call'].includes(step.do?.kind)) {
+            const conditional = rules.filter(rule => rule.when !== null);
+            let chosen = [];
+            if (conditional.length) {
+              try { chosen = (await execute({ kind: 'call', model: modelName(step.do), prompt: selectionPrompt }, { inputs: bindings, conditions: conditional.map(({ id, when }) => ({ id, when })) }, selectionSchema, 'rules')).applies; }
+              catch (error) { if (error?.phase === 'rules') error.phase = 'action'; throw error; }
+            }
+            const applied = rules.filter(rule => rule.when === null || chosen.includes(rule.id));
+            await scopedRecord('learned.applied', { considered: rules.map(rule => rule.id), applied: applied.map(rule => rule.id) });
+            if (applied.length) learnedText = rulesText(applied);
+          }
           if (!await accept(await act())) {
             if (!retryable) checkFailed(1);
             await scopedRecord('step.retry', { attempt: 2, attempts: 2, reason: check.reason ?? '', evidence: check.evidence ?? [] });

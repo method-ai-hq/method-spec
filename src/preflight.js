@@ -7,6 +7,7 @@ import { validateMethod, validateConfig, own, fail } from './validate.js';
 import { executable, hash, relativeFile, containedFile } from './io.js';
 import { fixtureFiles } from './effects.js';
 import { directBackends } from './model.js';
+import { readLearned, learnedFile } from './learned.js';
 
 /** A declared secret has a value in the host's store or the process environment. */
 const hasSecret = (options, name) => !!(options.secrets && own(options.secrets, name) ? options.secrets[name] : process.env[name]);
@@ -81,7 +82,9 @@ export async function preflight(method, config, sourceRoot, options = {}) {
     if (!own(config.environment, name)) { if(options.allowMissingSetup)missingSetup.push(`Bind input: ${name}`); else fail('setup', `Missing environment binding: ${name}`, 'preflight'); }
   }
   const code = [...new Set([...(method.files ?? []), ...scripts.map(x => x.entrypoint)])];
-  const files = [...new Set([...code, ...(options.checkFiles === false ? [] : await fixtureFiles(method, sourceRoot))])];
+  // Rules learned from corrections travel with the Method: learned.json is part of the bundle and the manifest.
+  const learned = sourceRoot ? await readLearned(sourceRoot) : null;
+  const files = [...new Set([...code, ...(learned ? [learnedFile] : []), ...(options.checkFiles === false ? [] : await fixtureFiles(method, sourceRoot))])];
   for (const name of options.checkFiles === false ? [] : files) {
     relativeFile(name);
     let file;
@@ -91,5 +94,5 @@ export async function preflight(method, config, sourceRoot, options = {}) {
     if (!info.isFile()) fail('setup', `Method file is not a regular file: ${name}`, 'preflight');
     if (info.size > 20_000_000) fail('setup', `Bundle file exceeds 20 MB: ${name}`, 'preflight');
   }
-  return { scripts, runtimeInfo, files, missingSetup };
+  return { scripts, runtimeInfo, files, missingSetup, learned };
 }

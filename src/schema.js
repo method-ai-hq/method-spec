@@ -149,3 +149,24 @@ export function displayText(result) {
   if ('evidence' in out) out.evidence = (Array.isArray(out.evidence) ? out.evidence : [out.evidence]).map(text);
   return out;
 }
+
+const nullable = value => ({ anyOf: [value, { type: 'null' }] });
+/**
+ * learned.json beside a Method file: rules learned from corrections, by step. A rule with when null always applies;
+ * a retired rule is kept for its history and never applies.
+ * @type {Record<string, any>}
+ */
+export const learnedSchema = {
+  $schema: 'http://json-schema.org/draft-07/schema#',
+  $id: 'https://github.com/method-ai-hq/method-spec/raw/main/spec/method-learned.schema.json',
+  ...object({
+    format: { const: 'method-learned/1' },
+    steps: map({ type: 'array', items: object({
+      id: { type: 'string', pattern: '^lr_[0-9a-f]{12}$' }, when: nullable(text), then: text, by: nullable(text),
+      from: { type: 'object', properties: { judgment: nullable(text), case: nullable(text) }, additionalProperties: false },
+      status: { enum: ['active', 'retired'] }, created: text, retired_at: nullable(text), retired_reason: nullable(text),
+      // What the improvement loop keeps about a rule (failure counts of its case, dormant marks, merges); the runtime ignores it.
+      meta: { type: 'object' },
+    }, ['id', 'when', 'then', 'status']) }),
+  }),
+};
