@@ -268,7 +268,7 @@ test('learned rules: active ones are selected, end the prompt, are recorded, and
 
 test('a script that runs live in a replay gets HOME and TMPDIR in the scratch folder and METHOD_REPLAY', async t => {
   const dir = await folder(t, 'method-replay-env-');
-  const env = extra => `console.log(JSON.stringify({home:process.env.HOME,tmp:process.env.TMPDIR,replay:process.env.METHOD_REPLAY??"no"}))${extra}`;
+  const env = extra => `console.log(JSON.stringify({home:process.env.HOME??"",tmp:process.env.TMPDIR??"",replay:process.env.METHOD_REPLAY??"no"}))${extra}`;
   await writeFile(join(dir, 'env.mjs'), env(''));
   const doc = { format: 'method/3.3', name: 'Env', goal: 'Report the environment.', steps: { env: { name: 'Env', do: script('env.mjs'), out: { home: text, tmp: text, replay: text } } }, result: 'replay' };
   const file = join(dir, 'e.method'); await writeFile(file, JSON.stringify(doc));
