@@ -67,7 +67,9 @@ test('a file ref names the file that the live step wrote in the replay copy of t
   await writeFile(caseFile, JSON.stringify(value));
   await writeFile(join(created.dir, 'check.mjs'), 'import{readFileSync}from"node:fs";const a=JSON.parse(readFileSync(0,"utf8"));const f=a.files["room/work/memo.md"];console.log(JSON.stringify({pass:!!f&&readFileSync(f,"utf8").includes("Tell the Board.")}))');
   await rm(runs, { recursive: true }); await rm(join(dir, 'rooms'), { recursive: true });
-  await writeFile(join(dir, 'work.mjs'), work(' Tell the Board.').replace('notes+" Tell the Board."+token', 'notes+" Tell the Board."'));
+  // The work step also leaves a record where the runtime keeps an agent's records; that is not what the step made.
+  await writeFile(join(dir, 'work.mjs'), work(' Tell the Board.').replace('notes+" Tell the Board."+token', 'notes+" Tell the Board."')
+    .replace('console.log(', 'mkdirSync(process.env.METHOD_OUTPUT_DIR+"/claude/attempt-a",{recursive:true});writeFileSync(process.env.METHOD_OUTPUT_DIR+"/claude/attempt-a/events.jsonl","{}");console.log('));
   const [item] = await listCases(file);
   const result = await testCase(file, config(), item);
   assert.equal(result.status, 'pass', JSON.stringify(result.attempts));

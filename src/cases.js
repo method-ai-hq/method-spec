@@ -237,10 +237,13 @@ async function fileHashes(dir) {
  * to 20,000 characters), by the path that the run would have used. before: the hash of each file in the attempt's
  * copies before the run; a file with the same content was copied, not written.
  */
+// The records that the runtime itself writes in an agent step's folder: not what the step made.
+const agentRecord = /^(claude|codex)\/attempt-[^/]+\/(events\.jsonl|mcp\.json|prompt\.md|result\.json|schema\.json|stderr\.log)$/;
 async function attemptOutput(outcome, before) {
   const files = {};
   for (const [name, path] of Object.entries(await writtenFiles(outcome))) {
     if (Object.keys(files).length >= 10) break;
+    if (agentRecord.test(name)) continue;
     try {
       const text = await readFile(path, 'utf8');
       if (before.get(path) === sha(text)) continue;
