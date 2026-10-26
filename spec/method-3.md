@@ -1,6 +1,6 @@
 # Method reference
 
-Implemented by `@withmethod/runtime` 0.16.3. The full Method SDK uses this runtime at a released version. New methods use this format under the same Method product and command.
+Implemented by `@withmethod/runtime` 0.16.4. The full Method SDK uses this runtime at a released version. New methods use this format under the same Method product and command.
 
 Use `format: method/3.4` for new documents. Existing `method/3.1`, `method/3.2`, and `method/3.3` documents load and run unchanged. All formats share one set of rules, with two exceptions that keep saved documents running: before `method/3.3`, an external change needs no effect; before `method/3.4`, a plain model name can name a configured profile (or a saved package's `runtime.json` model). Method 3.3 adds effect contracts: an external change is confirmed by an observer, not by the action's receipt. Method 3.4 adds the Method ID, the Method's own `models`, `limits`, and `tools`, model IDs on steps, and accepted warnings (see [Method 3.4](#method-34)). The machine-readable grammar is [method-3.schema.json](method-3.schema.json). Operator configuration uses [runtime-config.schema.json](runtime-config.schema.json). The validator also checks references, dependencies, data declarations, loop conditions, and effects; JSON Schema alone is insufficient.
 
