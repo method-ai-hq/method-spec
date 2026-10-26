@@ -2,6 +2,9 @@ import { modelName } from './semantics.js';
 import { assertSchema, fail, safeData } from './validate.js';
 import { withRetries, transientStatus, transientClass, attempts } from './retry.js';
 import { retryNotice } from './event-text.js';
+import { modelTranscript, writeTranscript } from './transcript.js';
+import { mkdir, mkdtemp } from 'node:fs/promises';
+import { join } from 'node:path';
 
 function abortable(operation, signal) {
   if (signal.aborted) return Promise.reject(signal.reason);
@@ -142,7 +145,7 @@ async function providerRequestOnce(body, profile, adapter, context) {
   if (hosted && !context.hosted && !context.transport) fail('setup', 'Hosted models need Method sign-in. Run method login, then run again.', 'needs_input');
   if (!hosted && !key && !context.transport) fail('setup', `Missing environment variable: ${profile.api_key_env}`, 'preflight');
   context.reserveRequest();
-  await context.record('model.request', { backend: profile.backend, model: profile.model, request: body });
+  const request = await context.record('model.request', { backend: profile.backend, model: profile.model, request: body });
   try {
     const data = await abortable(() => context.transport
       ? context.transport(body, { signal: context.signal, backend: profile.backend })
@@ -160,8 +163,8 @@ async function providerRequestOnce(body, profile, adapter, context) {
     const usage = adapter.usage(data);
     context.usage(usage);
     context.cost?.(object(data.usage).cost);
-    await context.record('model.response', { backend: profile.backend, response: data, usage: usage ?? null });
-    return data;
+    const sequence = await context.record('model.response', { backend: profile.backend, response: data, usage: usage ?? null });
+    return { data, request, sequence };
   } catch (error) {
     // Any other error of the provider request (a network error, a transport error) is the provider's.
     if (error && typeof error === 'object') error.owner ??= 'outside_service';
@@ -170,7 +173,16 @@ async function providerRequestOnce(body, profile, adapter, context) {
   }
 }
 
+/** One model step attempt. Its conversation is kept as transcript.jsonl in its own folder under the run's artifacts. */
 export async function executeModel(execution, input, schema, context) {
+  await mkdir(join(context.artifacts, 'model'), { recursive: true, mode: 0o700 });
+  const directory = await mkdtemp(join(context.artifacts, 'model', 'attempt-'));
+  const read = [];
+  try { return await converse(execution, input, schema, context, read); }
+  finally { await writeTranscript(directory, modelTranscript(`${execution.prompt}\n\n${json(input)}`, read), context.redact); }
+}
+
+async function converse(execution, input, schema, context, read) {
   const profile = context.models[modelName(execution)];
   const adapter = adapters[profile.backend];
   const messages = [{ role: 'user', content: json(input) }];
@@ -180,9 +192,11 @@ export async function executeModel(execution, input, schema, context) {
     context.guard();
     if (execution.kind === 'agent') context.reserveAgentTurn();
     const settings = profile.backend === 'method' ? { max_output_tokens: hostedOutputTokens, ...profile } : profile;
-    const data = await providerRequest(adapter.body({ profile: settings, instructions: execution.prompt, messages, schema, tools }), profile, adapter, context);
+    const { data, request, sequence } = await providerRequest(adapter.body({ profile: settings, instructions: execution.prompt, messages, schema, tools }), profile, adapter, context);
     context.guard();
     const reply = adapter.read(data);
+    const entry = { request, sequence, reply: { text: reply.text, calls: reply.calls }, results: [], final: !reply.calls?.length };
+    read.push(entry);
     if (reply.incomplete) fail('agent_work', `Model response is not complete: ${reply.incomplete}`, 'model_incomplete');
     if (reply.calls.length) {
       if (execution.kind !== 'agent') fail('agent_work', 'A call step cannot execute tools', 'tool_denied');
@@ -193,6 +207,7 @@ export async function executeModel(execution, input, schema, context) {
         if (!(execution.tools ?? []).includes(call.name)) fail('agent_work', `Tool is not allowed: ${call.name}`, 'tool_denied');
         const args = typeof call.arguments === 'string' ? JSON.parse(call.arguments) : call.arguments; safeData(args, 'agent_work');
         results.push({ call, output: await context.invokeTool(call.name, args, call.id) });
+        entry.results.push(results.at(-1));
       }
       messages.push(...adapter.results(results));
       continue;

@@ -7,6 +7,7 @@ import { executable, executeProcess, writeJSON } from './io.js';
 import { fail, safeData, assertSchema } from './validate.js';
 import { codexProgress, agentEvent } from './progress.js';
 import { agentNotice } from './event-text.js';
+import { codexTranscript, writeTranscript } from './transcript.js';
 
 /**
  * The Codex arguments of one step. A live run bypasses the sandbox, as before. A replay runs in Codex's workspace-write
@@ -46,6 +47,10 @@ export async function executeCodex(execution, input, schema, context) {
   const args = codexArgs({ schemaFile: join(directory, 'schema.json'), output, url: bridge.url, profile, artifacts: context.artifacts, replay: context.replay });
   const env = { ...process.env, METHOD_CODEX_TOOL_TOKEN: bridge.token,
     PATH: [dirname(command), process.env.PATH ?? ''].join(delimiter), METHOD_OUTPUT_DIR: context.artifacts };
+  // A usage limit of the person's ChatGPT plan: Codex says so only in its error message.
+  const usageLimit = message => /\b(hit|reached) your usage limit\b/i.test(message ?? '');
+  const clean = value => String(value).replaceAll(bridge.token, '[REDACTED]');
+  let eventsText = '', value;
   try {
     await context.record('codex.started', { provider: 'codex', command, model: profile.model ?? 'user-default', directory, prompt, output_schema: schema });
     const result = await executeProcess({ command, args, cwd: directory, input: prompt, rawInput: true,
@@ -60,13 +65,14 @@ export async function executeCodex(execution, input, schema, context) {
         if (reported && !context.signal.aborted) await context.notice?.({ kind: 'agent', sub: `codex_${reported.level}`, message: agentNotice({ agent: 'Codex', ...reported, message: reported.message.replaceAll(bridge.token, '[REDACTED]') }) });
       },
     });
-    await writeFile(join(directory, 'events.jsonl'), result.output, { mode: 0o600 });
+    eventsText = clean(result.output);
+    await writeFile(join(directory, 'events.jsonl'), eventsText, { mode: 0o600 });
     await writeFile(join(directory, 'stderr.log'), result.diagnostics, { mode: 0o600 });
     // A failed turn is a failure of the model service, whatever partial output it left: check it before the output's form.
     const events = result.output.split('\n').flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
     const failed = events.find(event => event.type === 'turn.failed');
+    if (failed && usageLimit(failed.error?.message)) fail('limit', failed.error.message, 'usage_limit', { producer: 'Codex' });
     if (failed) fail('outside_service', failed.error?.message ?? 'Codex turn failed', 'codex_failed', { producer: 'Codex', provider_message: failed.error?.message });
-    let value;
     try {
       if ((await stat(output)).size > context.maxOutputBytes) fail('limit', 'Codex output exceeds output limit', 'output_limit', { limit: 'output size', value: context.maxOutputBytes });
       value = JSON.parse(await readFile(output, 'utf8'));
@@ -79,16 +85,20 @@ export async function executeCodex(execution, input, schema, context) {
   } catch (error) {
     if (context.signal.aborted) error = context.signal.reason;
     if (error.output) {
-      await writeFile(join(directory, 'events.jsonl'), error.output.replaceAll(bridge.token, '[REDACTED]'), { mode: 0o600 });
+      eventsText = clean(error.output);
+      await writeFile(join(directory, 'events.jsonl'), eventsText, { mode: 0o600 });
       const failure = error.output.split('\n').reverse().flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } })
         .find(event => event.type === 'turn.failed' || event.type === 'error');
       const message = failure?.error?.message ?? failure?.message;
       if (message && !context.signal.aborted) error.message = `Codex failed: ${message}`;
       // Codex exited with an error: the agent or its model service failed.
-      if (!context.signal.aborted && error.code === 'process_failed') Object.assign(error, { owner: 'outside_service', producer: 'Codex', provider_message: message });
+      if (!context.signal.aborted && error.code === 'process_failed') Object.assign(error, usageLimit(message) ? { owner: 'limit', code: 'usage_limit', producer: 'Codex', message } : { owner: 'outside_service', producer: 'Codex', provider_message: message });
     }
-    if (error.diagnostics) await writeFile(join(directory, 'stderr.log'), error.diagnostics.replaceAll(bridge.token, '[REDACTED]'), { mode: 0o600 });
+    if (error.diagnostics) await writeFile(join(directory, 'stderr.log'), clean(error.diagnostics), { mode: 0o600 });
     await context.record('codex.failed', { directory, message: error.message });
     throw error;
-  } finally { await bridge.close(); }
+  } finally {
+    await bridge.close();
+    await writeTranscript(directory, codexTranscript(prompt, eventsText, value), text => context.redact(clean(text)));
+  }
 }

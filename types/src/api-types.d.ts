@@ -193,6 +193,7 @@ export interface RunOptions {
 /** reused counts the iterations of each step that came from an earlier run. */
 export interface RunSummary {
     run_dir: string;
+    execution_id: string;
     started_at: string;
     device_name: string;
     elapsed_ms: number;

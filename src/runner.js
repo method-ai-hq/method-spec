@@ -8,13 +8,13 @@ import { documentForDigest } from './document.js';
 import { executorVersion, assertCheckpointExecutor } from './executor-version.js';
 import { executeClaude } from './claude.js';
 import { configuration } from './defaults.js';
-import { mkdir, readFile, appendFile, realpath, open, unlink, cp, copyFile, stat as statFile }  from 'node:fs/promises';
+import { mkdir, readFile, appendFile, realpath, open, unlink, cp, copyFile, rm, stat as statFile }  from 'node:fs/promises';
 import { resolve as pathResolve, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { validateMethod, validateConfig, assertSchema, outputSchema, dataSchema, resolve, own, fail, safeData, shape } from './validate.js';
 import { checkResultSchema, object } from './schema.js';
-import { readDocument, hash, snapshotBundle, writeJSON, executeProcess, containedFile } from './io.js';
+import { readDocument, hash, snapshotBundle, writeJSON, executeProcess, containedFile, tempFolder } from './io.js';
 import { executeModel } from './model.js';
 import { executeCodex } from './codex.js';
 import { renderPrompt } from './prompt.js';
@@ -182,6 +182,7 @@ async function executeRun(file, config, options) {
     await checkpoint();
     await appendFile(pathResolve(runDir, 'events.jsonl'), JSON.stringify(entry) + '\n', { mode: 0o600 });
     await options.onEvent?.(entry);
+    return entry.sequence;
     });
     journal = write.catch(() => {});
     return write;
@@ -212,13 +213,13 @@ async function executeRun(file, config, options) {
     return () => clearTimeout(timer);
   };
   let stopRunWatch = () => {};
-  const summary = () => ({ run_dir: runDir, started_at: startedAt, device_name: deviceName, elapsed_ms: performance.now() - started, invocations, model_requests: requests, tool_calls: toolCalls,
+  const summary = () => ({ run_dir: runDir, execution_id: executionId, started_at: startedAt, device_name: deviceName, elapsed_ms: performance.now() - started, invocations, model_requests: requests, tool_calls: toolCalls,
     ...(codexProcesses ? { codex: { processes: codexProcesses, input_tokens: codexUsageReports ? codexInputTokens : null, output_tokens: codexUsageReports ? codexOutputTokens : null, scope: 'Codex-reported usage; internal requests and built-in tools are managed by Codex' } } : {}),
     ...(Object.keys(reused).length ? { reused } : {}),
     usage: { responses_with_usage: knownUsage, responses_without_usage: requests - knownUsage, input_tokens: knownUsage ? inputTokens : null, output_tokens: knownUsage ? outputTokens : null, cost_usd: costUsd, scope: 'executor-managed model requests only' } });
   let manifest;
   // Where the run is: setup until the first step starts, then the step that runs.
-  let stage = 'setup', current = null;
+  let stage = 'setup', current = null, replayTmp = null;
   try {
     manifest = saved ? JSON.parse(await readFile(pathResolve(runDir, 'manifest.json'), 'utf8')).files : await snapshotBundle(sourceRoot, files, bundle);
     await writeJSON(pathResolve(runDir, 'manifest.json'), { executor_version: executorVersion, method_sha256: hash(documentForDigest(method)), config_sha256: hash(suppliedConfig), files: manifest, runtime_profiles: runtimeInfo, models: profiles });
@@ -243,9 +244,10 @@ async function executeRun(file, config, options) {
     await options.prepareBundle?.(bundle);
     await verifyBundle();
     const learned = await readLearned(bundle);
-    // A replay's own folder: scripts that run live get their HOME and TMPDIR here, and agents may write only here and in artifacts.
+    // A replay's own folder: scripts that run live get their HOME here, and agents may write only here and in artifacts.
+    // Their TMPDIR is a short folder of its own: the scratch folder can be deep, and tools put sockets in TMPDIR.
     const scratch = options.replay ? pathResolve(options.replay.scratch ?? pathResolve(runDir, 'scratch')) : null;
-    if (scratch) for (const dir of ['home', 'tmp']) await mkdir(pathResolve(scratch, dir), { recursive: true, mode: 0o700 });
+    if (scratch) { await mkdir(pathResolve(scratch, 'home'), { recursive: true, mode: 0o700 }); replayTmp = await tempFolder('mt-'); }
     if (saved) {
       const prior = JSON.parse(await readFile(pathResolve(runDir, 'summary.json'), 'utf8'));
       if (['completed', 'unconfirmed'].includes(prior.status)) {
@@ -253,7 +255,7 @@ async function executeRun(file, config, options) {
         return prior;
       }
     }
-    await writeJSON(pathResolve(runDir, 'summary.json'), { status: 'running', started_at: startedAt });
+    await writeJSON(pathResolve(runDir, 'summary.json'), { status: 'running', execution_id: executionId, started_at: startedAt });
     await record(saved ? 'run.resumed' : 'run.started', { executor_version: executorVersion, execution_id: executionId, device_name: deviceName, method, config, inputs, initial_state: state, runtime_profiles: runtimeInfo, isolation: 'trusted-local-processes; not an OS sandbox' });
     await options.onStart?.({ method, inputs, state, runDir });
     stopRunWatch = timeWatch({}, config.limits.timeout_ms, performance.now() - started);
@@ -266,7 +268,7 @@ async function executeRun(file, config, options) {
       const basic = Object.fromEntries(callerVariables.flatMap(name => process.env[name] ? [[name, process.env[name]]] : []));
       const environment = { ...basic, PATH: options.processPath ?? process.env.PATH ?? '', LANG: 'C.UTF-8', METHOD_OUTPUT_DIR: artifacts, METHOD_ENVIRONMENT: JSON.stringify(connectionsFor(method, config.environment)) };
       if (operationId) environment.METHOD_OPERATION_ID = operationId;
-      if (scratch) Object.assign(environment, { HOME: pathResolve(scratch, 'home'), TMPDIR: pathResolve(scratch, 'tmp'), METHOD_REPLAY: '1' });
+      if (scratch) Object.assign(environment, { HOME: pathResolve(scratch, 'home'), TMPDIR: replayTmp, METHOD_REPLAY: '1' });
       // Preflight checked that every declared secret has a value.
       for (const name of Object.keys(method.secrets ?? {})) environment[name] = secretValue(options, name);
       if (Buffer.byteLength(JSON.stringify(input)) > config.limits.max_request_bytes) fail('limit', 'Script input exceeds request limit', 'input_limit', { limit: 'request size', value: config.limits.max_request_bytes });
@@ -391,7 +393,7 @@ async function executeRun(file, config, options) {
         const context = {
           models: profiles, artifacts, signal: bound.signal, maxAgentTurns: limits.max_agent_turns, replay: scratch ? { scratch, runDir } : null,
           maxRequestBytes: config.limits.max_request_bytes, maxOutputBytes: config.limits.max_output_bytes,
-          transport: options.transport, hosted: options.hostedModels, secret: name => secretValue(options, name), record: scopedRecord, guard,
+          transport: options.transport, hosted: options.hostedModels, secret: name => secretValue(options, name), record: scopedRecord, guard, redact,
           cost(value) { if (Number.isFinite(value) && value >= 0) costUsd = (costUsd ?? 0) + value; },
           canRequest: () => requests < config.limits.max_model_requests && localRequests < (limits.max_model_requests ?? 0),
           canAgentTurn: () => localAgentTurns < limits.max_agent_turns,
@@ -747,5 +749,5 @@ async function executeRun(file, config, options) {
     await record('run.failed', failed);
     await writeJSON(pathResolve(runDir, 'summary.json'), redact(failed));
     return failed;
-  } finally { stopRunWatch(); }
+  } finally { stopRunWatch(); if (replayTmp) await rm(replayTmp, { recursive: true, force: true }); }
 }

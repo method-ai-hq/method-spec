@@ -63,7 +63,7 @@ export interface RunOptions {
   transport?: ((...args: any[]) => Promise<any>) | undefined;
 }
 /** reused counts the iterations of each step that came from an earlier run. */
-export interface RunSummary {run_dir: string; started_at: string; device_name: string; elapsed_ms: number; invocations: number; model_requests: number; tool_calls: number; usage: Record<string, Json>; reused?: Record<string, number>}
+export interface RunSummary {run_dir: string; execution_id: string; started_at: string; device_name: string; elapsed_ms: number; invocations: number; model_requests: number; tool_calls: number; usage: Record<string, Json>; reused?: Record<string, number>}
 export type EffectVerdict = 'pending' | 'confirmed' | 'unrefuted' | 'contradicted' | 'unknown' | 'not_replayed';
 export interface EffectSummary {
   total: number; confirmed: number; unrefuted: number; contradicted: number; unknown: number; pending: number; next_observation_at: string | null;

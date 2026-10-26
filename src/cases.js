@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFile, readdir, mkdir, mkdtemp, rm, writeFile, stat, cp, realpath, chmod } from 'node:fs/promises';
 import { resolve as pathResolve, dirname, basename, join, relative, isAbsolute, sep } from 'node:path';
-import { tmpdir } from 'node:os';
 import { isDeepStrictEqual } from 'node:util';
 import { recordRun, stepKeys, rewritePaths } from './replay.js';
 import { readLearned } from './learned.js';
@@ -9,7 +8,7 @@ import { runMethod } from './runner.js';
 import { copyOutputFiles } from './cache.js';
 import { configuration } from './defaults.js';
 import { fail, own, safeData, validateMethod, effectiveOutputs } from './validate.js';
-import { executable, executeProcess, hash, writeJSON, containedFile, readDocument } from './io.js';
+import { executable, executeProcess, hash, writeJSON, containedFile, readDocument, tempFolder } from './io.js';
 import { readLedger, effectSummary } from './effects.js';
 import { judgeRubric, chooseJudges, findConflicts, valueText } from './rubric.js';
 
@@ -238,12 +237,13 @@ async function fileHashes(dir) {
  * copies before the run; a file with the same content was copied, not written.
  */
 // The records that the runtime itself writes in an agent step's folder: not what the step made.
-const agentRecord = /^(claude|codex)\/attempt-[^/]+\/(events\.jsonl|mcp\.json|prompt\.md|result\.json|schema\.json|stderr\.log)$/;
+const agentRecord = /^(claude|codex|model)\/attempt-[^/]+\/(events\.jsonl|mcp\.json|prompt\.md|result\.json|schema\.json|stderr\.log|transcript\.jsonl)$/;
+export const isAgentRecord = name => agentRecord.test(name);
 async function attemptOutput(outcome, before) {
   const files = {};
   for (const [name, path] of Object.entries(await writtenFiles(outcome))) {
     if (Object.keys(files).length >= 10) break;
-    if (agentRecord.test(name)) continue;
+    if (isAgentRecord(name)) continue;
     try {
       const text = await readFile(path, 'utf8');
       if (before.get(path) === sha(text)) continue;
@@ -475,7 +475,7 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
   const snapshots = testCaseValue.snapshots ?? [];
   if (keepDir) await mkdir(keepDir, { recursive: true, mode: 0o700 });
   // A real path: Claude Code compares its permission rules with resolved paths.
-  const parent = await realpath(await mkdtemp(keepDir ? join(pathResolve(keepDir), `${testCaseValue.id}-`) : join(tmpdir(), 'method-case-')));
+  const parent = keepDir ? await realpath(await mkdtemp(join(pathResolve(keepDir), 'c-'))) : await tempFolder('mc-');
   const fixedRuns = runs ?? (once ? 1 : testCaseValue.runs ?? null);
   const fixedMin = minPass ?? (runs !== undefined ? runs : once ? 1 : testCaseValue.min_pass ?? null);
   let total = fixedRuns ?? 1, needed = fixedMin ?? total;

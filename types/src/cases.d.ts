@@ -418,3 +418,4 @@ export function testSuite(methodFile: string, config: any, { casesDir, ids, base
 }>;
 export function defaultCasesDir(methodFile: any): string;
 export function rubricCriteria(sentences: any): any;
+export function isAgentRecord(name: any): boolean;

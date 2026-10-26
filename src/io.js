@@ -1,5 +1,6 @@
-import { readFile, realpath, mkdir, writeFile, rename, access } from 'node:fs/promises';
-import { resolve, relative, isAbsolute, dirname, delimiter } from 'node:path';
+import { readFile, realpath, mkdir, mkdtemp, writeFile, rename, access } from 'node:fs/promises';
+import { resolve, relative, isAbsolute, dirname, delimiter, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
@@ -34,6 +35,14 @@ export async function snapshotBundle(root, paths, destination) {
     await writeFile(resolve(destination, name), bytes, { mode: 0o600 });
   }
   return manifest;
+}
+/**
+ * A new private temporary folder under the system's own short temporary root, never under an inherited TMPDIR. A
+ * caller's TMPDIR can be deep inside a run folder, and tools in a child process put Unix sockets in their temporary
+ * folder; macOS cuts a socket path at 104 characters.
+ */
+export async function tempFolder(prefix) {
+  return realpath(await mkdtemp(join(process.platform === 'win32' ? tmpdir() : '/tmp', prefix)));
 }
 export async function writeJSON(file, data) {
   // A unique name per write: items that run at once can write the same file without sharing a temporary file.

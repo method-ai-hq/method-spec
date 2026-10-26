@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { runMethod, createCase, listCases, testCase, testSuite, recordRun } from '../src/index.js';
@@ -266,7 +266,7 @@ test('learned rules: active ones are selected, end the prompt, are recorded, and
   await assert.rejects(runMethod(file, cfg, { runDir: join(dir, 'invalid'), inputs: { topic: 'cats' }, transport }), /learned\.json/);
 });
 
-test('a script that runs live in a replay gets HOME and TMPDIR in the scratch folder and METHOD_REPLAY', async t => {
+test('a script that runs live in a replay gets HOME in the scratch folder, a short TMPDIR of its own, and METHOD_REPLAY', async t => {
   const dir = await folder(t, 'method-replay-env-');
   const env = extra => `console.log(JSON.stringify({home:process.env.HOME??"",tmp:process.env.TMPDIR??"",replay:process.env.METHOD_REPLAY??"no"}))${extra}`;
   await writeFile(join(dir, 'env.mjs'), env(''));
@@ -280,7 +280,10 @@ test('a script that runs live in a replay gets HOME and TMPDIR in the scratch fo
   const result = await testCase(file, config(), item, {}, { keepDir: join(dir, 'kept') });
   const runDir = result.attempts[0].run_dir, root = JSON.parse(await readFile(join(runDir, 'checkpoint.json'), 'utf8')).root;
   assert.equal(root.replay, '1');
-  assert.equal(root.home, join(dirname(runDir), 'scratch-1', 'home')); assert.equal(root.tmp, join(dirname(runDir), 'scratch-1', 'tmp'));
+  assert.equal(root.home, join(dirname(runDir), 'scratch-1', 'home'));
+  // Not under the deep scratch folder: a socket path there could pass the 104 characters that macOS allows.
+  assert.match(root.tmp, process.platform === 'win32' ? /mt-/ : /^(\/private)?\/tmp\/mt-\w+$/);
+  await assert.rejects(stat(root.tmp), { code: 'ENOENT' });
 });
 
 test('file refs read what the run wrote, in its artifacts or in a files connection', async t => {

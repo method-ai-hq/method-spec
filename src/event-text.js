@@ -28,7 +28,9 @@ const headlines = {
     : s.effect ? `${s.where ? `In ${s.where}, ` : ''}an observer found that the change ${quoted(s.effect)} did not happen.`
       : `${s.where ? `In ${s.where}, ` : ''}${s.producer ?? 'the agent'} ${s.problem}.`,
   outside_service: s => `${s.where ? `In ${s.where}, ` : ''}${s.producer ?? 'a service outside Method'} failed${s.attempts > 1 ? ` after ${s.attempts} attempts` : ''}${s.message ? `: ${s.message.replace(/[.\s]+$/, '')}` : ''}.`,
-  limit: s => `${s.where ? `In ${s.where}, ` : ''}the run reached its ${s.limit} limit${s.value !== undefined && s.value !== null ? ` (${s.value})` : ''}.`,
+  limit: s => s.code === 'usage_limit'
+    ? `${s.where ? `In ${s.where}, ` : ''}${s.producer ?? 'the agent'} reached the usage limit of your plan${s.message ? `: ${s.message.replace(/[.\s]+$/, '')}` : ''}.`
+    : `${s.where ? `In ${s.where}, ` : ''}the run reached its ${s.limit} limit${s.value !== undefined && s.value !== null ? ` (${s.value})` : ''}.`,
   setup: s => `${s.message.replace(/[.\s]+$/, '')}${s.where ? ` (in ${s.where})` : ''}.`,
   needs_you: s => `${s.where ? capital(s.where) : 'The run'} waits for your answer.`,
   method_platform: s => `Method stopped because of an error in Method itself (${s.code}).`,
@@ -40,7 +42,9 @@ const nextSteps = {
   method_code: s => ({ action: 'fix_method', text: `Change ${s.producer ?? 'the Method'} as the headline says, then run again. Steps that did not change are reused.` }),
   agent_work: s => ({ action: 'run_again', text: s.effect ? 'Look at the changed system and correct it by hand if needed, then run again. Method does not repeat an external change by itself.' : s.check ? 'Run again. If the check fails again, make the step\'s prompt or its check clearer.' : 'Run again. If it fails again, make the step\'s prompt clearer or its outputs simpler.' }),
   outside_service: () => ({ action: 'run_again', text: 'Wait a few minutes and run again. Steps that finished are reused.' }),
-  limit: s => ({ action: 'raise_limit', text: `Raise the ${s.limit} limit in the Method's limits, or make the step do less, then run again.` }),
+  limit: s => s.code === 'usage_limit'
+    ? { action: 'run_again', text: 'This is a usage limit, not a problem in the Method. Run again after the limit resets. Steps that finished are reused.' }
+    : { action: 'raise_limit', text: `Raise the ${s.limit} limit in the Method's limits, or make the step do less, then run again.` },
   setup: s => s.missing?.length
     ? { action: 'fix_setup', text: `Run method secret find to look for ${s.missing.join(', ')} on this computer, or method secret set to enter it. Then run again. No step ran. Never open or print a key file, and never paste a key into a chat.`, command: `method secret set ${s.missing[0]}` }
     : { action: 'fix_setup', text: 'Fix the setup that the headline names, then run again.' },

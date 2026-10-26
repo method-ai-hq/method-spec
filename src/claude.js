@@ -6,6 +6,7 @@ import { fail, safeData, assertSchema } from './validate.js';
 import { startMethodTools } from './method-tools.js';
 import { agentEvent } from './progress.js';
 import { agentNotice } from './event-text.js';
+import { claudeTranscript, writeTranscript } from './transcript.js';
 
 // An absolute path in a Claude Code permission rule starts with //.
 const under = (tool, dir) => `${tool}(/${resolve(dir)}/**)`;
@@ -42,8 +43,12 @@ export async function executeClaude(execution, input, schema, context) {
   // Tokens stay in a private file, never process arguments or run events.
   await writeJSON(join(directory, 'mcp.json'), { mcpServers: { method_step: { type: 'http', url: bridge.url, headers: { Authorization: `Bearer ${bridge.token}` } } } });
   const events = [];
+  // A usage limit of the person's Claude plan: Claude Code reports it as a rejected rate limit event.
+  const usageLimit = () => events.some(event => event.type === 'rate_limit_event' && event.rate_limit_info?.status === 'rejected');
+  let output = '';
   try {
     if (Buffer.byteLength(prompt) > context.maxRequestBytes) fail('limit', 'Claude prompt exceeds request limit', 'input_limit', { limit: 'request size', value: context.maxRequestBytes });
+    await writeFile(join(directory, 'prompt.md'), prompt, { mode: 0o600 });
     await context.record('agent.started', { provider: 'claude', command, model: profile.model ?? 'user-default', directory });
     const result = await executeProcess({ command, args, cwd: directory, input: prompt, rawInput: true,
       env: { ...process.env, METHOD_OUTPUT_DIR: context.artifacts }, signal: context.signal, maxBytes: context.maxOutputBytes,
@@ -61,24 +66,32 @@ export async function executeClaude(execution, input, schema, context) {
           await context.record('agent.ready', { provider: 'claude', model: event.model });
         }
       } });
-    await writeFile(join(directory, 'events.jsonl'), clean(result.output), { mode: 0o600 });
+    output = clean(result.output);
+    await writeFile(join(directory, 'events.jsonl'), output, { mode: 0o600 });
     await writeFile(join(directory, 'stderr.log'), clean(result.diagnostics), { mode: 0o600 });
     const last = events.filter(e => e.type === 'result').at(-1);
     // A failed result is a failure of Claude Code or its model service: check it before the output's form.
-    if (!last || last.is_error || last.subtype !== 'success') fail('outside_service', clean(last?.errors?.join('\n') || last?.result || 'Claude did not return a successful result.'), 'claude_failed', { producer: 'Claude Code' });
+    if (!last || last.is_error || last.subtype !== 'success') {
+      const message = clean(last?.errors?.join('\n') || last?.result || 'Claude did not return a successful result.');
+      if (usageLimit()) fail('limit', message, 'usage_limit', { producer: 'Claude Code' });
+      fail('outside_service', message, 'claude_failed', { producer: 'Claude Code' });
+    }
     const value = last.structured_output;
     safeData(value, 'agent_work'); assertSchema(schema, value, 'Claude output', { producer: 'Claude Code', owner: 'agent_work' });
     await context.record('agent.completed', { provider: 'claude', directory, usage: last.usage ?? null });
     return value;
   } catch (error) {
     if (context.signal.aborted) error = context.signal.reason;
-    if (error.output) await writeFile(join(directory, 'events.jsonl'), clean(error.output), { mode: 0o600 });
+    if (error.output) { output = clean(error.output); await writeFile(join(directory, 'events.jsonl'), output, { mode: 0o600 }); }
     if (error.diagnostics) await writeFile(join(directory, 'stderr.log'), clean(error.diagnostics), { mode: 0o600 });
     const failure = events.findLast(event => event.type === 'result' && (event.is_error || event.subtype !== 'success'));
     if (!context.signal.aborted) error.message = clean(failure?.errors?.join('\n') || failure?.result || error.diagnostics || error.message);
     // Claude Code exited with an error: the agent or its model service failed.
-    if (!context.signal.aborted && error.code === 'process_failed') Object.assign(error, { owner: 'outside_service', producer: 'Claude Code' });
+    if (!context.signal.aborted && error.code === 'process_failed') Object.assign(error, usageLimit() ? { owner: 'limit', code: 'usage_limit', producer: 'Claude Code' } : { owner: 'outside_service', producer: 'Claude Code' });
     await context.record('agent.failed', { provider: 'claude', directory, message: error.message });
     throw error;
-  } finally { await bridge.close(); await rm(join(directory,'mcp.json'),{force:true}); }
+  } finally {
+    await bridge.close(); await rm(join(directory,'mcp.json'),{force:true});
+    await writeTranscript(directory, claudeTranscript(prompt, output), value => context.redact(clean(value)));
+  }
 }

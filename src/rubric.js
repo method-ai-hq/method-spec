@@ -1,8 +1,8 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir, homedir } from 'node:os';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { hash, writeJSON } from './io.js';
+import { hash, writeJSON, tempFolder } from './io.js';
 import { fail } from './validate.js';
 
 /**
@@ -64,7 +64,7 @@ async function cached(key, compute, cacheDir, use = true) {
 /** Run a one-step judge Method with the judge model and return its result. */
 async function runJudge(method, inputs, config, options) {
   const { runMethod } = await import('./runner.js');
-  const dir = await mkdtemp(join(tmpdir(), 'method-judge-'));
+  const dir = await tempFolder('mj-');
   try {
     const file = join(dir, 'judge.method');
     await writeFile(file, JSON.stringify(method));

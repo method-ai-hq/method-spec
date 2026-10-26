@@ -1,7 +1,7 @@
-import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, realpath, rm } from 'node:fs/promises';
 import { basename, dirname, join, relative, sep, isAbsolute, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tempFolder } from './io.js';
 
 const hooks = fileURLToPath(new URL('./observe-hooks/', import.meta.url));
 const KINDS = ['network', 'reads', 'writes', 'env', 'runs'];
@@ -35,7 +35,7 @@ export async function prepareObservation(profile, { runDir, bundle, artifacts, e
   const kind = language(profile.command);
   if (!kind) return { args: [], env: {}, finish: async () => ({ unavailable: 'runtime_not_observed' }) };
   let folder;
-  try { folder = await mkdtemp(join(tmpdir(), 'method-observe-')); }
+  try { folder = await tempFolder('mo-'); }
   catch (error) { return { args: [], env: {}, finish: async () => ({ unavailable: `observe_setup_failed: ${error.code ?? 'error'}` }) }; }
   const file = join(folder, 'observed.json');
   const added = { METHOD_OBSERVE_FILE: file };
