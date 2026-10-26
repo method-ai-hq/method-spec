@@ -53,6 +53,30 @@ test('a Claude Code stream becomes one transcript entry per message, tool call a
   assert.ok(entries.every(e => !('inferred' in e)));
 });
 
+test('each entry has its time, and a subagent\'s entries name the Agent call that made them', () => {
+  const entries = claudeTranscript('Review the NDA.', lines([
+    { type: 'system', subtype: 'init', model: 'claude-test' },
+    { type: 'assistant', timestamp: '2026-10-26T10:00:01.000Z', parent_tool_use_id: null, message: { content: [{ type: 'tool_use', id: 'a1', name: 'Agent', input: { prompt: 'Read the NDA.' } }] } },
+    { type: 'assistant', timestamp: '2026-10-26T10:00:02.000Z', parent_tool_use_id: 'a1', message: { content: [{ type: 'tool_use', id: 'r1', name: 'Read', input: { file_path: '/w/nda.md' } }] } },
+    { type: 'user', timestamp: '2026-10-26T10:00:03.000Z', parent_tool_use_id: 'a1', message: { content: [{ type: 'tool_result', tool_use_id: 'r1', content: 'The term is five years.' }] } },
+    { type: 'user', timestamp: '2026-10-26T10:00:04.000Z', parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: 'a1', content: 'Five years.' }] } },
+    { type: 'result', subtype: 'success', is_error: false, result: 'The term is five years.' },
+  ]), { started: '2026-10-26T10:00:00.000Z', times: ['t0', 't1', 't2', 't3', 't4', '2026-10-26T10:00:05.000Z'] });
+  assert.deepEqual(entries.map(e => [e.kind, e.parent ?? null, e.at]), [
+    ['prompt', null, '2026-10-26T10:00:00.000Z'],
+    ['tool_call', null, '2026-10-26T10:00:01.000Z'],
+    ['file_read', 1, '2026-10-26T10:00:02.000Z'],
+    ['tool_result', 1, '2026-10-26T10:00:03.000Z'],
+    ['tool_result', null, '2026-10-26T10:00:04.000Z'],
+    // An event without a timestamp has the time Method read it.
+    ['result', null, '2026-10-26T10:00:05.000Z'],
+  ]);
+  const codex = codexTranscript('Write.', lines([{ type: 'thread.started' }, { type: 'item.completed', item: { id: 'm', type: 'agent_message', text: 'Done.' } }]), 'Done.', 'last-message.txt',
+    { started: '2026-10-26T10:00:00.000Z', times: ['2026-10-26T10:00:01.000Z', '2026-10-26T10:00:02.000Z'] });
+  assert.deepEqual(codex.map(e => [e.kind, e.at]), [['prompt', '2026-10-26T10:00:00.000Z'], ['message', '2026-10-26T10:00:02.000Z'], ['result', '2026-10-26T10:00:02.000Z']]);
+  assert.ok(codex.every(e => !('parent' in e)));
+});
+
 test('a Claude Code stream that stopped at a usage limit ends with the limit message as an error', () => {
   const entries = claudeTranscript('Write.', lines([
     { type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1792110600, rateLimitType: 'five_hour' } },
@@ -139,6 +163,7 @@ test('a Claude Code attempt keeps its prompt and transcript; the summary has the
   assert.match(prompt, /^Write the memo\.\n\nStep inputs:/);
   assert.deepEqual(transcript.map(e => e.kind), ['prompt', 'message', 'result']);
   assert.equal(transcript[0].text, prompt);
+  assert.ok(transcript.every(e => !Number.isNaN(Date.parse(e.at))));
   assert.match(result.execution_id, /^[0-9a-f-]{36}$/);
   assert.equal(summary.execution_id, result.execution_id);
 });

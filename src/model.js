@@ -177,9 +177,9 @@ async function providerRequestOnce(body, profile, adapter, context) {
 export async function executeModel(execution, input, schema, context) {
   await mkdir(join(context.artifacts, 'model'), { recursive: true, mode: 0o700 });
   const directory = await mkdtemp(join(context.artifacts, 'model', 'attempt-'));
-  const read = [];
+  const read = [], started = new Date().toISOString();
   try { return await converse(execution, input, schema, context, read); }
-  finally { await writeTranscript(directory, modelTranscript(`${execution.prompt}\n\n${json(input)}`, read), context.redact); }
+  finally { await writeTranscript(directory, modelTranscript(`${execution.prompt}\n\n${json(input)}`, read, started), context.redact); }
 }
 
 async function converse(execution, input, schema, context, read) {
@@ -195,7 +195,7 @@ async function converse(execution, input, schema, context, read) {
     const { data, request, sequence } = await providerRequest(adapter.body({ profile: settings, instructions: execution.prompt, messages, schema, tools }), profile, adapter, context);
     context.guard();
     const reply = adapter.read(data);
-    const entry = { request, sequence, reply: { text: reply.text, calls: reply.calls }, results: [], final: !reply.calls?.length };
+    const entry = { request, sequence, at: new Date().toISOString(), reply: { text: reply.text, calls: reply.calls }, results: [], final: !reply.calls?.length };
     read.push(entry);
     if (reply.incomplete) fail('agent_work', `Model response is not complete: ${reply.incomplete}`, 'model_incomplete');
     if (reply.calls.length) {

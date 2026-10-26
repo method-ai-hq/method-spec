@@ -9,53 +9,71 @@ import { join } from 'node:path';
  * file_write | command | search | plan | error | result. text is never clipped. tool and path are null when they do
  * not apply. raw_ref names the source: `prompt.md`, `events.jsonl:LINE` (a line of the attempt's own events.jsonl), or
  * `run:SEQUENCE` (an event of the run's events.jsonl, for model steps). inferred: true marks an entry that Method
- * guessed, such as a file that a Codex shell command read.
+ * guessed, such as a file that a Codex shell command read. at: when the entry happened (ISO time): the agent's own time
+ * of the event when it gives one, else the time Method read the event. parent: the i of the subagent call (Claude
+ * Code's Agent or Task tool) whose subagent made the entry.
  */
 
 const text = value => typeof value === 'string' ? value : value === undefined || value === null ? '' : JSON.stringify(value);
-/** The lines of an agent's JSON event stream, each with its 1-based line number. */
-function parsedLines(output) {
-  return String(output ?? '').split('\n').flatMap((line, index) => { try { const event = JSON.parse(line); return event && typeof event === 'object' ? [{ event, line: index + 1 }] : []; } catch { return []; } });
+/**
+ * The JSON events of an agent's event stream, each with its 1-based line number and its time: the event's own
+ * timestamp, or times[n], the time the n-th JSON event was read (n counts JSON events from 0).
+ */
+function parsedLines(output, times = []) {
+  let n = 0;
+  return String(output ?? '').split('\n').flatMap((line, index) => {
+    let event;
+    try { event = JSON.parse(line); } catch { return []; }
+    if (!event || typeof event !== 'object') return [];
+    const read = times[n++];
+    return [{ event, line: index + 1, at: typeof event.timestamp === 'string' ? event.timestamp : read }];
+  });
 }
 function numbered(entries) {
-  return entries.map((entry, i) => ({ i, role: entry.role, kind: entry.kind, text: entry.text ?? '', tool: entry.tool ?? null, path: entry.path ?? null, raw_ref: entry.raw_ref, ...(entry.inferred ? { inferred: true } : {}) }));
+  return entries.map((entry, i) => ({ i, role: entry.role, kind: entry.kind, text: entry.text ?? '', tool: entry.tool ?? null, path: entry.path ?? null, raw_ref: entry.raw_ref,
+    ...(entry.inferred ? { inferred: true } : {}), ...(entry.at ? { at: entry.at } : {}), ...(entry.parent !== undefined ? { parent: entry.parent } : {}) }));
 }
-const promptEntry = prompt => ({ role: 'user', kind: 'prompt', text: prompt, raw_ref: 'prompt.md' });
+const promptEntry = (prompt, at) => ({ role: 'user', kind: 'prompt', text: prompt, raw_ref: 'prompt.md', at });
 
 // Claude Code's file tools name their file in the input.
 const claudeReads = new Set(['Read']), claudeWrites = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 const blockText = content => Array.isArray(content) ? content.map(block => block?.type === 'text' ? block.text : block?.type === 'image' ? '[image]' : text(block)).join('\n') : text(content);
 
-/** Claude Code's stream-json output as a transcript. */
-export function claudeTranscript(prompt, output) {
-  const entries = [promptEntry(prompt)], calls = new Map();
-  for (const { event, line } of parsedLines(output)) {
+/**
+ * Claude Code's stream-json output as a transcript. started: when the prompt was sent; times: when each JSON event was
+ * read (for events without a timestamp of their own). A subagent's entries name the Agent or Task call that made them.
+ */
+export function claudeTranscript(prompt, output, { started, times } = {}) {
+  const entries = [promptEntry(prompt, started)], calls = new Map();
+  for (const { event, line, at } of parsedLines(output, times)) {
     const raw_ref = `events.jsonl:${line}`;
+    const parent = calls.get(event.parent_tool_use_id)?.i;
+    const push = entry => entries.push({ ...entry, at, parent });
     if (event.type === 'assistant') {
       for (const block of Array.isArray(event.message?.content) ? event.message.content : []) {
-        if (block.type === 'text') entries.push({ role: event.error ? 'system' : 'assistant', kind: event.error ? 'error' : 'message', text: block.text, raw_ref });
-        else if (block.type === 'thinking') entries.push({ role: 'assistant', kind: 'thinking', text: block.thinking, raw_ref });
+        if (block.type === 'text') push({ role: event.error ? 'system' : 'assistant', kind: event.error ? 'error' : 'message', text: block.text, raw_ref });
+        else if (block.type === 'thinking') push({ role: 'assistant', kind: 'thinking', text: block.thinking, raw_ref });
         else if (block.type === 'tool_use') {
           const input = block.input ?? {}, path = input.file_path ?? input.notebook_path ?? input.path ?? null;
-          calls.set(block.id, { tool: block.name, path });
+          calls.set(block.id, { tool: block.name, path, i: entries.length });
           const kind = claudeReads.has(block.name) ? 'file_read' : claudeWrites.has(block.name) ? 'file_write' : block.name === 'Bash' ? 'command' : block.name === 'WebSearch' ? 'search' : 'tool_call';
-          entries.push({ role: 'assistant', kind, tool: block.name, path, text: kind === 'command' ? text(input.command) : kind === 'search' ? text(input.query) : text(input), raw_ref });
+          push({ role: 'assistant', kind, tool: block.name, path, text: kind === 'command' ? text(input.command) : kind === 'search' ? text(input.query) : text(input), raw_ref });
         }
       }
     } else if (event.type === 'user') {
       const content = event.message?.content;
-      if (typeof content === 'string') entries.push({ role: 'user', kind: 'message', text: content, raw_ref });
+      if (typeof content === 'string') push({ role: 'user', kind: 'message', text: content, raw_ref });
       else for (const block of Array.isArray(content) ? content : []) {
         if (block.type === 'tool_result') {
           const call = calls.get(block.tool_use_id) ?? {};
-          entries.push({ role: 'tool', kind: block.is_error ? 'error' : 'tool_result', tool: call.tool ?? null, path: call.path ?? null, text: blockText(block.content), raw_ref });
-        } else if (block.type === 'text') entries.push({ role: 'user', kind: 'message', text: block.text, raw_ref });
+          push({ role: 'tool', kind: block.is_error ? 'error' : 'tool_result', tool: call.tool ?? null, path: call.path ?? null, text: blockText(block.content), raw_ref });
+        } else if (block.type === 'text') push({ role: 'user', kind: 'message', text: block.text, raw_ref });
       }
     } else if (event.type === 'system' && event.subtype === 'permission_denied') {
-      entries.push({ role: 'system', kind: 'error', tool: event.tool_name ?? null, text: text(event.message), raw_ref });
+      push({ role: 'system', kind: 'error', tool: event.tool_name ?? null, text: text(event.message), raw_ref });
     } else if (event.type === 'result') {
       const failed = event.is_error || event.subtype !== 'success';
-      entries.push({ role: 'system', kind: failed ? 'error' : 'result', text: failed ? text(event.errors?.join('\n') || event.result) : text(event.structured_output ?? event.result), raw_ref });
+      push({ role: 'system', kind: failed ? 'error' : 'result', text: failed ? text(event.errors?.join('\n') || event.result) : text(event.structured_output ?? event.result), raw_ref });
     }
   }
   return numbered(entries);
@@ -87,15 +105,17 @@ export function shellReads(command) {
 
 /**
  * Codex's JSON event stream as a transcript. result: what Codex saved as its result, when it saved one, in the
- * attempt's file resultFile.
+ * attempt's file resultFile. started and times as for claudeTranscript (Codex gives its events no time).
  */
-export function codexTranscript(prompt, output, result, resultFile = 'result.json') {
-  const entries = [promptEntry(prompt)];
-  const events = parsedLines(output);
+export function codexTranscript(prompt, output, result, resultFile = 'result.json', { started, times } = {}) {
+  const entries = [promptEntry(prompt, started)];
+  const events = parsedLines(output, times);
   const completed = new Set(events.filter(({ event }) => event.type === 'item.completed').map(({ event }) => event.item?.id));
-  let lastError = null;
-  for (const { event, line } of events) {
+  let lastError = null, last = started;
+  for (const { event, line, at } of events) {
     const raw_ref = `events.jsonl:${line}`, item = event.item ?? {};
+    last = at ?? last;
+    const before = entries.length;
     // An item that never completed (the process stopped) is shown as it started.
     if (event.type === 'item.started' && completed.has(item.id)) continue;
     if (event.type === 'item.completed' || event.type === 'item.started') {
@@ -122,22 +142,24 @@ export function codexTranscript(prompt, output, result, resultFile = 'result.jso
       if (message !== lastError) entries.push({ role: 'system', kind: 'error', text: message, raw_ref });
       lastError = message;
     }
+    for (const entry of entries.slice(before)) entry.at = at;
   }
-  if (result !== undefined) entries.push({ role: 'system', kind: 'result', text: text(result), raw_ref: resultFile });
+  if (result !== undefined) entries.push({ role: 'system', kind: 'result', text: text(result), raw_ref: resultFile, at: last });
   return numbered(entries);
 }
 
 /**
  * A model step's conversation as a transcript. turns: each provider reply as the adapter read it ({text, calls}), the
- * tool outputs that answered its calls, and the run event sequence of the reply.
+ * tool outputs that answered its calls, the run event sequence of the reply and when it was read (at). started: when
+ * the prompt was sent.
  */
-export function modelTranscript(prompt, turns) {
-  const entries = [{ ...promptEntry(prompt), raw_ref: turns[0]?.request ? `run:${turns[0].request}` : 'run' }];
-  for (const { reply, results = [], sequence, final } of turns) {
+export function modelTranscript(prompt, turns, started) {
+  const entries = [{ ...promptEntry(prompt, started), raw_ref: turns[0]?.request ? `run:${turns[0].request}` : 'run' }];
+  for (const { reply, results = [], sequence, final, at } of turns) {
     const raw_ref = `run:${sequence}`;
-    if (reply.text) entries.push({ role: final ? 'system' : 'assistant', kind: final ? 'result' : 'message', text: reply.text, raw_ref });
-    for (const call of reply.calls ?? []) entries.push({ role: 'assistant', kind: 'tool_call', tool: call.name, text: text(call.arguments), raw_ref });
-    for (const { call, output } of results) entries.push({ role: 'tool', kind: 'tool_result', tool: call.name, text: text(output), raw_ref });
+    if (reply.text) entries.push({ role: final ? 'system' : 'assistant', kind: final ? 'result' : 'message', text: reply.text, raw_ref, at });
+    for (const call of reply.calls ?? []) entries.push({ role: 'assistant', kind: 'tool_call', tool: call.name, text: text(call.arguments), raw_ref, at });
+    for (const { call, output } of results) entries.push({ role: 'tool', kind: 'tool_result', tool: call.name, text: text(output), raw_ref, at });
   }
   return numbered(entries);
 }

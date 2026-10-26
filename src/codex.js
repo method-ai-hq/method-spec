@@ -48,6 +48,7 @@ const usageLimit = message => /\b(hit|reached) your usage limit\b/i.test(message
  */
 export async function runCodex({ command, args, prompt, cwd, env, directory, model, context, clean = value => String(value), messages = true, readResult, resultFile = 'result.json', started = {} }) {
   let eventsText = '', value;
+  const times = [], sentAt = new Date().toISOString();
   try {
     if (Buffer.byteLength(prompt) > context.maxRequestBytes) fail('limit', 'Codex prompt exceeds request limit', 'input_limit', { limit: 'request size', value: context.maxRequestBytes });
     await writeFile(join(directory, 'prompt.md'), prompt, { mode: 0o600 });
@@ -57,6 +58,8 @@ export async function runCodex({ command, args, prompt, cwd, env, directory, mod
       onStdoutLine: async line => {
         let event;
         try { event = JSON.parse(line); } catch { return; }
+        if (!event || typeof event !== 'object') return;
+        times.push(new Date().toISOString());
         const progress = event.item?.type === 'agent_message' && !messages ? null : codexProgress(event);
         if (progress && !context.signal.aborted) await context.record('progress', { ...progress, message: clean(progress.message) });
         // Codex reports problems that it handles itself (a retry, a tool that did not start) as error-type events.
@@ -90,7 +93,7 @@ export async function runCodex({ command, args, prompt, cwd, env, directory, mod
     await context.record('codex.failed', { directory, message: error.message });
     throw error;
   } finally {
-    await writeTranscript(directory, codexTranscript(prompt, eventsText, value, resultFile), text => context.redact(clean(text)));
+    await writeTranscript(directory, codexTranscript(prompt, eventsText, value, resultFile, { started: sentAt, times }), text => context.redact(clean(text)));
   }
 }
 

@@ -43,7 +43,7 @@ export function claudeArgs({ schema, mcpConfig, profile = {}, artifacts, replay 
  * onInit sees Claude Code's init event.
  */
 export async function runClaude({ command, args, prompt, cwd, env, directory, model, context, clean = value => String(value), onInit }) {
-  const events = [];
+  const events = [], times = [], started = new Date().toISOString();
   // A usage limit of the person's Claude plan: Claude Code reports it as a rejected rate limit event.
   const usageLimit = () => events.some(event => event.type === 'rate_limit_event' && event.rate_limit_info?.status === 'rejected');
   let output = '';
@@ -54,7 +54,9 @@ export async function runClaude({ command, args, prompt, cwd, env, directory, mo
     const result = await executeProcess({ command, args, cwd, input: prompt, rawInput: true, env, signal: context.signal, maxBytes: context.maxOutputBytes,
       onStdoutLine: async line => {
         let event; try { event = JSON.parse(line); } catch { return; }
+        if (!event || typeof event !== 'object') return;
         events.push(event);
+        times.push(new Date().toISOString());
         // Claude Code reports problems that it handles itself as error-type or warning-type events.
         const reported = agentEvent(event);
         if (reported && !context.signal.aborted) await context.notice?.({ kind: 'agent', sub: `claude_${reported.level}`, message: agentNotice({ agent: 'Claude Code', ...reported, message: clean(reported.message) }) });
@@ -88,7 +90,7 @@ export async function runClaude({ command, args, prompt, cwd, env, directory, mo
     await context.record('agent.failed', { provider: 'claude', directory, message: error.message });
     throw error;
   } finally {
-    await writeTranscript(directory, claudeTranscript(prompt, output), value => context.redact(clean(value)));
+    await writeTranscript(directory, claudeTranscript(prompt, output, { started, times }), value => context.redact(clean(value)));
   }
 }
 

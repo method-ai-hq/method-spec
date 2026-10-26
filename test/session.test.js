@@ -241,5 +241,7 @@ test('a Codex session runs in a clean CODEX_HOME with only the sign-in link, and
   const events = (await readFile(join(root, 'run-1', 'events.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
   assert.ok(!events.some(e => e.event === 'progress' && e.message === 'Done: memo.md'));
   const entries = (await readFile(join(artifacts, result.result.transcript.path), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
-  assert.deepEqual(entries.at(-1), { i: entries.length - 1, role: 'system', kind: 'result', text: 'Done: memo.md', tool: null, path: null, raw_ref: 'last-message.txt' });
+  const { at, ...last } = entries.at(-1);
+  assert.deepEqual(last, { i: entries.length - 1, role: 'system', kind: 'result', text: 'Done: memo.md', tool: null, path: null, raw_ref: 'last-message.txt' });
+  assert.ok(!Number.isNaN(Date.parse(at)));
 });
