@@ -341,6 +341,26 @@ test('a case that can pass only by breaking an instruction is refused until the 
   assert.equal(kept.accepted_conflicts, undefined);
 });
 
+test('a quote matches the words of a Markdown value without its markup; an invented quote still fails', async t => {
+  const { cfg } = await setup(t);
+  const { judgeRubric } = await import('../src/index.js');
+  let quote = '';
+  const transport = async () => {
+    const verdicts = [{ id: 'c1', pass: true, quote, reason: 'It says so.' }];
+    return { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ verdicts }) }] }], usage: { input_tokens: 1, output_tokens: 1 } };
+  };
+  const value = '## Recommendations\n\n1. **Verify the proof files.** Ask A788 to check them.\n2. **Weigh Kyberite’s record.** It ransomed 10 retailers this year.\n\n| Risk | Level |\n|---|---|\n| Publication after payment | *High* |\n';
+  const criteria = [{ id: 'c1', text: 'The memo tells the Board to weigh the attacker\'s record.' }];
+  const judged = (q) => { quote = q; return judgeRubric({ value, criteria, config: withJudge(cfg), options: { runOptions: { transport }, judgeCache: false } }); };
+  // A judge quotes bold text without its asterisks, across a list number, with a straight apostrophe, or from a table row.
+  for (const q of ["Weigh Kyberite's record. It ransomed 10 retailers this year.", 'Ask A788 to check them. Weigh Kyberite\'s record.', 'Publication after payment | High',
+    'Verify the proof files. ... It ransomed 10 retailers'])
+    assert.equal((await judged(q)).status, 'pass', q);
+  // Words that are not in the value, part of a word, or passages out of order are not a quote of it.
+  for (const q of ['Weigh the record of Kyberite.', 'Weigh Kyberite\'s rec', 'It ransomed 10 retailers ... Verify the proof files.'])
+    assert.match((await judged(q)).criteria[0].reason, /quote is not in the text/, q);
+});
+
 test('a list of judges must agree: a disagreement fails the criterion as unsure, and testSuite passes the list on', async t => {
   const { dir, cfg, current } = await setup(t);
   const { judgeRubric } = await import('../src/index.js');

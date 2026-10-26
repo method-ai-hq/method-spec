@@ -32,6 +32,21 @@ const judgeMethod = {
   result: 'verdicts',
 };
 const normalize = text => text.replace(/\s+/g, ' ').trim().toLowerCase();
+/**
+ * The words of a text, for the quote check. A judge quotes the words of a Markdown or formatted value without its
+ * markup (bold, list numbers, table bars, typographic quotes), so only letters and digits are compared.
+ */
+const words = text => text.replace(/^\s*\d+[.)]\s+/gm, ' ').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+/** Whether a quote is in the text: each passage of the quote, in order. A quote may join passages with an ellipsis. */
+const quotedIn = (quote, textWords) => {
+  let from = 0;
+  for (const part of quote.split(/\.{3}|…/).map(words).filter(Boolean)) {
+    const at = textWords.indexOf(` ${part} `, from);
+    if (at < 0) return false;
+    from = at + part.length + 1;
+  }
+  return true;
+};
 export const valueText = value => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 
 /** A judgment by its key. use: false skips the cache, so the judge votes again and nothing is saved. */
@@ -63,12 +78,12 @@ async function runJudge(method, inputs, config, options) {
 async function modelVote(text, criteria, config, options, context) {
   const verdicts = await runJudge(judgeMethod, { value: text, criteria: JSON.stringify(criteria.map(({ id, text }) => ({ id, text }))), context: context || '(none)' }, config, options);
   const byId = new Map(verdicts.map(v => [v.id, v]));
-  const quoted = normalize(text);
+  const textWords = ` ${words(text)} `;
   return criteria.map(({ id }) => {
     const verdict = byId.get(id);
     if (!verdict) return { id, pass: false, quote: '', reason: 'The judge gave no verdict for this criterion.' };
     // A judge that invents support is wrong, whatever it decided.
-    if (verdict.quote.trim() && !quoted.includes(normalize(verdict.quote))) return { ...verdict, pass: false, reason: `The quote is not in the text: "${verdict.quote.slice(0, 120)}"` };
+    if (words(verdict.quote) && !quotedIn(verdict.quote, textWords)) return { ...verdict, pass: false, reason: `The quote is not in the text: "${verdict.quote.slice(0, 120)}"` };
     return verdict;
   });
 }
