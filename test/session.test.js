@@ -93,6 +93,14 @@ test('a Codex clean room links only the sign-in file into a new CODEX_HOME, and 
     for (const name of ['config.toml', 'AGENTS.md']) assert.ok(await gone(join(room.env.CODEX_HOME, name)), name);
   } finally { await room.remove(); }
   await assert.rejects(cleanRoomEnv('codex', { PATH: '/usr/bin', CODEX_HOME: join(root, 'none') }), error => error.owner === 'setup' && /codex login/.test(error.message));
+  // A Method arm whose steps run on both agents gets both sign-ins; one that runs on neither gets none.
+  const both = await cleanRoomEnv(['claude', 'codex'], { PATH: '/usr/bin', CODEX_HOME: codexHome, CLAUDE_CODE_OAUTH_TOKEN: 't' });
+  try {
+    assert.equal(both.env.CLAUDE_CODE_OAUTH_TOKEN, 't');
+    assert.equal(await readlink(join(both.env.CODEX_HOME, 'auth.json')), join(codexHome, 'auth.json'));
+  } finally { await both.remove(); }
+  const none = await cleanRoomEnv([], { PATH: '/usr/bin', CLAUDE_CODE_OAUTH_TOKEN: 't' });
+  try { assert.deepEqual(Object.keys(none.env).sort(), ['HOME', 'PATH', 'TMPDIR']); } finally { await none.remove(); }
 });
 
 test('a session step accepts only its own output form, needs shell for Codex, and changes nothing', () => {

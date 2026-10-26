@@ -1,16 +1,16 @@
 /**
- * A clean room for one agent (claude or codex): a fresh HOME whose agent config folder (CLAUDE_CONFIG_DIR or
- * CODEX_HOME) holds only the user's sign-in, a short TMPDIR, and a private copy of each bound folder. The agent sees
+ * A clean room for an agent (claude or codex), or for each agent of a list: a fresh HOME whose agent config folder
+ * (CLAUDE_CONFIG_DIR or CODEX_HOME) holds only the user's sign-in, a short TMPDIR, and a private copy of each bound folder. The agent sees
  * none of the user's instructions (CLAUDE.md, AGENTS.md), memory, settings, skills, plugins, hooks or MCP servers.
  * base is the caller's environment: only its PATH, language and user name carry over, with the sign-in. A Method arm
  * runs `method run` with this environment, so its agent steps and its background fix get the same room as a session.
  * folders maps a name to a folder; the room's copy of it is in folders of the result. remove() deletes the room,
  * when nothing that uses it still runs.
- * @param {'claude' | 'codex'} agent
+ * @param {'claude' | 'codex' | Array<'claude' | 'codex'>} agent
  * @param {NodeJS.ProcessEnv} [base]
  * @param {{folders?: Record<string, string>}} [options]
  */
-export function cleanRoomEnv(agent: "claude" | "codex", base?: NodeJS.ProcessEnv, { folders }?: {
+export function cleanRoomEnv(agent: "claude" | "codex" | Array<"claude" | "codex">, base?: NodeJS.ProcessEnv, { folders }?: {
     folders?: Record<string, string>;
 }): Promise<{
     root: string;
