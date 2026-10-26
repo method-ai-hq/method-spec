@@ -237,7 +237,7 @@ async function fileHashes(dir) {
  * copies before the run; a file with the same content was copied, not written.
  */
 // The records that the runtime itself writes in an agent step's folder: not what the step made.
-const agentRecord = /^(claude|codex|model)\/attempt-[^/]+\/(events\.jsonl|mcp\.json|prompt\.md|result\.json|schema\.json|stderr\.log|transcript\.jsonl)$/;
+const agentRecord = /^(claude|codex|model|session)\/attempt-[^/]+\/(events\.jsonl|mcp\.json|prompt\.md|result\.json|schema\.json|stderr\.log|transcript\.jsonl|last-message\.txt)$/;
 export const isAgentRecord = name => agentRecord.test(name);
 async function attemptOutput(outcome, before) {
   const files = {};
@@ -253,7 +253,7 @@ async function attemptOutput(outcome, before) {
   return { result: outcome.result ?? null, files };
 }
 
-const modelKinds = new Set(['call', 'agent', 'classify']);
+const modelKinds = new Set(['call', 'agent', 'classify', 'session']);
 const clip = (text, max) => text.length > max ? `${text.slice(0, max)}\n[... ${text.length - max} more characters]` : text;
 /** The instructions of the model steps of a recorded run, each with the information that the step received. */
 function standingInstructions(recorded) {
@@ -519,7 +519,7 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
       for (const [path, name] of Object.entries(testCaseValue.files ?? {})) outcome.files[path] ??= join(testCaseValue.dir, name);
       if (testCaseValue.source?.run_dir) outcome.source_artifacts = join(pathResolve(testCaseValue.source.run_dir), 'artifacts');
       const evaluation = await evaluate(testCaseValue.expect, outcome, { caseDir: testCaseValue.dir, config, options: { runOptions, classification: runOptions.classification, cacheDir: runOptions.cacheDir, judgeCache, ...(judges?.length ? { judges } : {}) } });
-      const liveModel = liveSteps.filter(id => ['call', 'agent', 'classify'].includes(method.steps[id]?.do?.kind));
+      const liveModel = liveSteps.filter(id => modelKinds.has(method.steps[id]?.do?.kind));
       attempts.push({ ...evaluation, output: await attemptOutput(outcome, before), run_status: result.status, ...(result.failure ? { failure: { code: result.failure.code, headline: result.failure.headline } } : {}), live_steps: liveSteps, live_model_steps: liveModel,
         ...(live.length ? { target_live: live.every(id => liveSteps.includes(id)) } : {}), standins, judge_calls: evaluation.results.reduce((sum, r) => sum + (r.judge_calls ?? 0), 0), ...kept });
       // A model step that runs live can answer differently each time, so it must pass three runs.

@@ -5,8 +5,11 @@ export function claudeTranscript(prompt: any, output: any): any;
  * wc in each part of the command. A pipe's input or a quoted pattern is not a file.
  */
 export function shellReads(command: any): any[];
-/** Codex's JSON event stream as a transcript. result: the step output that Codex saved, when it saved one. */
-export function codexTranscript(prompt: any, output: any, result: any): any;
+/**
+ * Codex's JSON event stream as a transcript. result: what Codex saved as its result, when it saved one, in the
+ * attempt's file resultFile.
+ */
+export function codexTranscript(prompt: any, output: any, result: any, resultFile?: string): any;
 /**
  * A model step's conversation as a transcript. turns: each provider reply as the adapter read it ({text, calls}), the
  * tool outputs that answered its calls, and the run event sequence of the reply.

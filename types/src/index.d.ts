@@ -3,6 +3,7 @@ export { judgeRubric } from "./rubric.js";
 export { readDocument } from "./io.js";
 export { applyEdits } from "./flow.js";
 export { methodProfiles } from "./agents.js";
+export { cleanRoomEnv } from "./clean-room.js";
 export { effectiveOutputs } from "./semantics.js";
 export type Issue = import("./api-types.js").Issue;
 export type IssueOptions = import("./api-types.js").IssueOptions;

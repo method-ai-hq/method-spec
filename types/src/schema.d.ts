@@ -13,6 +13,7 @@ export function object(properties: any, required?: string[]): {
     additionalProperties: boolean;
 };
 export const modelIdPattern: "^[a-z0-9-]+/[A-Za-z0-9._:-]+$";
+export const sessionTools: string[];
 export const formats: string[];
 /** @type {Record<string, any>} */
 export const methodSchema: Record<string, any>;

@@ -17,6 +17,8 @@ import { checkResultSchema, object } from './schema.js';
 import { readDocument, hash, snapshotBundle, writeJSON, executeProcess, containedFile, tempFolder } from './io.js';
 import { executeModel } from './model.js';
 import { executeCodex } from './codex.js';
+import { executeSession } from './session.js';
+import { folderHashes } from './clean-room.js';
 import { renderPrompt } from './prompt.js';
 import { preflight } from './preflight.js';
 import { progressMessage } from './progress.js';
@@ -127,6 +129,9 @@ async function executeRun(file, config, options) {
   let costUsd = saved?.costUsd ?? null;
   let codexProcesses = saved?.codexProcesses ?? 0, codexInputTokens = saved?.codexInputTokens ?? 0, codexOutputTokens = saved?.codexOutputTokens ?? 0, codexUsageReports = saved?.codexUsageReports ?? 0;
   const executionId = saved?.execution_id ?? randomUUID();
+  // Which repeat of the same work this run is: repeats are separate runs, so they never reuse each other's steps.
+  const repeat = saved?.repeat ?? options.repeat ?? 0;
+  if (!Number.isSafeInteger(repeat) || repeat < 0) fail('setup', 'repeat must be a whole number, 0 or more', 'preflight');
   const deviceName = saved?.device_name ?? options.deviceName ?? hostname();
   const startedAt = saved?.started_at ?? new Date().toISOString();
   const root = saved?.root ?? { inputs, state, environment: config.environment ?? {}, run: { started_at: startedAt } };
@@ -145,7 +150,7 @@ async function executeRun(file, config, options) {
     executor_version: executorVersion, execution_id: executionId, device_name: deviceName,
     models: profiles, method_sha256: hash(documentForDigest(method)), config_sha256: hash(suppliedConfig), runtime_sha256: hash(runtimeInfo),
     started_at: startedAt, elapsed_ms: performance.now() - started, sequence, invocations, requests, toolCalls, knownUsage, inputTokens, outputTokens,
-    root, accepted, skipped, active, collections, cache: keys, reused, observed, costUsd, codexProcesses, codexInputTokens, codexOutputTokens, codexUsageReports,
+    root, accepted, skipped, active, collections, cache: keys, reused, observed, repeat, costUsd, codexProcesses, codexInputTokens, codexOutputTokens, codexUsageReports,
   }));
   // An operator's own classification key takes precedence over a provider supplied by the host.
   const classifier = config.classification?.api_key_env ? typesafeClassification(config.classification.api_key_env, name => secretValue(options, name)) : options.classification;
@@ -360,7 +365,9 @@ async function executeRun(file, config, options) {
         }
         const bindings = Object.fromEntries(Object.entries(step.in ?? {}).map(([k, ref]) => [k, structuredClone(resolve(root, ref))]));
         if (eachEntry) bindings[eachEntry[0]] = collection[iteration];
-        const key = cacheable(step, tools) ? iterationKey({ method, step, bindings, iteration, profiles, config, runtimeInfo, manifest, rules }) : null;
+        // A session's key covers what its room folder holds, not only the folder's name.
+        const room = step.do?.kind === 'session' && step.do.room ? await folderHashes(resolve(bindings, step.do.room)).catch(() => null) : undefined;
+        const key = cacheable(step, tools) ? iterationKey({ method, step, bindings, iteration, profiles, config, runtimeInfo, manifest, rules, repeat, room }) : null;
         const hit = key && !fresh.has(id) ? cache.get(key) : undefined;
         if (hit) {
           // An earlier run accepted this exact iteration. Its outputs and files are reused; nothing executes.
@@ -371,7 +378,7 @@ async function executeRun(file, config, options) {
           keys[key] = [id, iteration]; reused[id] = (reused[id] ?? 0) + 1;
           await record('step.started', { step: id, iteration, ...(eachEntry ? { total: count } : {}), inputs: bindings, state_before: state, external_effects_possible: false, reused_from: hit.dir });
           // The key covers the step and its inputs, so the prompt is the one that the earlier run sent. The run record shows it.
-          if (['call', 'agent'].includes(step.do?.kind)) await record('prompt.rendered', { step: id, iteration, phase: 'action', template: step.do.prompt, rendered: renderPrompt(step.do.prompt, bindings), reused_from: hit.dir });
+          if (['call', 'agent', 'session'].includes(step.do?.kind)) await record('prompt.rendered', { step: id, iteration, phase: 'action', template: step.do.prompt, rendered: renderPrompt(step.do.prompt, bindings), reused_from: hit.dir });
           await record('step.accepted', { step: id, iteration, outputs: hit.outputs, state, check: { status: 'unchecked', reason: 'Reused from an earlier run', evidence: [] }, reused_from: hit.dir, ...(hit.observed ? { observed_effects: hit.observed } : {}) });
           if (eachEntry) for (const name of Object.keys(collected)) collected[name][iteration] = hit.outputs[name];
           else Object.assign(root, hit.outputs);
@@ -475,7 +482,7 @@ async function executeRun(file, config, options) {
         // Who produced a phase's value, in words from the Method file.
         const producerOf = (exec, phase) => {
           const by = exec.kind === 'run' ? exec.entrypoint : exec.kind === 'classify' ? 'the classification service'
-            : { codex: 'Codex', claude: 'Claude Code' }[profiles[modelName(exec)]?.backend] ?? `the model ${profiles[modelName(exec)]?.model ?? modelName(exec)}`;
+            : { codex: 'Codex', claude: 'Claude Code' }[exec.kind === 'session' ? exec.agent : profiles[modelName(exec)]?.backend] ?? `the model ${profiles[modelName(exec)]?.model ?? modelName(exec)}`;
           if (phase === 'check') return step.reading?.check_name ? `the check "${step.reading.check_name}" (${by})` : exec.kind === 'run' ? `the check script ${by}` : `the check by ${by}`;
           return exec.kind === 'run' ? `the script ${by}` : by;
         };
@@ -488,7 +495,7 @@ async function executeRun(file, config, options) {
           const producer = producerOf(exec, phase);
           try {
             guard();
-            if (['call', 'agent'].includes(exec.kind)) {
+            if (['call', 'agent', 'session'].includes(exec.kind)) {
               exec = exec.kind === 'agent' ? {...exec, tools:executionTools(exec, tools)} : exec;
               const template = exec.prompt;
               let rendered;
@@ -505,7 +512,9 @@ async function executeRun(file, config, options) {
             const phaseContext = { ...context, record: (event, data) => scopedRecord(event, { phase, ...data }) };
             // The run record names the backend and model that ran each model phase.
             if (['call', 'agent'].includes(exec.kind)) { const used = profiles[modelName(exec)]; await phaseContext.record('model.used', { model_name: modelName(exec), backend: used.backend, model: used.model ?? null }); }
+            if (exec.kind === 'session') await phaseContext.record('model.used', { model_name: null, backend: exec.agent, model: exec.model ?? null });
             let result = exec.kind === 'classify' ? {[step.out]: await executeClassification(exec, input, config.classification, classifier, phaseContext)}
+              : exec.kind === 'session' ? {[step.out]: await executeSession(exec, input, phaseContext)}
               : exec.kind === 'run' ? await executeScript(exec, input, bound.signal, phaseContext.record, operationId(phase), phase === 'action' ? value => { actionObserved = value; } : undefined)
               : profiles[modelName(exec)].backend === 'codex' ? await executeCodex(exec, input, schema, phaseContext)
               : profiles[modelName(exec)].backend === 'claude' ? await executeClaude(exec, input, schema, phaseContext)
@@ -537,8 +546,9 @@ async function executeRun(file, config, options) {
             fail('setup', `Cannot replay ${id}:${iteration}: its inputs name ${missing}, which the case could not keep.`, 'unverifiable');
           }
           // In a replay, files connections are scratch folders and Method tools with effects return stand-ins, so a changed
-          // agent step can run. A script that changes another kind of connection, or a step that asks a person, cannot.
-          if (options.replay && !replayed && (step.ask || (step.do?.kind === 'run' && (step.changes ?? []).some(x => x.startsWith('environment.') && method.environment?.[x.slice(12)]?.type !== 'files')))) unverifiable(id, iteration, step);
+          // agent step can run. A script that changes another kind of connection, a step that asks a person, or a session
+          // that can use a shell or the web (outside its room's copy) cannot.
+          if (options.replay && !replayed && (step.ask || (step.do?.kind === 'session' && step.do.tools.some(tool => ['shell', 'web'].includes(tool))) || (step.do?.kind === 'run' && (step.changes ?? []).some(x => x.startsWith('environment.') && method.environment?.[x.slice(12)]?.type !== 'files')))) unverifiable(id, iteration, step);
           const folders = (step.changes ?? []).filter(x => x.startsWith('environment.') && method.environment?.[x.slice(12)]?.type === 'files').map(x => x.slice(12));
           const before = {};
           for (const name of folders) before[name] = tooLarge.has(name) ? null : await listFolder(pathResolve(config.environment[name]), [runDir]);

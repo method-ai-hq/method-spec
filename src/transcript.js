@@ -85,8 +85,11 @@ export function shellReads(command) {
   return reads;
 }
 
-/** Codex's JSON event stream as a transcript. result: the step output that Codex saved, when it saved one. */
-export function codexTranscript(prompt, output, result) {
+/**
+ * Codex's JSON event stream as a transcript. result: what Codex saved as its result, when it saved one, in the
+ * attempt's file resultFile.
+ */
+export function codexTranscript(prompt, output, result, resultFile = 'result.json') {
   const entries = [promptEntry(prompt)];
   const events = parsedLines(output);
   const completed = new Set(events.filter(({ event }) => event.type === 'item.completed').map(({ event }) => event.item?.id));
@@ -120,7 +123,7 @@ export function codexTranscript(prompt, output, result) {
       lastError = message;
     }
   }
-  if (result !== undefined) entries.push({ role: 'system', kind: 'result', text: text(result), raw_ref: 'result.json' });
+  if (result !== undefined) entries.push({ role: 'system', kind: 'result', text: text(result), raw_ref: resultFile });
   return numbered(entries);
 }
 

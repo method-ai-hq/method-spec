@@ -29,9 +29,11 @@ function stepScripts(step, tools) {
  * Everything that determines what an iteration returns: its definition, its resolved inputs, and what it executes.
  * A script step's key covers its own entrypoints and every bundle file that is not another step's entrypoint,
  * because the runtime does not trace which helper files a script imports. learned.json is not such a file: only the
- * step's own active rules (rules) are part of its key.
+ * step's own active rules (rules) are part of its key. A session's key covers the files of its room folder (room: their
+ * hashes). repeat numbers the repeats of the same work: each repeat is a separate run, so a step of one repeat is never
+ * reused in another, while unchanged steps of the same repeat are.
  */
-export function iterationKey({ method, step, bindings, iteration, profiles, config, runtimeInfo, manifest, rules = [] }) {
+export function iterationKey({ method, step, bindings, iteration, profiles, config, runtimeInfo, manifest, rules = [], repeat = 0, room }) {
   const tools = config.tools ?? {};
   const { execs, used, scripts } = stepScripts(step, tools);
   const own = new Set(scripts.map(script => script.entrypoint));
@@ -44,6 +46,8 @@ export function iterationKey({ method, step, bindings, iteration, profiles, conf
     runtimes: [...new Set(scripts.map(script => script.runtime))].sort().map(name => runtimeInfo[name] ?? null),
     bundle: scripts.length ? Object.fromEntries(Object.entries(manifest).filter(([file]) => !others.has(file) && file !== learnedFile)) : null,
     ...(rules.length ? { learned: rules } : {}),
+    ...(room !== undefined ? { room } : {}),
+    ...(repeat ? { repeat } : {}),
   });
 }
 

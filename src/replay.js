@@ -78,7 +78,7 @@ export function replayedCandidate(replay, { id, step, iteration, bindings, key }
   return rewritePaths(structuredClone(saved.candidate), replay.copies);
 }
 export function unverifiable(id, iteration, step) {
-  const why = step.ask ? 'it asks a person' : 'it changes an external system';
+  const why = step.ask ? 'it asks a person' : step.do?.kind === 'session' ? 'it is a session that can use a shell or the web' : 'it changes an external system';
   fail('setup', `Cannot replay ${id}:${iteration}: the step or its inputs changed, and ${why}. Record the case again from a new run.`, 'unverifiable');
 }
 

@@ -28,6 +28,9 @@ export function safeData(value, owner, seen = new Set(), depth = 0) {
 export function shape(def) { return typeof def === 'string' ? { type: def } : def; }
 /** Derive primitive outputs once for validators, executors, and readers. */
 export function effectiveOutputs(step) {
+  if (step.do?.kind === 'session') return { [step.out]: {
+    type: 'record', description: "The session's final message, the files it wrote in its room, and its transcript.",
+    fields: { final_text: 'text', files_written: { type: 'list', items: 'file' }, transcript: 'file' } } };
   if (step.do?.kind !== 'classify') return step.out ?? {};
   const probabilities = ids => ({ type: 'record', fields: Object.fromEntries(ids.map(id => [id, 'number'])) });
   if (step.do.answer === 'yes_no') return { [step.out]: {
@@ -228,6 +231,11 @@ export function validateSemantics(method, assertData) {
       if (!Object.keys(step.in ?? {}).length && !Object.keys(step.each ?? {}).length) fail('method_code', `${id}: classification requires an input`, 'validation', { fix: 'Give the step in or each.' });
       if (step.changes?.length) fail('method_code', `${id}: classification cannot change state or connections`, 'validation', { fix: 'Remove changes, and make the change in a later step.' });
     }
+    if (step.do?.kind === 'session') {
+      requiredText(step.do.prompt, `${id}.do.prompt`, 'Write the prompt of the session.');
+      if (step.do.agent === 'codex' && !step.do.tools.includes('shell')) fail('method_code', `${id}.do.tools: Codex reads and writes files through its shell, so a Codex session needs shell`, 'validation', { fix: 'Add shell to tools.' });
+      if (step.changes?.length) fail('method_code', `${id}: a session works in its own copy of its room and cannot change state or connections`, 'validation', { fix: 'Remove changes, and make the change in a later step.' });
+    }
     if (step.concurrency !== undefined) {
       if (!step.each) fail('method_code', `${id}.concurrency requires each`, 'validation', { fix: 'Add each, or remove concurrency.' });
       // Items that run at once share no state, ask nobody, and change nothing outside the run.
@@ -282,7 +290,8 @@ export function validateSemantics(method, assertData) {
       try { validatePrompt(prompt, definitions, typeAt); }
       catch (error) { fail('method_code', `${id}.${location}: ${error.message}`, 'invalid_prompt', { fix: 'Refer in the prompt only to names that the step receives in in or each.' }); }
     };
-    if (['call', 'agent'].includes(step.do?.kind)) validate(step.do.prompt, local, 'do.prompt');
+    if (['call', 'agent', 'session'].includes(step.do?.kind)) validate(step.do.prompt, local, 'do.prompt');
+    if (step.do?.kind === 'session' && step.do.room && typeAt(local, step.do.room).type !== 'text') fail('method_code', `${id}.do.room must be a text value that the step receives: the path of a folder`, 'validation', { fix: 'Give the step the folder path in in or each, and name it in room.' });
     if (step.ask) validate(step.ask, local, 'ask');
     if (step.check?.kind === 'agent') validate(step.check.prompt, {
       inputs: { type: 'record', fields: local }, outputs: { type: 'record', fields: outputs },

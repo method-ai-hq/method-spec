@@ -12,6 +12,7 @@ export { readDocument } from './io.js';
 export { parseDocumentValue, MethodValidationError, shapeErrors, methodIssues, methodProofs, documentForDigest } from './document.js';
 export { applyEdits } from './flow.js';
 export { methodProfiles } from './agents.js';
+export { cleanRoomEnv } from './clean-room.js';
 /** @typedef {import('./api-types.js').Issue} Issue */
 /** @typedef {import('./api-types.js').IssueOptions} IssueOptions */
 /** @typedef {import('./api-types.js').Proof} Proof */

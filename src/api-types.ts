@@ -42,6 +42,9 @@ export interface RunOptions {
   runDir?: string | undefined; resume?: boolean | undefined; retry?: string[] | undefined;
   /** Earlier run directories. An iteration whose definition, inputs, and executed files match one of their accepted iterations is reused. */
   cacheFrom?: string[] | undefined;
+  /** Which repeat of the same work this run is (0 when omitted). Repeats are separate runs: a step is reused only from
+   * an earlier run of the same repeat. */
+  repeat?: number | undefined;
   /** true runs every step; a list names steps that run even when a match exists. */
   fresh?: boolean | string[] | undefined;
   /** Values of the Method's declared secrets. Without it, the process environment supplies them. */

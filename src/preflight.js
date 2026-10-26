@@ -45,6 +45,10 @@ export async function preflight(method, config, sourceRoot, options = {}) {
           if (!options.hostedModels && !options.transport) { const message = 'Hosted models need Method sign-in. Run method login, then run again.'; if (options.allowMissingSetup) missingSetup.push(message); else fail('setup', message, 'needs_input'); }
         } else if (!options.transport && !hasSecret(options, profile.api_key_env)) fail('setup', `Missing environment variable: ${profile.api_key_env}`, 'preflight');
       }
+      if (exec.kind === 'session') {
+        if (config.allow_local_processes !== true) fail('setup', 'Sessions require allow_local_processes in operator configuration', 'preflight');
+        try { await executable(exec.agent); } catch (error) { if (!options.allowMissingSetup) throw error; missingSetup.push(error.message); }
+      }
       if (exec.browser && !Object.values(tools).some(t => t.connection === exec.browser.split('.')[1])) {
         if(options.allowMissingSetup) missingSetup.push(`Prepare browser: ${exec.browser}`);
         else fail('setup', `Missing browser connection: ${exec.browser}`, 'needs_input');

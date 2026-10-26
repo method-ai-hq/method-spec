@@ -26,6 +26,12 @@ const modelId = { type: 'string', pattern: modelIdPattern, maxLength: 200 };
 const stepModel = { anyOf: [name, modelId] };
 const call = object({ kind: { const: 'call' }, model: stepModel, prompt: text }, ['kind', 'prompt']);
 const agent = object({ kind: { const: 'agent' }, model: stepModel, prompt: text, tools: list(name), browser: ref }, ['kind', 'prompt']);
+// The tools of a session, by what they let the agent do. Codex reads and writes through its shell, so it needs shell.
+export const sessionTools = ['read', 'write', 'edit', 'search', 'shell', 'web'];
+// A plain agent session: one headless Claude Code or Codex session in a clean room, with no Method prompt, output form
+// or tools. room is a folder (a text value that the step receives); the session works in its own copy of it.
+const session = object({ kind: { const: 'session' }, agent: { enum: ['claude', 'codex'] }, model: text, reasoning_effort: text,
+  prompt: text, tools: list({ type: 'string', enum: sessionTools }), room: ref }, ['kind', 'agent', 'prompt', 'tools']);
 // What a models name means: a hosted model ID, or one with its output limit and reasoning effort,
 // or a local agent (codex or claude) with its own model and reasoning effort.
 const methodModel = { anyOf: [modelId, object({ model: modelId, max_output_tokens: positive, reasoning_effort: { enum: ['minimal', 'low', 'medium', 'high'] } }, ['model']),
@@ -88,7 +94,7 @@ export const methodSchema = {
     shape: { anyOf: [shapeProperties.type, object(shapeProperties, ['type'])] },
     data: object(shapeProperties, ['type']),
     input: object({ ...shapeProperties, default: {} }, ['type']),
-    execution: { oneOf: [run, call, agent, classify] },
+    execution: { oneOf: [run, call, agent, classify, session] },
     check: { oneOf: [...exact, run, agent] },
     step: {
       ...object({
@@ -102,7 +108,7 @@ export const methodSchema = {
       }, []),
       oneOf: [{ required: ['do'], not: { required: ['ask'] } }, { required: ['ask'], not: { required: ['do'] } }],
       not: { required: ['each', 'repeat'] },
-      allOf: [{ if: { properties: { do: { properties: { kind: { const: 'classify' } }, required: ['kind'] } }, required: ['do'] }, then: { required: ['out'], properties: { out: name } }, else: { properties: { out: map({ $ref: '#/$defs/data' }) } } }],
+      allOf: [{ if: { properties: { do: { properties: { kind: { enum: ['classify', 'session'] } }, required: ['kind'] } }, required: ['do'] }, then: { required: ['out'], properties: { out: name } }, else: { properties: { out: map({ $ref: '#/$defs/data' }) } } }],
     },
   },
 };
