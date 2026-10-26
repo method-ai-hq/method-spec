@@ -109,7 +109,8 @@ export async function executeClaude(execution, input, schema, context) {
     const last = await runClaude({ command, args, prompt, cwd: directory, env: { ...process.env, METHOD_OUTPUT_DIR: context.artifacts }, directory, model: profile.model, context, clean,
       onInit: event => { if (event.mcp_server_errors?.length || event.mcp_servers?.some(s => s.name === 'method_step' && !['connected', 'pending'].includes(s.status))) fail('setup', 'Claude could not connect to Method tools.', 'tool_unavailable'); } });
     const value = last.structured_output;
-    safeData(value, 'agent_work'); assertSchema(schema, value, 'Claude output', { producer: 'Claude Code', owner: 'agent_work' });
+    try { safeData(value, 'agent_work'); assertSchema(schema, value, 'Claude output', { producer: 'Claude Code', owner: 'agent_work' }); }
+    catch (error) { await context.record('agent.failed', { provider: 'claude', directory, message: error.message }); throw error; }
     await context.record('agent.completed', { provider: 'claude', directory, usage: last.usage ?? null });
     return value;
   } finally {

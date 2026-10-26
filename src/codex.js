@@ -119,7 +119,8 @@ export async function executeCodex(execution, input, schema, context) {
         } catch (error) { if (error.owner) throw error; fail('agent_work', 'Codex did not save a JSON result', 'invalid_output', { producer: 'Codex', problem: 'did not save a JSON result' }); }
         return value;
       } });
-    safeData(value, 'agent_work'); assertSchema(schema, value, 'Codex output', { producer: 'Codex', owner: 'agent_work' });
+    try { safeData(value, 'agent_work'); assertSchema(schema, value, 'Codex output', { producer: 'Codex', owner: 'agent_work' }); }
+    catch (error) { await context.record('codex.failed', { directory, message: error.message }); throw error; }
     await context.record('codex.completed', { directory, output: value, usage, internal_model_requests: 'managed by Codex; not counted by Method' });
     return value;
   } finally {
