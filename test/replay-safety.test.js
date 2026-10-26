@@ -114,16 +114,16 @@ test('paths are rewritten as whole paths, below a path, and inside text, never i
   assert.equal(namedPath({ prompt: 'read /a/runner' }, ['/a/run']), null);
 });
 
-test('a replayed Claude Code agent may read and write only in its scratch folder and run folder, and has no shell', () => {
+test('a live Claude Code agent may search and fetch the web; a replayed one may read and write only in its scratch folder and run folder, and has no shell or network', () => {
   const live = claudeArgs({ schema: {}, mcpConfig: '/m.json', artifacts: '/r/artifacts' });
-  assert.equal(live[live.indexOf('--allowedTools') + 1], 'Read,Write,Edit,Glob,Grep,mcp__method_step__*');
+  assert.equal(live[live.indexOf('--allowedTools') + 1], 'Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,mcp__method_step__*');
   assert.ok(!live.includes('--disallowedTools'));
   const replay = claudeArgs({ schema: {}, mcpConfig: '/m.json', artifacts: '/r/artifacts', replay: { scratch: '/s', runDir: '/r' } });
   const allowed = replay[replay.indexOf('--allowedTools') + 1].split(',');
   assert.deepEqual(allowed, ['Read(//s/**)', 'Read(//r/**)', 'Glob(//s/**)', 'Glob(//r/**)', 'Grep(//s/**)', 'Grep(//r/**)',
     'Write(//r/artifacts/**)', 'Write(//s/**)', 'Edit(//r/artifacts/**)', 'Edit(//s/**)', 'mcp__method_step__*']);
-  assert.ok(!allowed.some(rule => rule.startsWith('Bash')));
-  assert.equal(replay[replay.indexOf('--disallowedTools') + 1], 'Bash');
+  assert.ok(!allowed.some(rule => /^(Bash|WebSearch|WebFetch)/.test(rule)));
+  assert.equal(replay[replay.indexOf('--disallowedTools') + 1], 'Bash,WebSearch,WebFetch');
   assert.equal(replay[replay.indexOf('--permission-mode') + 1], 'dontAsk');
 });
 

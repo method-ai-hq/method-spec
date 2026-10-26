@@ -10,18 +10,19 @@ import { agentNotice } from './event-text.js';
 // An absolute path in a Claude Code permission rule starts with //.
 const under = (tool, dir) => `${tool}(/${resolve(dir)}/**)`;
 /**
- * The Claude Code arguments of one step. A live run allows the file tools everywhere. A replay allows reading only in
- * its scratch folder and its run folder, writing only in its scratch folder and the run's artifacts, and no shell.
+ * The Claude Code arguments of one step. A live run allows the file tools everywhere and web search and fetch. A replay
+ * allows reading only in its scratch folder and its run folder, writing only in its scratch folder and the run's
+ * artifacts, and no shell or network.
  */
 export function claudeArgs({ schema, mcpConfig, profile = {}, artifacts, replay = null }) {
   const allowed = replay
     ? [...['Read', 'Glob', 'Grep'].flatMap(tool => [under(tool, replay.scratch), under(tool, replay.runDir)]),
       ...['Write', 'Edit'].flatMap(tool => [under(tool, artifacts), under(tool, replay.scratch)]), 'mcp__method_step__*']
-    : ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'mcp__method_step__*'];
+    : ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'mcp__method_step__*'];
   const args = ['--print', '--output-format', 'stream-json', '--verbose', '--no-session-persistence',
     '--json-schema', JSON.stringify(schema), '--strict-mcp-config', '--mcp-config', mcpConfig,
     '--permission-mode', 'dontAsk', '--allowedTools', allowed.join(',')];
-  if (replay) args.push('--disallowedTools', 'Bash');
+  if (replay) args.push('--disallowedTools', 'Bash,WebSearch,WebFetch');
   if (profile.model) args.push('--model', profile.model);
   if (profile.reasoning_effort) args.push('--effort', profile.reasoning_effort);
   return args;

@@ -5,7 +5,7 @@ A Method is a YAML file that describes a reusable procedure: inputs, steps, outp
 This public MIT repository contains two parts:
 
 - **Format and validator:** JSON Schema plus semantic checks for references, types, effects, and dependency cycles.
-- **Executor (`@withmethod/runtime` 0.16.2):** local script, model, and agent execution; checks; state; run records; and checkpoint resume.
+- **Executor (`@withmethod/runtime` 0.16.3):** local script, model, and agent execution; checks; state; run records; and checkpoint resume.
 
 New methods use `format: method/3.4`. Rules learned from corrections live in `learned.json` beside the Method file ([schema](spec/method-learned.schema.json)). Existing `method/3.1`, `method/3.2`, and `method/3.3` documents load and run unchanged. Method 3.3 adds effect contracts (observed external results) and recorded cases (`method test`).
 
@@ -32,7 +32,7 @@ A method/3.4 document names its own hosted models in `models`, or a model ID on 
 
 An explicit `backend: openai-responses`, `anthropic-messages`, or `openrouter-chat` profile uses an API key environment variable and the provider's fixed endpoint. Request and agent-turn caps govern that direct API loop. Codex manages its own internal requests and installed tools. Method records Codex process logs and enforces its timeout and declared Method tool limits; it does not count every internal request or enforce a dollar budget.
 
-Scripts and local coding agents are trusted local processes, not an OS sandbox. In a normal run, the Codex adapter disables approval and sandbox prompts. A Method tool list restricts the Method bridge, not all Codex access. Review the Method and helper code before running it. A case replay (`method test`) is stricter: Claude Code may read and write only in the replay's own folders and has no shell, Codex runs in its sandbox with no network, and a Method tool with effects returns a stand-in instead of running.
+Scripts and local coding agents are trusted local processes, not an OS sandbox. In a normal run, the Codex adapter disables approval and sandbox prompts, and Claude Code may use the file tools, web search and web fetch, but no shell. A Method tool list restricts the Method bridge, not all Codex access. Review the Method and helper code before running it. A case replay (`method test`) is stricter: Claude Code may read and write only in the replay's own folders and has no shell or network, Codex runs in its sandbox with no network, and a Method tool with effects returns a stand-in instead of running.
 
 ## Read next
 
