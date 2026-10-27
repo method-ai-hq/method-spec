@@ -59,3 +59,24 @@ for (const agent of ['claude', 'codex']) {
   assert.match(await readFile(join(root, 'run', 'events.jsonl'), 'utf8'), agent === 'claude' ? /"event":"agent\.failed"/ : /"event":"codex\.failed"/);
  });
 }
+
+for (const off of [{ web: false }, { env: 'off' }]) {
+ test(`a Claude Code step runs without web search and fetch when ${off.env ? 'METHOD_WEB=off' : 'the config says web: false'}`, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'method-claude-web-'));
+  t.after(() => { delete process.env.METHOD_WEB; return rm(root, {recursive:true, force:true}); });
+  const command = join(root, 'claude');
+  await writeFile(command, `#!/usr/bin/env node
+require('fs').writeFileSync(${JSON.stringify(join(root, 'args.json'))}, JSON.stringify(process.argv.slice(2)));
+console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,structured_output:{text:'ok'}}));
+`, {mode:0o700});
+  const file = join(root, 'task.method');
+  await writeFile(file, JSON.stringify({format:'method/3.1',name:'No web',goal:'Work without the web',
+    steps:{write:{do:{kind:'agent',model:'writer',prompt:'Write.',tools:[]},out:{text:{type:'text'}}}},result:'text'}));
+  if (off.env) process.env.METHOD_WEB = off.env;
+  const result = await runMethod(file, {allow_local_processes:true, models:{writer:{backend:'claude',command}}, ...(off.web === false ? {web:false} : {})}, {runDir:join(root,'run')});
+  assert.equal(result.status, 'completed', result.failure?.details);
+  const args = JSON.parse(await readFile(join(root, 'args.json'), 'utf8'));
+  assert.ok(!args[args.indexOf('--allowedTools') + 1].includes('WebSearch'));
+  assert.equal(args[args.indexOf('--disallowedTools') + 1], 'WebSearch,WebFetch');
+ });
+}

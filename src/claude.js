@@ -15,11 +15,11 @@ const sessionTools = { read: ['Read'], write: ['Write'], edit: ['Edit'], search:
 /**
  * The Claude Code arguments of one step. A live run allows the file tools everywhere and web search and fetch. A replay
  * allows reading only in its scratch folder and its run folder, writing only in its scratch folder and the run's
- * artifacts, and no shell or network. A bare session ({tools}: the session tools that it may use) has no output form,
+ * artifacts, and no shell or network. web: false (the config's web) takes web search and fetch away from a live run. A bare session ({tools}: the session tools that it may use) has no output form,
  * no Method tools and no MCP servers; it runs in restricted mode (no settings files, file tools only in its working
  * folder) with only its own tools, and without skills or slash commands.
  */
-export function claudeArgs({ schema, mcpConfig, profile = {}, artifacts, replay = null, bare = null }) {
+export function claudeArgs({ schema, mcpConfig, profile = {}, artifacts, replay = null, bare = null, web = true }) {
   const common = ['--print', '--output-format', 'stream-json', '--verbose', '--no-session-persistence'];
   const model = [...(profile.model ? ['--model', profile.model] : []), ...(profile.reasoning_effort ? ['--effort', profile.reasoning_effort] : [])];
   if (bare) {
@@ -30,10 +30,11 @@ export function claudeArgs({ schema, mcpConfig, profile = {}, artifacts, replay 
   const allowed = replay
     ? [...['Read', 'Glob', 'Grep'].flatMap(tool => [under(tool, replay.scratch), under(tool, replay.runDir)]),
       ...['Write', 'Edit'].flatMap(tool => [under(tool, artifacts), under(tool, replay.scratch)]), 'mcp__method_step__*']
-    : ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'mcp__method_step__*'];
+    : ['Read', 'Write', 'Edit', 'Glob', 'Grep', ...(web ? ['WebSearch', 'WebFetch'] : []), 'mcp__method_step__*'];
   const args = [...common, '--json-schema', JSON.stringify(schema), '--strict-mcp-config', '--mcp-config', mcpConfig,
     '--permission-mode', 'dontAsk', '--allowedTools', allowed.join(',')];
   if (replay) args.push('--disallowedTools', 'Bash,WebSearch,WebFetch');
+  else if (!web) args.push('--disallowedTools', 'WebSearch,WebFetch');
   return [...args, ...model];
 }
 
@@ -104,7 +105,7 @@ export async function executeClaude(execution, input, schema, context) {
   const prompt = [execution.prompt, 'Step inputs:', JSON.stringify(input),
     'Do only this step; Method runs the other steps. Use the Method tools for the operations they declare. Do not change the Method, its scripts, or its input files.',
     `Save any output files under ${context.artifacts}. Return the step output in the requested JSON format.`].join('\n\n');
-  const args = claudeArgs({ schema, mcpConfig: join(directory, 'mcp.json'), profile, artifacts: context.artifacts, replay: context.replay });
+  const args = claudeArgs({ schema, mcpConfig: join(directory, 'mcp.json'), profile, artifacts: context.artifacts, replay: context.replay, web: context.web !== false });
   // Tokens stay in a private file, never process arguments or run events.
   await writeJSON(join(directory, 'mcp.json'), { mcpServers: { method_step: { type: 'http', url: bridge.url, headers: { Authorization: `Bearer ${bridge.token}` } } } });
   try {

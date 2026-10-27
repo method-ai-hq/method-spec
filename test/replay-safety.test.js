@@ -318,3 +318,15 @@ test('a case attempt whose copied folders are read-only is still removed after t
   await _removeTree(dir);
   await assert.rejects(readdir(dir));
 });
+
+test('with web off, a live Claude Code step has no web search or fetch, and a live Codex step runs with web search disabled', async () => {
+  const claude = claudeArgs({ schema: {}, mcpConfig: '/m.json', artifacts: '/r/artifacts', web: false });
+  assert.equal(claude[claude.indexOf('--allowedTools') + 1], 'Read,Write,Edit,Glob,Grep,mcp__method_step__*');
+  assert.equal(claude[claude.indexOf('--disallowedTools') + 1], 'WebSearch,WebFetch');
+  const base = { schemaFile: '/d/schema.json', output: '/d/result.json', url: 'http://127.0.0.1:1/mcp', artifacts: '/r/artifacts' };
+  assert.ok(!codexArgs(base).includes('web_search="disabled"'));
+  assert.ok(codexArgs({ ...base, web: false }).join(' ').includes('-c web_search="disabled"'));
+  // The config's web: false is a valid runtime setting.
+  const { validateConfig } = await import('../src/validate.js');
+  assert.doesNotThrow(() => validateConfig({ web: false }));
+});

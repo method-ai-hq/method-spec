@@ -3,9 +3,9 @@
  * sandbox rooted at its scratch folder, with the run's artifacts as the only other writable folder and no network.
  * A bare session ({room, tools}) has no output form and no Method tools: it ignores the user's config and rules, has
  * no plugins, apps or skill search, and runs in a sandbox rooted at its room, read-only unless it may write or edit,
- * with web search only when it may use the web.
+ * with web search only when it may use the web. web: false (the config's web) turns web search off for a step.
  */
-export function codexArgs({ schemaFile, output, url, profile, artifacts, replay, bare }: {
+export function codexArgs({ schemaFile, output, url, profile, artifacts, replay, bare, web }: {
     schemaFile: any;
     output: any;
     url: any;
@@ -13,6 +13,7 @@ export function codexArgs({ schemaFile, output, url, profile, artifacts, replay,
     artifacts: any;
     replay?: any;
     bare?: any;
+    web?: boolean;
 }): any[];
 /**
  * Run one Codex process in its attempt folder; it saves its last message in output. The folder keeps prompt.md,

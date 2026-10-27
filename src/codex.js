@@ -14,9 +14,9 @@ import { codexTranscript, writeTranscript } from './transcript.js';
  * sandbox rooted at its scratch folder, with the run's artifacts as the only other writable folder and no network.
  * A bare session ({room, tools}) has no output form and no Method tools: it ignores the user's config and rules, has
  * no plugins, apps or skill search, and runs in a sandbox rooted at its room, read-only unless it may write or edit,
- * with web search only when it may use the web.
+ * with web search only when it may use the web. web: false (the config's web) turns web search off for a step.
  */
-export function codexArgs({ schemaFile, output, url, profile = {}, artifacts, replay = null, bare = null }) {
+export function codexArgs({ schemaFile, output, url, profile = {}, artifacts, replay = null, bare = null, web = true }) {
   const model = [...(profile.model ? ['--model', profile.model] : []), ...(profile.reasoning_effort ? ['-c', `model_reasoning_effort=${JSON.stringify(profile.reasoning_effort)}`] : [])];
   if (bare) {
     const writes = bare.tools.includes('write') || bare.tools.includes('edit');
@@ -34,7 +34,7 @@ export function codexArgs({ schemaFile, output, url, profile = {}, artifacts, re
     '--json', '--output-schema', schemaFile, '--output-last-message', output,
     '-c', `mcp_servers.method_step.url=${JSON.stringify(url)}`,
     '-c', 'mcp_servers.method_step.bearer_token_env_var="METHOD_CODEX_TOOL_TOKEN"',
-    '-c', 'mcp_servers.method_step.required=true', ...model, '-'];
+    '-c', 'mcp_servers.method_step.required=true', ...(web ? [] : ['-c', 'web_search="disabled"']), ...model, '-'];
 }
 
 // A usage limit of the person's ChatGPT plan: Codex says so only in its error message.
@@ -109,7 +109,7 @@ export async function executeCodex(execution, input, schema, context) {
     'Do only this step; Method runs the other steps. Use the Method tools for the operations they declare. Do not change the Method, its scripts, or its input files.',
     `Save any output files under ${context.artifacts}. Return the step output in the requested JSON format.`].join('\n\n');
   const bridge = await startMethodTools(execution, context);
-  const args = codexArgs({ schemaFile: join(directory, 'schema.json'), output, url: bridge.url, profile, artifacts: context.artifacts, replay: context.replay });
+  const args = codexArgs({ schemaFile: join(directory, 'schema.json'), output, url: bridge.url, profile, artifacts: context.artifacts, replay: context.replay, web: context.web !== false });
   const clean = value => String(value).replaceAll(bridge.token, '[REDACTED]');
   let value;
   try {

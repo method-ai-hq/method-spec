@@ -71,6 +71,9 @@
     "allow_local_processes": {
       "type": "boolean"
     },
+    "web": {
+      "type": "boolean"
+    },
     "classification": {
       "type": "object",
       "properties": {

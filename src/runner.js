@@ -399,6 +399,8 @@ async function executeRun(file, config, options) {
         const schema = outputSchema(outputDefs);
         const context = {
           models: profiles, artifacts, signal: bound.signal, maxAgentTurns: limits.max_agent_turns, replay: scratch ? { scratch, runDir } : null,
+          // Web search and fetch for Claude Code and Codex steps: off with the config's web: false, or METHOD_WEB=off.
+          web: config.web !== false && process.env.METHOD_WEB !== 'off',
           maxRequestBytes: config.limits.max_request_bytes, maxOutputBytes: config.limits.max_output_bytes,
           transport: options.transport, hosted: options.hostedModels, secret: name => secretValue(options, name), record: scopedRecord, guard, redact,
           cost(value) { if (Number.isFinite(value) && value >= 0) costUsd = (costUsd ?? 0) + value; },

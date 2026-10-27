@@ -120,6 +120,8 @@ export const configSchema = {
     limits: object({ ...runLimits, effect_wait_ms: { type: 'integer', minimum: 0 } }, []),
     step_defaults: object(stepLimits, []),
     allow_local_processes: { type: 'boolean' },
+    // false: Claude Code and Codex steps run without web search and fetch (a comparison that does not test tools).
+    web: { type: 'boolean' },
     // With api_key_env the runtime calls Jev through OpenRouter directly with the operator's own key.
     classification: object({ provider: {const: 'typesafe'}, model: text, api_key_env: keyEnv }, ['provider', 'model']),
     runtimes: map(object({ command: text, args: { type: 'array', items: { type: 'string' } }, version: text }, ['command', 'version'])),
