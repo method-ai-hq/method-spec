@@ -1,6 +1,6 @@
 /**
- * A clean room for an agent (claude or codex), or for each agent of a list: a fresh HOME whose agent config folder
- * (CLAUDE_CONFIG_DIR or CODEX_HOME) holds only the user's sign-in, a short TMPDIR, and a private copy of each bound folder. The agent sees
+ * A clean room for an agent (claude or codex), or for each agent of a list: a fresh HOME whose agent config folders
+ * (.claude, .codex) hold only the user's sign-in, a short TMPDIR, and a private copy of each bound folder. The agent sees
  * none of the user's instructions (CLAUDE.md, AGENTS.md), memory, settings, skills, plugins, hooks or MCP servers.
  * base is the caller's environment: only its PATH, language and user name carry over, with the sign-in. A Method arm
  * runs `method run` with this environment, so its agent steps and its background fix get the same room as a session.
@@ -23,3 +23,7 @@ export function cleanRoomEnv(agent: "claude" | "codex" | Array<"claude" | "codex
 }>;
 /** The content hash of each file in a folder, by its path inside the folder. Links are not followed. */
 export function folderHashes(root: any): Promise<{}>;
+export namespace keychain {
+    /** Whether the login Keychain of a home holds Claude Code's sign-in. It reads no secret. */
+    function hasClaude(home: any, user: any): Promise<boolean>;
+}

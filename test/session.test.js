@@ -6,7 +6,7 @@ import { join, delimiter } from 'node:path';
 import { runMethod } from '../src/runner.js';
 import { claudeArgs } from '../src/claude.js';
 import { codexArgs } from '../src/codex.js';
-import { cleanRoomEnv } from '../src/clean-room.js';
+import { cleanRoomEnv, keychain } from '../src/clean-room.js';
 import { validateMethod } from '../src/document.js';
 import { isAgentRecord } from '../src/cases.js';
 
@@ -65,7 +65,8 @@ test('a clean room has a fresh home with only the sign-in, a short TMPDIR, and i
   const room = await cleanRoomEnv('claude', base, { folders: { world: folder } });
   try {
     assert.equal(room.env.HOME, join(room.root, 'home'));
-    assert.equal(room.env.CLAUDE_CONFIG_DIR, join(room.root, 'home', '.claude'));
+    // The agents' config folders are the room's defaults (HOME/.claude, HOME/.codex), so no variable names them.
+    for (const name of ['CLAUDE_CONFIG_DIR', 'CODEX_HOME']) assert.equal(room.env[name], undefined, name);
     assert.equal(room.env.CLAUDE_CODE_OAUTH_TOKEN, 'token-1');
     assert.equal(room.env.PATH, '/usr/bin');
     for (const name of ['CLAUDECODE', 'OTHER_SECRET']) assert.equal(room.env[name], undefined, name);
@@ -78,7 +79,7 @@ test('a clean room has a fresh home with only the sign-in, a short TMPDIR, and i
   assert.ok(await gone(room.root));
 });
 
-test('a Codex clean room links only the sign-in file into a new CODEX_HOME, and says plainly when there is none', async t => {
+test('a Codex clean room links only the sign-in file into HOME/.codex, and says plainly when there is none', async t => {
   const root = await mkdtemp(join(tmpdir(), 'method-clean-codex-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const codexHome = join(root, 'user-codex');
@@ -88,16 +89,16 @@ test('a Codex clean room links only the sign-in file into a new CODEX_HOME, and 
   await writeFile(join(codexHome, 'AGENTS.md'), 'User rules');
   const room = await cleanRoomEnv('codex', { PATH: '/usr/bin', CODEX_HOME: codexHome });
   try {
-    assert.equal(room.env.CODEX_HOME, join(room.root, 'home', '.codex'));
-    assert.equal(await readlink(join(room.env.CODEX_HOME, 'auth.json')), join(codexHome, 'auth.json'));
-    for (const name of ['config.toml', 'AGENTS.md']) assert.ok(await gone(join(room.env.CODEX_HOME, name)), name);
+    assert.equal(room.env.CODEX_HOME, undefined);
+    assert.equal(await readlink(join(room.env.HOME, '.codex', 'auth.json')), join(codexHome, 'auth.json'));
+    for (const name of ['config.toml', 'AGENTS.md']) assert.ok(await gone(join(room.env.HOME, '.codex', name)), name);
   } finally { await room.remove(); }
   await assert.rejects(cleanRoomEnv('codex', { PATH: '/usr/bin', CODEX_HOME: join(root, 'none') }), error => error.owner === 'setup' && /codex login/.test(error.message));
   // A Method arm whose steps run on both agents gets both sign-ins; one that runs on neither gets none.
   const both = await cleanRoomEnv(['claude', 'codex'], { PATH: '/usr/bin', CODEX_HOME: codexHome, CLAUDE_CODE_OAUTH_TOKEN: 't' });
   try {
     assert.equal(both.env.CLAUDE_CODE_OAUTH_TOKEN, 't');
-    assert.equal(await readlink(join(both.env.CODEX_HOME, 'auth.json')), join(codexHome, 'auth.json'));
+    assert.equal(await readlink(join(both.env.HOME, '.codex', 'auth.json')), join(codexHome, 'auth.json'));
   } finally { await both.remove(); }
   const none = await cleanRoomEnv([], { PATH: '/usr/bin', CLAUDE_CODE_OAUTH_TOKEN: 't' });
   try { assert.deepEqual(Object.keys(none.env).sort(), ['HOME', 'PATH', 'TMPDIR']); } finally { await none.remove(); }
@@ -115,6 +116,60 @@ test('a session step accepts only its own output form, needs shell for Codex, an
   assert.throws(() => validateMethod(method({ ...session, do: { ...session.do, room: 'elsewhere' } })));
   assert.equal(isAgentRecord('session/attempt-1/last-message.txt'), true);
   assert.equal(isAgentRecord('session/attempt-1/room/memo.md'), false);
+});
+
+test('a Claude Code clean room links the login Keychain, so Claude Code reads and refreshes the sign-in itself, and holds no copy of the token', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'method-clean-keychain-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const user = join(root, 'user');
+  await mkdir(join(user, 'Library', 'Keychains'), { recursive: true });
+  const asked = [];
+  const before = keychain.hasClaude;
+  keychain.hasClaude = async (home, name) => { asked.push([home, name]); return true; };
+  t.after(() => { keychain.hasClaude = before; });
+  const room = await cleanRoomEnv('claude', { PATH: '/usr/bin', HOME: user, USER: 'ryan' });
+  try {
+    assert.deepEqual(asked, [[user, 'ryan']]);
+    assert.equal(await readlink(join(room.env.HOME, 'Library', 'Keychains')), join(user, 'Library', 'Keychains'));
+    // No token, and no CLAUDE_CONFIG_DIR: Claude Code then uses the Keychain entry of its default config folder, the user's own.
+    for (const name of ['CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CONFIG_DIR', 'ANTHROPIC_API_KEY']) assert.equal(room.env[name], undefined, name);
+  } finally { await room.remove(); }
+  // A user with their own CLAUDE_CONFIG_DIR keeps the sign-in in that folder's credentials file.
+  const config = join(root, 'config');
+  await mkdir(config);
+  await writeFile(join(config, '.credentials.json'), '{}');
+  const own = await cleanRoomEnv('claude', { PATH: '/usr/bin', HOME: user, CLAUDE_CONFIG_DIR: config });
+  try {
+    assert.equal(await readlink(join(own.env.HOME, '.claude', '.credentials.json')), join(config, '.credentials.json'));
+    assert.ok(await gone(join(own.env.HOME, 'Library')));
+  } finally { await own.remove(); }
+  keychain.hasClaude = async () => false;
+  await assert.rejects(cleanRoomEnv('claude', { PATH: '/usr/bin', HOME: user }), error => error.owner === 'setup' && /claude auth login/.test(error.message));
+});
+
+test('a script in a clean room, and an agent that the script starts, find the room\'s sign-in through HOME alone', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'method-clean-script-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const user = join(root, 'user');
+  await mkdir(join(user, 'Library', 'Keychains'), { recursive: true });
+  await writeFile(join(user, 'Library', 'Keychains', 'login.keychain-db'), 'keychain');
+  const before = keychain.hasClaude;
+  keychain.hasClaude = async () => true;
+  t.after(() => { keychain.hasClaude = before; });
+  const room = await cleanRoomEnv('claude', { PATH: process.env.PATH, HOME: user, USER: 'ryan' });
+  t.after(() => room.remove());
+  // The script, like improve.method's, starts another process with only PATH and HOME.
+  await writeFile(join(root, 'sign-in.mjs'), `import { execFileSync } from 'node:child_process';
+const seen = execFileSync(process.execPath, ['-e', "const fs = require('fs'); process.stdout.write(fs.readFileSync(process.env.HOME + '/Library/Keychains/login.keychain-db', 'utf8'))"], { env: { PATH: process.env.PATH, HOME: process.env.HOME } }).toString();
+console.log(JSON.stringify({ seen }));`);
+  const file = join(root, 'sign-in.method');
+  await writeFile(file, JSON.stringify({ format: 'method/3.4', name: 'Sign-in', goal: 'Show what a process started by a script finds.',
+    steps: { look: { name: 'Look', purpose: 'Reads the sign-in that a process started by the script finds. Changes nothing.', do: { kind: 'run', runtime: 'node', entrypoint: 'sign-in.mjs' },
+      out: { seen: { type: 'text', description: 'What the process found.' } } } }, result: 'seen' }));
+  withEnv(t, Object.fromEntries([...Object.keys(process.env).map(name => [name, undefined]), ...Object.entries(room.env)]));
+  const result = await runMethod(file, { allow_local_processes: true, runtimes: { node: { command: process.execPath, version: process.version } } }, { runDir: join(root, 'run') });
+  assert.equal(result.status, 'completed', result.failure?.details);
+  assert.equal(result.result, 'keychain');
 });
 
 // A stand-in for Claude Code: it records what it saw in seen.json in its room, writes a memo, and returns a final text.
@@ -174,7 +229,7 @@ test('a session runs plain Claude Code in a clean room on its own copy of the ro
   assert.equal(seen.argv[seen.argv.indexOf('--tools') + 1], 'Read,Write');
   // The clean room: a fresh home with only the sign-in; none of the caller's variables.
   assert.equal(seen.env.CLAUDE_CODE_OAUTH_TOKEN, 'session-token');
-  assert.equal(seen.env.CLAUDE_CONFIG_DIR, join(seen.env.HOME, '.claude'));
+  assert.equal(seen.env.CLAUDE_CONFIG_DIR, null);
   for (const name of ['CLAUDECODE', 'METHOD_OUTPUT_DIR', 'OTHER_SECRET']) assert.equal(seen.env[name], null, name);
   assert.ok(seen.env.TMPDIR.length < 40, seen.env.TMPDIR);
   assert.ok(seen.cwd.endsWith('/folders/room') && !seen.cwd.startsWith(room));
@@ -213,7 +268,7 @@ let prompt = '';
 process.stdin.on('data', d => prompt += d).on('end', () => {
   fs.appendFileSync(${JSON.stringify(counter)}, 'x');
   const env = Object.fromEntries(['HOME', 'CODEX_HOME', 'TMPDIR', 'CLAUDECODE', 'OTHER_SECRET'].map(n => [n, process.env[n] ?? null]));
-  fs.writeFileSync('seen.json', JSON.stringify({ argv, cwd: process.cwd(), env, prompt, auth: fs.readlinkSync(process.env.CODEX_HOME + '/auth.json') }));
+  fs.writeFileSync('seen.json', JSON.stringify({ argv, cwd: process.cwd(), env, prompt, auth: fs.readlinkSync(process.env.HOME + '/.codex/auth.json') }));
   fs.writeFileSync('memo.md', 'Memo');
   fs.writeFileSync(argv[argv.indexOf('--output-last-message') + 1], 'Done: memo.md');
   const out = e => console.log(JSON.stringify(e));
@@ -223,7 +278,7 @@ process.stdin.on('data', d => prompt += d).on('end', () => {
 });
 `;
 
-test('a Codex session runs in a clean CODEX_HOME with only the sign-in link, and returns its last message', async t => {
+test('a Codex session runs in a clean HOME/.codex with only the sign-in link, and returns its last message', async t => {
   const { root, run } = await sessionFixture(t, 'codex');
   const result = await run('run-1');
   assert.equal(result.status, 'completed', result.failure?.details);
@@ -232,7 +287,7 @@ test('a Codex session runs in a clean CODEX_HOME with only the sign-in link, and
   const artifacts = join(root, 'run-1', 'artifacts');
   const seen = JSON.parse(await readFile(join(artifacts, result.result.files_written.find(file => file.path.endsWith('seen.json')).path), 'utf8'));
   assert.equal(seen.prompt, 'Read brief.md and write memo.md. Task: Be brief.');
-  assert.equal(seen.env.CODEX_HOME, join(seen.env.HOME, '.codex'));
+  assert.equal(seen.env.CODEX_HOME, null);
   assert.equal(seen.auth, join(root, 'codex-home', 'auth.json'));
   for (const name of ['CLAUDECODE', 'OTHER_SECRET']) assert.equal(seen.env[name], null, name);
   assert.ok(seen.argv.includes('--ignore-user-config') && !seen.argv.includes('--output-schema'));
