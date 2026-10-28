@@ -1,11 +1,11 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { access, cp, mkdir, readFile, readdir, rm, symlink } from 'node:fs/promises';
+import { access, cp, mkdir, readFile, readdir, symlink } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, relative, sep } from 'node:path';
 import { fail } from './validate.js';
-import { hash, tempFolder } from './io.js';
+import { hash, tempFolder, removeTree } from './io.js';
 
 const execFileAsync = promisify(execFile);
 // What a clean room keeps of the caller's environment: where programs are, and the language and the user's name.
@@ -90,9 +90,9 @@ export async function cleanRoomEnv(agent, base = process.env, { folders = {} } =
       copies[name] = join(root, 'folders', name);
       await cp(folder, copies[name], { recursive: true, verbatimSymlinks: true, errorOnExist: true, force: false });
     }
-    return { root, env, folders: copies, remove: () => rm(root, { recursive: true, force: true }) };
+    return { root, env, folders: copies, remove: () => removeTree(root) };
   } catch (error) {
-    await rm(root, { recursive: true, force: true });
+    await removeTree(root);
     throw error;
   }
 }

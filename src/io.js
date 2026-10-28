@@ -1,4 +1,4 @@
-import { readFile, realpath, mkdir, mkdtemp, writeFile, rename, access } from 'node:fs/promises';
+import { readFile, realpath, mkdir, mkdtemp, writeFile, rename, access, chmod, readdir, rm } from 'node:fs/promises';
 import { resolve, relative, isAbsolute, dirname, delimiter, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
@@ -43,6 +43,16 @@ export async function snapshotBundle(root, paths, destination) {
  */
 export async function tempFolder(prefix) {
   return realpath(await mkdtemp(join(process.platform === 'win32' ? tmpdir() : '/tmp', prefix)));
+}
+/** Remove a folder that may hold read-only folders (a run can make its own folders read-only): make it writable first. */
+export async function removeTree(path) {
+  async function writable(dir) {
+    let entries;
+    try { await chmod(dir, 0o700); entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) if (entry.isDirectory() && !entry.isSymbolicLink()) await writable(join(dir, entry.name));
+  }
+  await writable(path);
+  await rm(path, { recursive: true, force: true });
 }
 export async function writeJSON(file, data) {
   // A unique name per write: items that run at once can write the same file without sharing a temporary file.

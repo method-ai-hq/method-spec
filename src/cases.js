@@ -1,14 +1,14 @@
 import { createHash } from 'node:crypto';
-import { readFile, readdir, mkdir, mkdtemp, rm, writeFile, stat, cp, realpath, chmod } from 'node:fs/promises';
+import { readFile, readdir, mkdir, mkdtemp, rm, writeFile, stat, cp, realpath } from 'node:fs/promises';
 import { resolve as pathResolve, dirname, basename, join, relative, isAbsolute, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { recordRun, stepKeys, rewritePaths } from './replay.js';
+import { recordRun, stepKeys, rewritePaths, keptFolder } from './replay.js';
 import { readLearned } from './learned.js';
 import { runMethod } from './runner.js';
 import { copyOutputFiles } from './cache.js';
 import { configuration } from './defaults.js';
 import { fail, own, safeData, validateMethod, effectiveOutputs } from './validate.js';
-import { executable, executeProcess, hash, writeJSON, containedFile, readDocument, tempFolder } from './io.js';
+import { executable, executeProcess, hash, writeJSON, containedFile, readDocument, tempFolder, removeTree } from './io.js';
 import { readLedger, effectSummary } from './effects.js';
 import { judgeRubric, chooseJudges, findConflicts, valueText } from './rubric.js';
 
@@ -293,7 +293,9 @@ async function snapshotRun(recorded, dir) {
   let ext = 0;
   const snapshots = [], missing = [], used = { files: 0, bytes: 0 };
   const copy = async root => {
-    const source = pathResolve(root.original);
+    // A path that a script made in the run folder: the copy kept as the script left it, else the path as it is now.
+    const kept = root.kind === 'run' ? join(keptFolder(run), relative(run, pathResolve(root.original))) : null;
+    const source = kept && await exists(kept) ? kept : pathResolve(root.original);
     if (!await exists(source)) return;
     const size = await treeSize(source, { files: scratchLimit.files - used.files, bytes: scratchLimit.bytes - used.bytes });
     if (size) try {
@@ -504,6 +506,8 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
         result = await runMethod(methodFile, { ...config, environment }, { ...runOptions, runDir, inputs: rewritePaths(recording.inputs, copies), state: rewritePaths(recording.initial_state, copies),
           replay: { recording, paths, copies, missing: testCaseValue.snapshot_missing ?? [], live, scratch, observations: recording.observations ?? {}, artifacts: await exists(artifacts) ? artifacts : undefined, ...(only ? { only } : {}) } });
       } catch (error) { attempts.push({ status: 'unverifiable', reason: error.message }); break; }
+      // A usage limit is not a result of the Method: the test stops with it.
+      if (result.status === 'failed' && result.failure?.code === 'usage_limit') fail('limit', result.failure.headline ?? result.failure.details, 'usage_limit');
       const events = await readEvents(runDir);
       const kept = keepDir ? { run_dir: runDir } : {};
       if (result.status === 'failed' && result.failure.code === 'unverifiable') {
@@ -537,17 +541,8 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
     ...(live.length ? { target_live: attempts.length > 0 && attempts.every(a => a.target_live === true) } : {}), attempts, duration_ms: Math.round(performance.now() - started) };
 }
 
-/** Remove a folder that may hold read-only copies (a run can make its own folders read-only): make it writable first. */
+/** Remove a folder that may hold read-only copies; tests call it. */
 export async function _removeTree(path) { return removeTree(path); }
-async function removeTree(path) {
-  async function writable(dir) {
-    let entries;
-    try { await chmod(dir, 0o700); entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
-    for (const entry of entries) if (entry.isDirectory() && !entry.isSymbolicLink()) await writable(join(dir, entry.name));
-  }
-  await writable(path);
-  await rm(path, { recursive: true, force: true });
-}
 
 const scratchLimit = { files: 5000, bytes: 100_000_000 };
 const scratchSkip = new Set(['.git', 'node_modules', '.venv', '__pycache__', '.method-runs', 'cases']);

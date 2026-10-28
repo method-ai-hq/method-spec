@@ -374,7 +374,7 @@ export function testCase(methodFile: string, config: any, testCaseValue: any, ru
     runs: number;
     min_pass: any;
 }>;
-/** Remove a folder that may hold read-only copies (a run can make its own folders read-only): make it writable first. */
+/** Remove a folder that may hold read-only copies; tests call it. */
 export function _removeTree(path: any): Promise<void>;
 /**
  * Test a Method version against its active cases. Every active case must pass. With a baseline (the version

@@ -8,6 +8,8 @@ export function snapshotBundle(root: any, paths: any, destination: any): Promise
  * folder; macOS cuts a socket path at 104 characters.
  */
 export function tempFolder(prefix: any): Promise<string>;
+/** Remove a folder that may hold read-only folders (a run can make its own folders read-only): make it writable first. */
+export function removeTree(path: any): Promise<void>;
 export function writeJSON(file: any, data: any): Promise<void>;
 export function executable(command: any): Promise<string>;
 export function readLines(stream: any, receive: any, maxBytes?: number, maxLineBytes?: number): Promise<void>;

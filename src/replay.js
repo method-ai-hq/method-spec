@@ -1,7 +1,7 @@
 import { modelName } from './semantics.js';
 import { documentForDigest } from './document.js';
-import { readFile } from 'node:fs/promises';
-import { resolve as pathResolve } from 'node:path';
+import { readFile, cp, mkdir, access } from 'node:fs/promises';
+import { resolve as pathResolve, relative, isAbsolute, dirname, join, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { executionTools } from './tool-connections.js';
 import { fail } from './validate.js';
@@ -80,6 +80,40 @@ export function replayedCandidate(replay, { id, step, iteration, bindings, key }
 export function unverifiable(id, iteration, step) {
   const why = step.ask ? 'it asks a person' : step.do?.kind === 'session' ? 'it is a session that can use a shell or the web' : 'it changes an external system';
   fail('setup', `Cannot replay ${id}:${iteration}: the step or its inputs changed, and ${why}. Record the case again from a new run.`, 'unverifiable');
+}
+
+/** The folder in a run folder that keeps each path a script made in the run folder, as the script left it. */
+export const keptFolder = runDir => join(pathResolve(runDir), 'kept');
+const keptLimit = { files: 5000, bytes: 100_000_000 };
+/**
+ * Keep a copy of each file or folder in the run folder that a script step's outputs name, as the step left it. A later
+ * step can change or remove it before the run ends; a case made from the run copies the kept version, which is what the
+ * next step read. The first copy of a path stays. A path larger than the limits is not kept.
+ */
+export async function keepRunPaths(runDir, outputs) {
+  const root = pathResolve(runDir), kept = keptFolder(root);
+  for (const text of new Set(strings(outputs))) {
+    if (text.length > 4096 || text.includes('\n') || !isAbsolute(text)) continue;
+    const path = pathResolve(text), rel = relative(root, path);
+    if (!rel || rel.startsWith('..') || isAbsolute(rel) || rel === 'kept' || rel.startsWith(`kept${sep}`)) continue;
+    const target = join(kept, rel);
+    if (await access(target).then(() => true, () => false) || !await access(path).then(() => true, () => false)) continue;
+    if (!await withinLimit(path)) continue;
+    await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+    await cp(path, target, { recursive: true, verbatimSymlinks: true });
+  }
+}
+async function withinLimit(path) {
+  const { readdir, stat } = await import('node:fs/promises');
+  let files = 0, bytes = 0;
+  const visit = async p => {
+    const info = await stat(p);
+    if (info.isFile()) { files++; bytes += info.size; return files <= keptLimit.files && bytes <= keptLimit.bytes; }
+    if (!info.isDirectory()) return true;
+    for (const name of await readdir(p)) if (!await visit(join(p, name))) return false;
+    return true;
+  };
+  try { return await visit(path); } catch { return false; }
 }
 
 /** Build a recording from a finished run: each accepted iteration's inputs and outputs, plus its effect observations. */

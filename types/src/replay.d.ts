@@ -31,6 +31,12 @@ export function replayedCandidate(replay: any, { id, step, iteration, bindings, 
     key: any;
 }): any;
 export function unverifiable(id: any, iteration: any, step: any): void;
+/**
+ * Keep a copy of each file or folder in the run folder that a script step's outputs name, as the step left it. A later
+ * step can change or remove it before the run ends; a case made from the run copies the kept version, which is what the
+ * next step read. The first copy of a path stays. A path larger than the limits is not kept.
+ */
+export function keepRunPaths(runDir: any, outputs: any): Promise<void>;
 /** Build a recording from a finished run: each accepted iteration's inputs and outputs, plus its effect observations. */
 export function recordRun(runDir: any): Promise<{
     format: string;
@@ -55,3 +61,4 @@ export function stepKeys(method: any, { files, profiles, tools, learned }: {
 }): {
     [k: string]: string;
 };
+export function keptFolder(runDir: any): string;

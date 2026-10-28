@@ -29,7 +29,8 @@ const agent = object({ kind: { const: 'agent' }, model: stepModel, prompt: text,
 // The tools of a session, by what they let the agent do. Codex reads and writes through its shell, so it needs shell.
 export const sessionTools = ['read', 'write', 'edit', 'search', 'shell', 'web'];
 // A plain agent session: one headless Claude Code or Codex session in a clean room, with no Method prompt, output form
-// or tools. room is a folder (a text value that the step receives); the session works in its own copy of it.
+// or tools. room is a folder (a text value that the step receives); the session works in its own copy of it, and
+// the files it wrote go back into the folder when it ends.
 const session = object({ kind: { const: 'session' }, agent: { enum: ['claude', 'codex'] }, model: text, reasoning_effort: text,
   prompt: text, tools: list({ type: 'string', enum: sessionTools }), room: ref }, ['kind', 'agent', 'prompt', 'tools']);
 // What a models name means: a hosted model ID, or one with its output limit and reasoning effort,

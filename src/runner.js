@@ -9,7 +9,7 @@ import { executorVersion, assertCheckpointExecutor } from './executor-version.js
 import { executeClaude } from './claude.js';
 import { configuration } from './defaults.js';
 import { mkdir, readFile, appendFile, realpath, open, unlink, cp, copyFile, rm, stat as statFile }  from 'node:fs/promises';
-import { resolve as pathResolve, dirname } from 'node:path';
+import { resolve as pathResolve, dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { validateMethod, validateConfig, assertSchema, outputSchema, dataSchema, resolve, own, fail, safeData, shape } from './validate.js';
@@ -17,7 +17,7 @@ import { checkResultSchema, object } from './schema.js';
 import { readDocument, hash, snapshotBundle, writeJSON, executeProcess, containedFile, tempFolder } from './io.js';
 import { executeModel } from './model.js';
 import { executeCodex } from './codex.js';
-import { executeSession } from './session.js';
+import { executeSession, writeBack } from './session.js';
 import { folderHashes } from './clean-room.js';
 import { renderPrompt } from './prompt.js';
 import { preflight } from './preflight.js';
@@ -25,7 +25,7 @@ import { progressMessage } from './progress.js';
 import { cacheable, iterationKey, readCache, copyOutputFiles } from './cache.js';
 import { effectKey, connectionsFor, testFixtures, runObserverScript, observeEffect, readLedger, appendLedger, currentEffects, effectSummary, statusWithEffects, waitUntil, nextObservation, horizonAt, previousObservations, listFolder, observeFiles, isBuiltin } from './effects.js';
 import { observerConnection } from './semantics.js';
-import { replayedCandidate, unverifiable, stepKey, namedPath } from './replay.js';
+import { replayedCandidate, unverifiable, stepKey, namedPath, keepRunPaths } from './replay.js';
 import { readLearned, activeRules, rulesText, selectionPrompt, selectionSchema } from './learned.js';
 import { prepareObservation } from './observed-effects.js';
 import { failureRecord } from './failure.js';
@@ -372,6 +372,11 @@ async function executeRun(file, config, options) {
         if (hit) {
           // An earlier run accepted this exact iteration. Its outputs and files are reused; nothing executes.
           await copyOutputFiles(hit.dir, step, hit.outputs, artifacts);
+          // A reused session's files go into its room as the session put them there.
+          if (step.do?.kind === 'session' && step.do.room) {
+            const written = hit.outputs[step.out]?.files_written ?? [];
+            for (const f of written) { const [, attempt, rest] = /^(session\/attempt-[^/]+)\/room\/(.+)$/.exec(f.path) ?? []; if (attempt) await writeBack(join(artifacts, attempt), resolve(bindings, step.do.room), [rest]); }
+          }
           await checkFiles(stepOutputs, hit.outputs);
           (accepted[id] ??= [])[iteration] = hit.outputs;
           if (hit.observed) (observed[id] ??= [])[iteration] = hit.observed;
@@ -683,6 +688,8 @@ async function executeRun(file, config, options) {
           if (key) keys[key] = [id, iteration];
           active = null;
           await scopedRecord('step.accepted', { outputs, state, check, ...(actionObserved ? { observed_effects: actionObserved } : {}) });
+          // A path that a script made in the run folder is kept as the script left it, for a case made from this run.
+          if (step.do?.kind === 'run' && !options.replay) await keepRunPaths(runDir, outputs);
           if (eachEntry) for (const key of Object.keys(collected)) collected[key][iteration] = outputs[key];
           else Object.assign(root, outputs);
           return !!step.repeat?.until && resolve(outputs, step.repeat.until) === true;

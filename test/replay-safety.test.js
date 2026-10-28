@@ -330,3 +330,25 @@ test('with web off, a live Claude Code step has no web search or fetch, and a li
   const { validateConfig } = await import('../src/validate.js');
   assert.doesNotThrow(() => validateConfig({ web: false }));
 });
+
+test('a case made after a later step removed what a script made in the run folder replays with what that script made', async t => {
+  const dir = await folder(t, 'method-kept-');
+  const room = join(dir, 'rooms', 'matter-1');
+  await mkdir(room, { recursive: true }); await writeFile(join(room, 'notes.md'), 'The sanctions apply.');
+  await writeFile(join(dir, 'prepare.mjs'), prepare); await writeFile(join(dir, 'work.mjs'), work(''));
+  // The last step removes the room copy, as a step that tidies up at the end of a run does.
+  await writeFile(join(dir, 'tidy.mjs'), 'import{readFileSync,rmSync}from"node:fs";const a=JSON.parse(readFileSync(0,"utf8"));rmSync(a.workdir+"/notes.md");console.log(JSON.stringify({done:true}))');
+  const doc = structuredClone(roomMethod);
+  doc.steps.tidy = { name: 'Tidy', in: { workdir: 'workdir', memo: 'memo' }, do: script('tidy.mjs'), out: { done: { type: 'boolean', description: 'Done.' } } };
+  const file = join(dir, 'room.method'); await writeFile(file, JSON.stringify(doc));
+  const source = join(dir, 'runs', 'source');
+  assert.equal((await runMethod(file, config(), { runDir: source, inputs: { room } })).status, 'completed');
+  const created = await createCase({ methodFile: file, runDir: source, id: 'names-board', note: 'Tell the Board.', config: config(),
+    expect: [{ kind: 'equals', ref: 'outputs.memo', value: 'The sanctions apply. Tell the Board.' }] });
+  assert.equal(await readFile(join(created.dir, 'snapshot', 'run', 'artifacts', 'room', 'notes.md'), 'utf8'), 'The sanctions apply.');
+  await writeFile(join(dir, 'work.mjs'), work(' Tell the Board.'));
+  const [item] = await listCases(file);
+  const result = await testCase(file, config(), item);
+  assert.equal(result.status, 'pass', JSON.stringify(result.attempts));
+});
+

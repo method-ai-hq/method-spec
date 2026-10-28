@@ -8,10 +8,11 @@ import { cleanRoomEnv, folderHashes } from './clean-room.js';
 
 /**
  * One headless Claude Code or Codex session with no Method prompt, output form or tools: a plain agent, as a person
- * would run it. It runs in a clean room (cleanRoomEnv) and works in the room's own copy of its room folder, so the
- * folder itself never changes. exec.prompt is the rendered prompt; input holds the step's values, and exec.room names
- * the one that is the folder. Returns {final_text, files_written, transcript}: the agent's last message, a copy of each
- * file that it added or changed in its room, and its transcript, all under artifacts/session/attempt-*.
+ * would run it. It runs in a clean room (cleanRoomEnv) and works in the clean room's own copy of its room folder. When
+ * the session ends, each file that it added or changed goes back into the room folder, so the work it hands in is in
+ * the folder that later steps read. exec.prompt is the rendered prompt; input holds the step's values, and exec.room
+ * names the one that is the folder. Returns {final_text, files_written, transcript}: the agent's last message, a copy of
+ * each file that it added or changed in its room, and its transcript, all under artifacts/session/attempt-*.
  */
 export async function executeSession(exec, input, context) {
   const command = await executable(exec.agent);
@@ -49,9 +50,22 @@ export async function executeSession(exec, input, context) {
       await copyFile(join(cwd, path), target);
       files_written.push({ path: `${attempt}/room/${path}`, sha256: after[path] });
     }
+    if (folder !== null) await writeBack(directory, folder, files_written.map(f => f.path.slice(`${attempt}/room/`.length)));
     const transcript = await readFile(join(directory, 'transcript.jsonl'));
     return { final_text: finalText, files_written, transcript: { path: `${attempt}/transcript.jsonl`, sha256: hash(transcript) } };
   } finally {
     await room.remove();
+  }
+}
+
+/**
+ * Put the files that a session wrote (paths in its room, kept under attempt/room/) into the room folder. A reused
+ * session puts its recorded files back the same way, so later steps read the same folder either way.
+ */
+export async function writeBack(attempt, folder, paths) {
+  for (const path of paths) {
+    const target = join(folder, path);
+    await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+    await copyFile(join(attempt, 'room', path), target);
   }
 }

@@ -207,7 +207,9 @@ async function sessionFixture(t, agent = 'claude') {
       do: { kind: 'session', agent, prompt: 'Read brief.md and write memo.md. Task: {{task}}', tools: agent === 'claude' ? ['read', 'write'] : ['shell', 'write'], room: 'room' } } },
     result: 'session' }));
   const run = (name, options = {}) => runMethod(file, { allow_local_processes: true }, { runDir: join(root, name), inputs: { room, task: 'Be brief.' }, ...options });
-  return { root, room, counter, run };
+  // The room as it was before a session wrote its files into it.
+  const reset = () => Promise.all(['memo.md', 'seen.json'].map(name => rm(join(room, name), { force: true })));
+  return { root, room, counter, run, reset };
 }
 
 test('a session runs plain Claude Code in a clean room on its own copy of the room, and returns its text, the files it wrote and its transcript', async t => {
@@ -220,8 +222,8 @@ test('a session runs plain Claude Code in a clean room on its own copy of the ro
   const artifacts = join(root, 'run-1', 'artifacts');
   const memo = files_written.find(file => file.path.endsWith('memo.md'));
   assert.equal(await readFile(join(artifacts, memo.path), 'utf8'), 'Memo on the brief');
-  // The room folder itself does not change.
-  assert.ok(await gone(join(room, 'memo.md')));
+  // What the session wrote is in the room folder, where later steps read it.
+  assert.equal(await readFile(join(room, 'memo.md'), 'utf8'), 'Memo on the brief');
   const seen = JSON.parse(await readFile(join(artifacts, files_written.find(file => file.path.endsWith('seen.json')).path), 'utf8'));
   // Only the prompt: no step inputs, no "do only this step", no output form.
   assert.equal(seen.prompt, 'Read brief.md and write memo.md. Task: Be brief.');
@@ -243,17 +245,23 @@ test('a session runs plain Claude Code in a clean room on its own copy of the ro
 });
 
 test('repeats of the same session are separate runs; unchanged work of the same repeat is reused; a changed room runs again', async t => {
-  const { root, room, counter, run } = await sessionFixture(t);
+  const { root, room, counter, run, reset } = await sessionFixture(t);
   const count = async () => (await readFile(counter, 'utf8')).length;
   assert.equal((await run('r0')).status, 'completed');
+  await reset();
   const again = await run('r0-again', { cacheFrom: [join(root, 'r0')] });
   assert.deepEqual(again.reused, { work: 1 });
   assert.equal(await count(), 1);
+  // A reused session puts its files into the room as the session did.
+  assert.equal(await readFile(join(room, 'memo.md'), 'utf8'), 'Memo on the brief');
+  await reset();
   const second = await run('r1', { cacheFrom: [join(root, 'r0')], repeat: 1 });
   assert.equal(second.status, 'completed'); assert.equal(second.reused, undefined);
   assert.equal(await count(), 2);
+  await reset();
   assert.deepEqual((await run('r1-again', { cacheFrom: [join(root, 'r0'), join(root, 'r1')], repeat: 1 })).reused, { work: 1 });
   assert.equal(await count(), 2);
+  await reset();
   await writeFile(join(room, 'brief.md'), 'a new brief');
   const changed = await run('r0-changed', { cacheFrom: [join(root, 'r0')] });
   assert.equal(changed.reused, undefined);
@@ -299,4 +307,39 @@ test('a Codex session runs in a clean HOME/.codex with only the sign-in link, an
   const { at, ...last } = entries.at(-1);
   assert.deepEqual(last, { i: entries.length - 1, role: 'system', kind: 'result', text: 'Done: memo.md', tool: null, path: null, raw_ref: 'last-message.txt' });
   assert.ok(!Number.isNaN(Date.parse(at)));
+});
+
+test('a session in a room with read-only files and folders hands in its file, and its clean room is removed', async t => {
+  const { root, room, run } = await sessionFixture(t);
+  const { chmod } = await import('node:fs/promises');
+  await mkdir(join(room, 'matter'));
+  await writeFile(join(room, 'matter', 'request.txt'), 'the request');
+  await chmod(join(room, 'matter', 'request.txt'), 0o444);
+  await chmod(join(room, 'matter'), 0o555);
+  const result = await run('run-ro');
+  await chmod(join(room, 'matter'), 0o755);
+  assert.equal(result.status, 'completed', result.failure?.details);
+  assert.equal(await readFile(join(room, 'memo.md'), 'utf8'), 'Memo on the brief');
+  const seen = JSON.parse(await readFile(join(root, 'run-ro', 'artifacts', result.result.files_written.find(file => file.path.endsWith('seen.json')).path), 'utf8'));
+  assert.ok(await gone(seen.env.HOME));
+});
+
+test('a usage limit in a replay of a case stops the test with the limit, and is not a failed case', async t => {
+  const { root, run } = await sessionFixture(t);
+  const { createCase, listCases, testCase } = await import('../src/cases.js');
+  const source = await run('source');
+  assert.equal(source.status, 'completed', source.failure?.details);
+  const file = join(root, 'plain.method');
+  await createCase({ methodFile: file, runDir: join(root, 'source'), id: 'memo', note: 'Say more.', config: { allow_local_processes: true },
+    expect: [{ kind: 'equals', ref: 'outputs.session.final_text', value: 'A longer memo.' }] });
+  // Claude Code now reports that the plan's usage limit is reached.
+  const bin = process.env.PATH.split(delimiter)[0];
+  await writeFile(join(bin, 'claude'), `#!/usr/bin/env node
+process.stdin.on('data', () => {}).on('end', () => {
+  console.log(JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected' } }));
+  console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: 'You have hit your limit' }));
+});
+`, { mode: 0o700 });
+  const [item] = await listCases(file);
+  await assert.rejects(testCase(file, { allow_local_processes: true }, item, {}, { live: ['work'] }), error => error.code === 'usage_limit' && /usage limit/.test(error.message));
 });
