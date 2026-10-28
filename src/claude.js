@@ -72,7 +72,10 @@ export async function runClaude({ command, args, prompt, cwd, env, directory, mo
     output = clean(result.output);
     await writeFile(join(directory, 'events.jsonl'), output, { mode: 0o600 });
     await writeFile(join(directory, 'stderr.log'), clean(result.diagnostics), { mode: 0o600 });
-    const last = events.filter(e => e.type === 'result').at(-1);
+    const results = events.filter(e => e.type === 'result');
+    // Background subagents that finish after the step's answer make Claude Code report more results, which answer
+    // their task notifications and can be plain text: the step's result is the first success with structured output.
+    const last = results.find(e => !e.is_error && e.subtype === 'success' && e.structured_output !== undefined) ?? results.at(-1);
     // A failed result is a failure of Claude Code or its model service: check it before the output's form.
     if (!last || last.is_error || last.subtype !== 'success') {
       const message = clean(last?.errors?.join('\n') || last?.result || 'Claude did not return a successful result.');

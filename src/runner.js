@@ -614,7 +614,12 @@ async function executeRun(file, config, options) {
           // and evidence. A step that changes the outside world is not run twice.
           const retryable = ['agent', 'call'].includes(step.do?.kind) && !replayed && !step.effects && !(step.changes ?? []).some(x => x.startsWith('environment.'));
           // Learned rules: a rule without a condition always applies; one call on the step's own model decides the others.
-          if (rules.length && !replayed && ['agent', 'call'].includes(step.do?.kind)) {
+          // A session reads every rule, each with its condition: it can look at its room to see whether one holds.
+          if (rules.length && !replayed && step.do?.kind === 'session') {
+            await scopedRecord('learned.applied', { considered: rules.map(rule => rule.id), applied: rules.map(rule => rule.id) });
+            learnedText = rulesText(rules);
+          }
+          else if (rules.length && !replayed && ['agent', 'call'].includes(step.do?.kind)) {
             const conditional = rules.filter(rule => rule.when !== null);
             let chosen = [];
             if (conditional.length) {
@@ -623,7 +628,7 @@ async function executeRun(file, config, options) {
             }
             const applied = rules.filter(rule => rule.when === null || chosen.includes(rule.id));
             await scopedRecord('learned.applied', { considered: rules.map(rule => rule.id), applied: applied.map(rule => rule.id) });
-            if (applied.length) learnedText = rulesText(applied);
+            if (applied.length) learnedText = rulesText(applied.map(({ when: _when, ...rule }) => ({ ...rule, when: null })));
           }
           if (!await accept(await act())) {
             if (!retryable) checkFailed(1);

@@ -20,7 +20,8 @@ export async function readLearned(dir) {
 export const activeRules = (learned, id) => (learned?.steps?.[id] ?? []).filter(rule => rule.status === 'active').map(({ id, when, then }) => ({ id, when, then }));
 
 /** The rules that the step prompt ends with. */
-export const rulesText = rules => ['Rules learned from corrections:', ...rules.map(rule => `- ${rule.then}`)].join('\n');
+/** The text of learned rules for a prompt. A rule with a condition says it, for an agent that decides when it holds (a session). */
+export const rulesText = rules => ['Rules learned from corrections:', ...rules.map(rule => `- ${rule.when ? `When ${rule.when.replace(/[.\s]+$/, '')}: ` : ''}${rule.then}`)].join('\n');
 
 /** The call that decides which conditional rules apply to one iteration, on the step's own model. */
 export const selectionPrompt = [

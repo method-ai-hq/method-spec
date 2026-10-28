@@ -80,3 +80,25 @@ console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,struc
   assert.equal(args[args.indexOf('--disallowedTools') + 1], 'WebSearch,WebFetch');
  });
 }
+
+test('a Claude step keeps its structured result when background subagents report later results', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'method-claude-background-'));
+  t.after(() => rm(root, {recursive:true, force:true}));
+  const command = join(root, 'claude');
+  // The shape of a recorded stream: the step's answer, then results for the task notifications of background subagents.
+  const stats = {spawned:2, started_in_background:2, completed:2};
+  const events = [
+    {type:'system', subtype:'init', model:'claude-opus', mcp_servers:[{name:'method_step', status:'connected'}]},
+    {type:'assistant', message:{content:[{type:'tool_use', id:'t1', name:'StructuredOutput', input:{text:'Briefing'}}]}},
+    {type:'result', subtype:'success', is_error:false, result_index:0, result:'{"text":"Briefing"}', structured_output:{text:'Briefing'}, subagent_stats:stats},
+    {type:'result', subtype:'success', is_error:false, result_index:1, origin:{kind:'task-notification'}, result:'The subagent finished.', subagent_stats:stats},
+    {type:'result', subtype:'success', is_error:false, result_index:2, result:'The briefing is complete.', subagent_stats:stats},
+  ];
+  await writeFile(command, `#!/usr/bin/env node\nfor (const event of ${JSON.stringify(events)}) console.log(JSON.stringify(event));\n`, {mode:0o700});
+  const file = join(root, 'task.method');
+  await writeFile(file, JSON.stringify({format:'method/3.1',name:'Background subagents',goal:'Keep the step answer',
+    steps:{write:{do:{kind:'agent',model:'writer',prompt:'Write.',tools:[]},out:{text:{type:'text'}}}},result:'text'}));
+  const result = await runMethod(file, {allow_local_processes:true,models:{writer:{backend:'claude',command}}}, {runDir:join(root,'run')});
+  assert.equal(result.status, 'completed', result.failure?.details);
+  assert.equal(result.result, 'Briefing');
+});

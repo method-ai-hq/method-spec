@@ -343,3 +343,15 @@ process.stdin.on('data', () => {}).on('end', () => {
   const [item] = await listCases(file);
   await assert.rejects(testCase(file, { allow_local_processes: true }, item, {}, { live: ['work'] }), error => error.code === 'usage_limit' && /usage limit/.test(error.message));
 });
+
+test('a session reads the step\'s learned rules after its prompt, each with its condition', async t => {
+  const { root, run } = await sessionFixture(t);
+  await writeFile(join(root, 'learned.json'), JSON.stringify({ format: 'method-learned/1', steps: { work: [
+    { id: 'lr_000000000001', when: null, then: 'Sign the memo.', by: null, from: {}, status: 'active', created: '2026-10-28T00:00:00Z' },
+    { id: 'lr_000000000002', when: 'the brief names a competitor.', then: 'Mark the memo confidential.', by: null, from: {}, status: 'active', created: '2026-10-28T00:00:00Z' },
+    { id: 'lr_000000000003', when: null, then: 'Retired rule.', by: null, from: {}, status: 'retired', created: '2026-10-28T00:00:00Z' }] } }));
+  const result = await run('run-rules');
+  assert.equal(result.status, 'completed', result.failure?.details);
+  const seen = JSON.parse(await readFile(join(root, 'run-rules', 'artifacts', result.result.files_written.find(file => file.path.endsWith('seen.json')).path), 'utf8'));
+  assert.equal(seen.prompt, 'Read brief.md and write memo.md. Task: Be brief.\n\nRules learned from corrections:\n- Sign the memo.\n- When the brief names a competitor: Mark the memo confidential.');
+});
