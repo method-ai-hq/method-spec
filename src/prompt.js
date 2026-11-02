@@ -52,3 +52,25 @@ export function renderPrompt(template, inputs) {
     return String(value);
   }).join('');
 }
+
+/**
+ * The step input without the values that the prompt names, so the model reads each value once: where the prompt puts
+ * it. A record that is left empty goes too. An item of a list stays, because removing it would renumber the others.
+ */
+export function unnamedInput(template, input) {
+  const copy = structuredClone(input);
+  for (const part of parsePrompt(template ?? '')) {
+    if (!part.reference) continue;
+    const keys = part.reference.split('.'), parents = [];
+    let value = copy;
+    for (const key of keys.slice(0, -1)) {
+      if (!plain(value) || !Object.hasOwn(value, key)) { value = null; break; }
+      parents.push([value, key]); value = value[key];
+    }
+    if (!plain(value)) continue;
+    delete value[keys.at(-1)];
+    for (const [parent, key] of parents.reverse()) if (plain(parent[key]) && !Object.keys(parent[key]).length) delete parent[key];
+  }
+  return copy;
+}
+const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value);

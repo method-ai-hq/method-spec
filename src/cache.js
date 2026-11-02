@@ -86,7 +86,7 @@ export async function copyOutputFiles(fromDir, step, outputs, artifacts) {
         const site = JSON.parse(await readFile(pathResolve(artifacts, value.path), 'utf8'));
         for (const asset of site.files ?? []) await copy(posix.join(posix.dirname(value.path), asset.path));
       }
-    } else if (def.type === 'record') for (const [name, child] of Object.entries(def.fields)) await visit(child, value[name]);
+    } else if (def.type === 'record') for (const [name, child] of Object.entries(def.fields ?? {})) await visit(child, value[name]);
     else if (def.type === 'list') for (const item of value) await visit(def.fields ? { type: 'record', fields: def.fields } : def.items, item);
   }
   for (const [name, def] of Object.entries(effectiveOutputs(step))) await visit(def, outputs[name]);

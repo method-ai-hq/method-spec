@@ -1,13 +1,17 @@
 /** A rate limit (429) or a server error (5xx) is transient: the same request can succeed a moment later. */
 export const transientStatus = status => status === 429 || (Number.isInteger(status) && status >= 500 && status < 600);
 
+/** A connection that closed before the answer came: the host's code network, or fetch's own error. */
+export const lostConnection = error => error?.code === 'network' || (error?.name === 'TypeError' && error?.message === 'fetch failed');
+
 /**
  * The transient class of an error, or null: rate_limit (HTTP 429), server_error (HTTP 5xx), unavailable (the service
- * said so), or timeout. Retry notices name this class.
+ * said so), timeout, or connection (it closed before the answer). Retry notices name this class.
  * @param {any} error
- * @returns {'rate_limit' | 'server_error' | 'unavailable' | 'timeout' | null}
+ * @returns {'rate_limit' | 'server_error' | 'unavailable' | 'timeout' | 'connection' | null}
  */
 export function transientClass(error) {
+  if (lostConnection(error)) return 'connection';
   if (error?.status === 429) return 'rate_limit';
   if (transientStatus(error?.status)) return 'server_error';
   if (error?.code === 'classification_unavailable') return 'unavailable';
@@ -15,8 +19,9 @@ export function transientClass(error) {
   return null;
 }
 
-// A service that is briefly unavailable gets three attempts in all, with a growing wait. A rejected request is not retried.
-export const attempts = 3;
+// A service that is briefly unavailable gets five attempts in all, with a growing wait (10 seconds in all). A network
+// that drops one large upload in four still fails an item only about once in a thousand. A rejected request is not retried.
+export const attempts = 5;
 
 /**
  * Run one provider request, and run it again after a transient failure. Model calls and classification share this policy.

@@ -17,6 +17,8 @@ const path = { type: 'string', minLength: 1 };
 const shapeProperties = {
   type: { enum: ['text', 'number', 'boolean', 'record', 'list', 'file'] },
   description: text, fields: map({ $ref: '#/$defs/shape' }), items: { $ref: '#/$defs/shape' }, format: text,
+  // A record output of a step can name a JSON Schema file of the Method in place of fields.
+  schema: path,
 };
 const run = object({ kind: { const: 'run' }, runtime: name, entrypoint: path, args: { type: 'array', items: { type: 'string' } } }, ['kind', 'runtime', 'entrypoint']);
 // A model ID names a hosted model directly, for example openai/gpt-6-luna.

@@ -73,7 +73,7 @@ export const validationLine = ({ path, expected, found }) => `${path}: found ${f
 
 // ---- Notices ----
 
-const classWords = { rate_limit: 'rate limit', server_error: 'server error', unavailable: 'unavailable', timeout: 'timeout' };
+const classWords = { rate_limit: 'rate limit', server_error: 'server error', unavailable: 'unavailable', timeout: 'timeout', connection: 'the connection closed' };
 /** A retry of a transient failure. */
 export const retryNotice = ({ service, kind, status, attempt, attempts }) =>
   `${capital(service)} did not answer (${classWords[kind]}${status ? `, HTTP ${status}` : ''}). Method tries again: attempt ${attempt} of ${attempts}.`;

@@ -46,6 +46,11 @@ export function assertSchema(schema, value, label, { producer, owner }) {
   const validate = ajv.compile(schema);
   if (!validate(value)) fail(owner, `${label}: ${ajv.errorsText(validate.errors)}`, 'invalid_output', { validation: validationErrors(validate.errors, value), producer });
 }
+/** A JSON Schema that a Method file names must compile, or the Method stops before any step runs. */
+export function checkSchema(schema, path) {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) fail('method_code', `${path} is not a JSON Schema object`, 'validation', { fix: `Write ${path} as one JSON Schema object.` });
+  try { ajv.compile(schema); } catch (error) { fail('method_code', `${path} is not a valid JSON Schema: ${error.message}`, 'validation', { fix: `Correct ${path}.` }); }
+}
 function validateDefs(definitions = {}) {
   for (const def of Object.values(definitions)) {
     const schema = dataSchema(def);

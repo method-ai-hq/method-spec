@@ -38,7 +38,7 @@ export async function modelFiles(input, types, artifacts) {
       files.push({ at, path: value.path, name: basename(value.path), absolute, sha256: value.sha256, media: media ?? 'text/plain',
         ...(media ? { data: bytes.toString('base64') } : { text }) });
     } else if (def.type === 'record') {
-      for (const [name, child] of Object.entries(def.fields)) await visit(child, value[name], `${at}.${name}`);
+      for (const [name, child] of Object.entries(def.fields ?? {})) await visit(child, value[name], `${at}.${name}`);
     } else if (def.type === 'list') {
       const item = def.fields ? { type: 'record', fields: def.fields } : def.items;
       for (const [index, child] of value.entries()) await visit(item, child, `${at}.${index}`);

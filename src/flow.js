@@ -19,7 +19,7 @@ const head = ref => ref.split('.')[0];
 function holdsText(definition) {
   const def = shape(definition);
   if (def.type === 'number' || def.type === 'boolean') return false;
-  if (def.type === 'record') return Object.values(def.fields ?? {}).some(holdsText);
+  if (def.type === 'record') return def.schema !== undefined || Object.values(def.fields ?? {}).some(holdsText);
   if (def.type === 'list') return def.fields ? Object.values(def.fields).some(holdsText) : holdsText(def.items);
   return true;
 }

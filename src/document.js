@@ -35,6 +35,8 @@ export function shapeErrors(definition, value, label = 'value') {
     ...(typeof value.sha256 === 'string' && /^[a-f0-9]{64}$/.test(value.sha256) ? [] : [`${label}.sha256: expected a SHA-256 digest.`]),
     ...Object.keys(value).filter(key => !['path','sha256'].includes(key)).map(key => `${label}.${key}: unexpected field.`),
   ];
+  // A record with a schema file is checked against that schema where the step returns it.
+  if (def.schema !== undefined) return [];
   return [...Object.entries(def.fields).flatMap(([key, child]) => shapeErrors(child, value[key], `${label}.${key}`)),
     ...Object.keys(value).filter(key => !Object.hasOwn(def.fields, key)).map(key => `${label}.${key}: unexpected field.`)];
 }

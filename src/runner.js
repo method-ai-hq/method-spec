@@ -12,7 +12,7 @@ import { mkdir, readFile, appendFile, realpath, open, unlink, cp, copyFile, rm, 
 import { resolve as pathResolve, dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { validateMethod, validateConfig, assertSchema, outputSchema, dataSchema, resolve, own, fail, safeData, shape } from './validate.js';
+import { validateMethod, validateConfig, assertSchema, outputSchema, dataSchema, resolve, own, fail, safeData, shape, checkSchema } from './validate.js';
 import { checkResultSchema, object } from './schema.js';
 import { readDocument, hash, snapshotBundle, writeJSON, executeProcess, containedFile, tempFolder } from './io.js';
 import { executeModel } from './model.js';
@@ -33,6 +33,21 @@ import { failureRecord } from './failure.js';
 import { eventText, placeText, retryNotice, agentNotice, limitNotice } from './event-text.js';
 import { transientClass, attempts as retryAttempts } from './retry.js';
 import { displayText } from './schema.js';
+
+/** Each JSON Schema file that a step output names, read once from the bundle. */
+async function readSchemaFiles(method, bundle) {
+  const files = {};
+  for (const step of Object.values(method.steps)) for (const def of Object.values(effectiveOutputs(step))) {
+    const path = shape(def).schema;
+    if (path === undefined || own(files, path)) continue;
+    let schema;
+    try { schema = JSON.parse(await readFile(await containedFile(bundle, path), 'utf8')); }
+    catch { fail('method_code', `${path} is not a JSON file`, 'validation', { fix: `Write ${path} as one JSON Schema object.` }); }
+    checkSchema(schema, path);
+    files[path] = schema;
+  }
+  return files;
+}
 
 /** The name of a step's check in text: its reading name, else its script, else its kind. */
 const checkLabel = step => step?.reading?.check_name ?? step?.check?.entrypoint ?? (step?.check ? step.check.kind ?? Object.keys(step.check)[0] : 'check');
@@ -242,13 +257,14 @@ async function executeRun(file, config, options) {
         if (def.type === 'file') {
           const actual = hash(await readFile(await containedFile(artifacts, value.path)));
           if (actual !== value.sha256) fail('setup', 'File hash mismatch', 'file_mismatch');
-        } else if (def.type === 'record') for (const [name, child] of Object.entries(def.fields)) await visit(child, value[name]);
+        } else if (def.type === 'record') for (const [name, child] of Object.entries(def.fields ?? {})) await visit(child, value[name]);
         else if (def.type === 'list') for (const item of value) await visit(def.fields ? { type: 'record', fields: def.fields } : def.items, item);
       }
       for (const [name, def] of Object.entries(defs ?? {})) await visit(def, values[name]);
     };
     await options.prepareBundle?.(bundle);
     await verifyBundle();
+    const schemaFiles = await readSchemaFiles(method, bundle);
     const learned = await readLearned(bundle);
     // A replay's own folder: scripts that run live get their HOME here, and agents may write only here and in artifacts.
     // Their TMPDIR is a short folder of its own: the scratch folder can be deep, and tools put sockets in TMPDIR.
@@ -401,9 +417,12 @@ async function executeRun(file, config, options) {
         const scopedRecord = (event, data) => record(event, { step: id, iteration, ...data });
         const guard = () => { if (bound.signal.aborted) throw bound.signal.reason; if (performance.now() >= deadline) throw timeoutError(); };
         const stateNames = (step.changes ?? []).filter(x => x.startsWith('state.')).map(x => x.slice(6));
-        const outputDefs = { ...stepOutputs };
+        // An output that names a schema file is checked against the schema in that file.
+        const outputDefs = Object.fromEntries(Object.entries(stepOutputs).map(([name, def]) => [name, shape(def).schema === undefined ? def : { ...shape(def), schema: schemaFiles[shape(def).schema] }]));
         if (stateNames.length) outputDefs.state = { type: 'record', fields: Object.fromEntries(stateNames.map(k => [k, method.state[k]])) };
         const schema = outputSchema(outputDefs);
+        // A model step whose one output names a schema file answers in that schema itself, as a production request does.
+        const direct = Object.keys(outputDefs).length === 1 && shape(Object.values(outputDefs)[0]).schema ? Object.keys(outputDefs)[0] : null;
         const context = {
           models: profiles, artifacts, signal: bound.signal, maxAgentTurns: limits.max_agent_turns, replay: scratch ? { scratch, runDir } : null,
           // Web search and fetch for Claude Code and Codex steps: off with the config's web: false, or METHOD_WEB=off.
@@ -486,6 +505,9 @@ async function executeRun(file, config, options) {
             return output;
           },
         };
+        const executeModelStep = (exec, input, schema, context) => profiles[modelName(exec)].backend === 'codex' ? executeCodex(exec, input, schema, context)
+          : profiles[modelName(exec)].backend === 'claude' ? executeClaude(exec, input, schema, context)
+          : executeModel(exec, input, schema, context);
         const operationId = phase => 'mop_' + hash([executionId, id, iteration, phase]);
         const token = operationId('action');
         // Who produced a phase's value, in words from the Method file.
@@ -516,7 +538,8 @@ async function executeRun(file, config, options) {
               await scopedRecord('prompt.rendered', { phase, template, rendered });
               // An agent action has no operation ID of its own; give it the token that its observers will search for.
               if (phase === 'action' && exec.kind === 'agent' && step.effects) rendered += `\n\nCorrelation token for this action: ${token}. Put it where the changed system keeps a reference (for example a message header, an idempotency key, or a note field), so that an observer can find this change.`;
-              exec = { ...exec, prompt: rendered };
+              // The model gets each value that the prompt names once, where the prompt puts it.
+              exec = { ...exec, prompt: rendered, template };
             }
             // The action's input holds the step's in and each values; the model reads the files among them.
             const phaseContext = { ...context, inputTypes: phase === 'action' ? inputTypes : {}, record: (event, data) => scopedRecord(event, { phase, ...data }) };
@@ -526,9 +549,8 @@ async function executeRun(file, config, options) {
             let result = exec.kind === 'classify' ? {[step.out]: await executeClassification(exec, input, config.classification, classifier, phaseContext)}
               : exec.kind === 'session' ? {[step.out]: await executeSession(exec, input, phaseContext)}
               : exec.kind === 'run' ? await executeScript(exec, input, bound.signal, phaseContext.record, operationId(phase), phase === 'action' ? value => { actionObserved = value; } : undefined)
-              : profiles[modelName(exec)].backend === 'codex' ? await executeCodex(exec, input, schema, phaseContext)
-              : profiles[modelName(exec)].backend === 'claude' ? await executeClaude(exec, input, schema, phaseContext)
-              : await executeModel(exec, input, schema, phaseContext);
+              : phase === 'action' && direct ? { [direct]: await executeModelStep(exec, input, outputDefs[direct].schema, phaseContext) }
+              : await executeModelStep(exec, input, schema, phaseContext);
             // A check result's reason and evidence are display text; status is never converted.
             if (phase === 'check') result = displayText(result);
             guard(); assertSchema(schema, result, `${phase} output`, { producer, owner: ownerOf(exec) });

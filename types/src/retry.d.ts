@@ -1,10 +1,10 @@
 /**
  * The transient class of an error, or null: rate_limit (HTTP 429), server_error (HTTP 5xx), unavailable (the service
- * said so), or timeout. Retry notices name this class.
+ * said so), timeout, or connection (it closed before the answer). Retry notices name this class.
  * @param {any} error
- * @returns {'rate_limit' | 'server_error' | 'unavailable' | 'timeout' | null}
+ * @returns {'rate_limit' | 'server_error' | 'unavailable' | 'timeout' | 'connection' | null}
  */
-export function transientClass(error: any): "rate_limit" | "server_error" | "unavailable" | "timeout" | null;
+export function transientClass(error: any): "rate_limit" | "server_error" | "unavailable" | "timeout" | "connection" | null;
 /**
  * Run one provider request, and run it again after a transient failure. Model calls and classification share this policy.
  * `transient` says which errors to retry; `canRetry` says whether the run still allows another request.
@@ -22,4 +22,5 @@ export function withRetries<T>(operation: () => Promise<T>, { transient, signal,
     beforeRetry?: (error: any, attempt: number) => unknown;
 }): Promise<T>;
 export function transientStatus(status: any): boolean;
-export const attempts: 3;
+export function lostConnection(error: any): boolean;
+export const attempts: 5;

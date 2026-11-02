@@ -97,16 +97,17 @@ test('a script that exits with an error keeps its last stderr lines in the failu
 });
 
 test('a provider that still fails after the retries is an outside service, and each retry records a notice', async t => {
-  const f = await fixture(t, method(modelStep()));
+  // The five attempts wait about 10 seconds in all.
+  const f = await fixture(t, method(modelStep({ limits: { timeout_ms: 30000, max_model_requests: 5 } })));
   let calls = 0;
-  const run = await f.run(config(), { transport: async () => { calls++; throw Object.assign(new Error('openai-responses HTTP 429'), { code: 'provider_error', status: 429 }); } });
-  assert.equal(calls, 3);
+  const run = await f.run({ ...config(), limits: { ...config().limits, timeout_ms: 60000 } }, { transport: async () => { calls++; throw Object.assign(new Error('openai-responses HTTP 429'), { code: 'provider_error', status: 429 }); } });
+  assert.equal(calls, 5);
   const failure = assertRecord(run);
   assert.equal(failure.owner, 'outside_service'); assert.equal(failure.code, 'provider_error'); assert.equal(failure.next.action, 'run_again');
-  assert.equal(failure.headline, 'In step "Ask the model", the model test-model failed after 3 attempts: openai-responses HTTP 429.');
-  const notices = (await f.events()).filter(e => e.event === 'notice');
-  assert.deepEqual(notices.map(n => [n.kind, n.key, n.attempt, n.attempts]), [['retry', 'work:0:retry:model', 2, 3], ['retry', 'work:0:retry:model', 3, 3]]);
-  assert.equal(notices[0].message, 'The model service (openai-responses) did not answer (rate limit, HTTP 429). Method tries again: attempt 2 of 3.');
+  assert.equal(failure.headline, 'In step "Ask the model", the model test-model failed after 5 attempts: openai-responses HTTP 429.');
+  const notices = (await f.events()).filter(e => e.event === 'notice' && e.kind === 'retry');
+  assert.deepEqual(notices.map(n => [n.kind, n.key, n.attempt, n.attempts]), [2, 3, 4, 5].map(n => ['retry', 'work:0:retry:model', n, 5]));
+  assert.equal(notices[0].message, 'The model service (openai-responses) did not answer (rate limit, HTTP 429). Method tries again: attempt 2 of 5.');
   assert.equal(notices[0].step, 'work'); assert.equal(notices[0].iteration, 0);
   // The run.failed event carries the same record and its headline as its message.
   const failed = (await f.events()).find(e => e.event === 'run.failed');
@@ -120,7 +121,18 @@ test('a server error that clears records a retry notice and the step completes',
   const run = await f.run(config(), { transport: async () => ++calls === 1 ? Promise.reject(Object.assign(new Error('HTTP 503'), { code: 'provider_error', status: 503 })) : response({ value: 6 }) });
   assert.equal(run.status, 'completed'); assert.equal(run.result, 6);
   const [notice] = (await f.events()).filter(e => e.event === 'notice');
-  assert.match(notice.message, /\(server error, HTTP 503\)\. Method tries again: attempt 2 of 3\./);
+  assert.match(notice.message, /\(server error, HTTP 503\)\. Method tries again: attempt 2 of 5\./);
+});
+
+test('a connection that closes before the answer is sent again, from the host and from fetch', async t => {
+  for (const lost of [Object.assign(new Error('Method cannot be reached'), { code: 'network' }), new TypeError('fetch failed')]) {
+    const f = await fixture(t, method(modelStep()));
+    let calls = 0;
+    const run = await f.run(config(), { transport: async () => ++calls === 1 ? Promise.reject(lost) : response({ value: 6 }) });
+    assert.equal(run.status, 'completed'); assert.equal(run.result, 6);
+    const [notice] = (await f.events()).filter(e => e.event === 'notice');
+    assert.equal(notice.message, 'The model service (openai-responses) did not answer (the connection closed). Method tries again: attempt 2 of 5.');
+  }
 });
 
 test('a classification timeout records a retry notice with its class', async t => {
@@ -136,7 +148,7 @@ test('a classification timeout records a retry notice with its class', async t =
   const run = await runMethod(f.file, { classification: identity }, { runDir: f.runDir, inputs: { message: 'invoice' }, classification: provider });
   assert.equal(run.status, 'completed');
   const [notice] = (await f.events()).filter(e => e.event === 'notice');
-  assert.equal(notice.message, 'The classification service did not answer (timeout). Method tries again: attempt 2 of 3.');
+  assert.equal(notice.message, 'The classification service did not answer (timeout). Method tries again: attempt 2 of 5.');
   assert.equal(notice.key, 'route:0:retry:classification');
 });
 

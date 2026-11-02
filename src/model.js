@@ -1,9 +1,10 @@
 import { modelName } from './semantics.js';
 import { assertSchema, fail, safeData } from './validate.js';
-import { withRetries, transientStatus, transientClass, attempts } from './retry.js';
+import { withRetries, transientStatus, transientClass, lostConnection, attempts } from './retry.js';
 import { retryNotice } from './event-text.js';
 import { modelTranscript, writeTranscript } from './transcript.js';
 import { modelFiles } from './model-files.js';
+import { unnamedInput } from './prompt.js';
 import { mkdir, mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -45,7 +46,7 @@ const object = value => value && typeof value === 'object' && !Array.isArray(val
 const completeJson = text => { try { return JSON.parse(text) !== null && /^[\[{]/.test(text.trim()); } catch { return false; } };
 const dataUrl = file => `data:${file.media};base64,${file.data}`;
 const pdf = file => file.media === 'application/pdf';
-// A text file goes to the model as its text, after the JSON input that names its path.
+// A text file goes to the model as its text, before the JSON input that names its path.
 const fileText = file => `${file.at} (${file.path}):\n${file.text}`;
 const adapters = {
   'openai-responses': {
@@ -66,8 +67,8 @@ const adapters = {
       return { calls, refusal: content.some(x => x.type === 'refusal'), text: content.filter(x => x.type === 'output_text').map(x => x.text).join('') };
     },
     history: data => data.output,
-    content: (text, files) => [{ type: 'input_text', text }, ...files.map(file => file.text !== undefined ? { type: 'input_text', text: fileText(file) }
-      : pdf(file) ? { type: 'input_file', filename: file.name, file_data: dataUrl(file) } : { type: 'input_image', image_url: dataUrl(file) })],
+    content: (text, files) => [...files.map(file => file.text !== undefined ? { type: 'input_text', text: fileText(file) }
+      : pdf(file) ? { type: 'input_file', filename: file.name, file_data: dataUrl(file) } : { type: 'input_image', image_url: dataUrl(file) }), { type: 'input_text', text }],
     results: results => results.map(({ call, output }) => ({ type: 'function_call_output', call_id: call.id, output: json(output) })),
     usage: data => data.usage,
   },
@@ -90,8 +91,8 @@ const adapters = {
     },
     // Thinking blocks stay in the history unchanged; current models reject an edited history.
     history: data => [{ role: 'assistant', content: data.content }],
-    content: (text, files) => [{ type: 'text', text }, ...files.map(file => file.text !== undefined ? { type: 'text', text: fileText(file) }
-      : { type: pdf(file) ? 'document' : 'image', source: { type: 'base64', media_type: file.media, data: file.data } })],
+    content: (text, files) => [...files.map(file => file.text !== undefined ? { type: 'text', text: fileText(file) }
+      : { type: pdf(file) ? 'document' : 'image', source: { type: 'base64', media_type: file.media, data: file.data } }), { type: 'text', text }],
     results: results => [{ role: 'user', content: results.map(({ call, output }) => ({ type: 'tool_result', tool_use_id: call.id, content: json(output) })) }],
     usage(data) {
       const usage = object(data.usage);
@@ -124,8 +125,8 @@ const adapters = {
       return { calls, refusal: false, text };
     },
     history: data => [data.choices[0].message],
-    content: (text, files) => [{ type: 'text', text }, ...files.map(file => file.text !== undefined ? { type: 'text', text: fileText(file) }
-      : pdf(file) ? { type: 'file', file: { filename: file.name, file_data: dataUrl(file) } } : { type: 'image_url', image_url: { url: dataUrl(file) } })],
+    content: (text, files) => [...files.map(file => file.text !== undefined ? { type: 'text', text: fileText(file) }
+      : pdf(file) ? { type: 'file', file: { filename: file.name, file_data: dataUrl(file) } } : { type: 'image_url', image_url: { url: dataUrl(file) } }), { type: 'text', text }],
     results: results => results.map(({ call, output }) => ({ role: 'tool', tool_call_id: call.id, content: json(output) })),
     usage(data) {
       const usage = object(data.usage);
@@ -138,10 +139,10 @@ adapters.method = { ...adapters['openrouter-chat'], url: null, headers: () => ({
 export const directBackends = Object.keys(adapters);
 const hostedOutputTokens = 16_000;
 
-/** A rate limit or a server error is retried like a classification; any other failure stops the step. */
+/** A rate limit, a server error or a lost connection is retried like a classification; any other failure stops the step. */
 function providerRequest(body, profile, adapter, context, files = []) {
   return withRetries(() => providerRequestOnce(body, profile, adapter, context, files),
-    { transient: error => transientStatus(error.status), signal: context.signal, canRetry: () => context.canRequest?.() ?? true,
+    { transient: error => transientStatus(error.status) || lostConnection(error), signal: context.signal, canRetry: () => context.canRequest?.() ?? true,
       beforeRetry: async (error, attempt) => {
         context.guard();
         await context.notice?.({ kind: 'retry', sub: 'model', attempt, attempts, message: retryNotice({ service: `the model service (${profile.backend})`, kind: transientClass(error), status: error.status, attempt, attempts }) });
@@ -193,14 +194,16 @@ export async function executeModel(execution, input, schema, context) {
   const directory = await mkdtemp(join(context.artifacts, 'model', 'attempt-'));
   const read = [], started = new Date().toISOString();
   try { return await converse(execution, input, schema, context, read); }
-  finally { await writeTranscript(directory, modelTranscript(`${execution.prompt}\n\n${json(input)}`, read, started), context.redact); }
+  finally { await writeTranscript(directory, modelTranscript(`${execution.prompt}\n\n${json(unnamedInput(execution.template, input))}`, read, started), context.redact); }
 }
 
 async function converse(execution, input, schema, context, read) {
   const profile = context.models[modelName(execution)];
   const adapter = adapters[profile.backend];
   const files = await modelFiles(input, context.inputTypes, context.artifacts);
-  const messages = [{ role: 'user', content: files.length ? adapter.content(json(input), files) : json(input) }];
+  // The user message holds the files first, then the inputs that the prompt does not name, as JSON.
+  const text = json(unnamedInput(execution.template, input));
+  const messages = [{ role: 'user', content: files.length ? adapter.content(text, files) : text }];
   const tools = execution.kind === 'agent' ? (execution.tools ?? []).map(name => context.toolDefinition(name)) : [];
   const turns = execution.kind === 'agent' ? context.maxAgentTurns : 1;
   for (let turn = 0; turn < turns; turn++) {

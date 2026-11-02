@@ -12,6 +12,8 @@ export function assertSchema(schema: any, value: any, label: string, { producer,
     producer: string;
     owner: string;
 }): void;
+/** A JSON Schema that a Method file names must compile, or the Method stops before any step runs. */
+export function checkSchema(schema: any, path: any): void;
 export function validateConfig(config: any): any;
 export { validateMethod } from "./document.js";
 export { own, fail, safeData, shape, dataSchema, outputSchema, resolve, typeAt, effectiveOutputs } from "./semantics.js";

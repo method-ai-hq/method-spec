@@ -59,6 +59,11 @@ export function dataSchema(definition) {
     case 'number': result = { type: 'number' }; break;
     case 'boolean': result = { type: 'boolean' }; break;
     case 'record':
+      // A record with a schema is checked against that JSON Schema; the runner reads the file in place of the path.
+      if (def.schema !== undefined) {
+        if (def.fields) fail('method_code', 'A record has fields or a schema, not both', 'validation', { fix: 'Remove fields, or remove schema.' });
+        result = typeof def.schema === 'object' ? structuredClone(def.schema) : { type: 'object' }; break;
+      }
       if (!def.fields) fail('method_code', 'A record requires fields', 'validation', { fix: 'Add fields to the record.' });
       result = outputSchema(def.fields); break;
     case 'list':
@@ -69,7 +74,9 @@ export function dataSchema(definition) {
   }
   if (def.type !== 'record' && def.type !== 'list' && (def.fields || def.items)) fail('method_code', 'fields/items only apply to record/list', 'validation', { fix: 'Remove fields and items, or change the type to record or list.' });
   if (def.type === 'record' && def.items) fail('method_code', 'A record cannot have items', 'validation', { fix: 'Use fields for a record, or change the type to list.' });
-  if (def.description) result.description = def.description;
+  if (def.type !== 'record' && def.schema !== undefined) fail('method_code', 'schema only applies to a record', 'validation', { fix: 'Remove schema, or change the type to record.' });
+  // A schema file keeps its own descriptions.
+  if (def.description && def.schema === undefined) result.description = def.description;
   return result;
 }
 export function outputSchema(definitions = {}) {
@@ -210,9 +217,16 @@ export function validateSemantics(method, assertData) {
   safeData(method);
   validateModels(method);
 
-  const validateDefs = (defs = {}) => { for (const def of Object.values(defs)) { dataSchema(def); if (own(def, 'default')) assertData(def, def.default); } };
-  validateDefs(method.inputs); validateDefs(method.state);
-  for (const tool of Object.values(method.tools ?? {})) { validateDefs(tool.in); validateDefs(tool.out); }
+  // A schema file names the whole of one step output: not an input, state, a tool value, or a field inside another value.
+  const noSchema = (definition, at) => {
+    const def = shape(definition);
+    if (def.schema !== undefined) fail('method_code', `${at}.schema: only a step output can name a schema file`, 'validation', { fix: 'Move the schema to an output in a step\'s out, or use fields.' });
+    for (const [name, child] of Object.entries(def.fields ?? {})) noSchema(child, `${at}.fields.${name}`);
+    if (def.items) noSchema(def.items, `${at}.items`);
+  };
+  const validateDefs = (defs = {}, at = 'value') => { for (const [name, def] of Object.entries(defs)) { noSchema(def, `${at}.${name}`); dataSchema(def); if (own(def, 'default')) assertData(def, def.default); } };
+  validateDefs(method.inputs, 'inputs'); validateDefs(method.state, 'state');
+  for (const [name, tool] of Object.entries(method.tools ?? {})) { validateDefs(tool.in, `tools.${name}.in`); validateDefs(tool.out, `tools.${name}.out`); }
   if (method.run_label !== undefined) runLabelType(method);
   const definitions = {
     inputs: { type: 'record', fields: method.inputs ?? {} }, state: { type: 'record', fields: method.state ?? {} },
@@ -241,7 +255,13 @@ export function validateSemantics(method, assertData) {
       // Items that run at once share no state, ask nobody, and change nothing outside the run.
       if (step.ask || step.changes?.length || step.effects) fail('method_code', `${id}.concurrency: a step that runs items at once cannot use ask, changes, or effects`, 'validation', { fix: 'Remove concurrency, or move the ask or the change to another step.' });
     }
-    validateDefs(outputs);
+    // An output itself may name a schema file of the Method; the fields inside it may not.
+    for (const [key, definition] of Object.entries(outputs)) {
+      const def = shape(definition);
+      if (def.schema === undefined) { validateDefs({ [key]: def }, `${id}.out`); continue; }
+      if (!(method.files ?? []).includes(def.schema)) fail('method_code', `${id}.out.${key}.schema: ${def.schema} is not in files`, 'validation', { fix: `Add ${def.schema} to files.` });
+      dataSchema(def);
+    }
     for (const [key, def] of Object.entries(outputs)) {
       if (own(definitions, key)) fail('method_code', `Duplicate or reserved output: ${key}`, 'validation', { fix: 'Give the output a name that no other step or root field uses.' });
       definitions[key] = step.each ? { type: 'list', items: def } : def;

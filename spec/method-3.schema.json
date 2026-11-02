@@ -558,6 +558,10 @@
             "format": {
               "type": "string",
               "minLength": 1
+            },
+            "schema": {
+              "type": "string",
+              "minLength": 1
             }
           },
           "required": [
@@ -607,6 +611,10 @@
         "format": {
           "type": "string",
           "minLength": 1
+        },
+        "schema": {
+          "type": "string",
+          "minLength": 1
         }
       },
       "required": [
@@ -652,6 +660,10 @@
           "$ref": "#/$defs/shape"
         },
         "format": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema": {
           "type": "string",
           "minLength": 1
         },

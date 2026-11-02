@@ -9,6 +9,7 @@ import { codexProgress, agentEvent } from './progress.js';
 import { agentNotice } from './event-text.js';
 import { codexTranscript, writeTranscript } from './transcript.js';
 import { modelFiles, fileList } from './model-files.js';
+import { unnamedInput } from './prompt.js';
 
 /**
  * The Codex arguments of one step. A live run bypasses the sandbox, as before. A replay runs in Codex's workspace-write
@@ -110,7 +111,7 @@ export async function executeCodex(execution, input, schema, context) {
   const unread = files.find(file => file.media === 'application/pdf');
   if (unread) fail('method_code', `${unread.at} (${unread.path}) is a PDF, and Codex does not read PDF files.`, 'unreadable_file',
     { fix: 'Run this step on a hosted model or Claude Code, or add a run step before it that turns the PDF into text.' });
-  const prompt = [execution.prompt, 'Step inputs:', JSON.stringify(input), fileList(files),
+  const prompt = [execution.prompt, 'Step inputs:', JSON.stringify(unnamedInput(execution.template, input)), fileList(files),
     'Give a short progress update when you start a new part of the work or finish a group of tool calls. Describe the work; do not quote sources or secrets. Updates do not replace the final output.',
     'Do only this step; Method runs the other steps. Use the Method tools for the operations they declare. Do not change the Method, its scripts, or its input files.',
     `Save any output files under ${context.artifacts}. Return the step output in the requested JSON format.`].filter(Boolean).join('\n\n');

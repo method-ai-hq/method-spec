@@ -8,6 +8,7 @@ import { agentEvent } from './progress.js';
 import { agentNotice } from './event-text.js';
 import { claudeTranscript, writeTranscript } from './transcript.js';
 import { modelFiles, fileList } from './model-files.js';
+import { unnamedInput } from './prompt.js';
 
 // An absolute path in a Claude Code permission rule starts with //.
 const under = (tool, dir) => `${tool}(/${resolve(dir)}/**)`;
@@ -105,7 +106,7 @@ export async function executeClaude(execution, input, schema, context) {
   const clean = value => String(value).replaceAll(bridge.token, '[REDACTED]');
   // Claude Code reads PDFs, images and text files itself; the list says where each one is.
   const files = await modelFiles(input, context.inputTypes, context.artifacts);
-  const prompt = [execution.prompt, 'Step inputs:', JSON.stringify(input), fileList(files),
+  const prompt = [execution.prompt, 'Step inputs:', JSON.stringify(unnamedInput(execution.template, input)), fileList(files),
     'Do only this step; Method runs the other steps. Use the Method tools for the operations they declare. Do not change the Method, its scripts, or its input files.',
     `Save any output files under ${context.artifacts}. Return the step output in the requested JSON format.`].filter(Boolean).join('\n\n');
   const args = claudeArgs({ schema, mcpConfig: join(directory, 'mcp.json'), profile, artifacts: context.artifacts, replay: context.replay, web: context.web !== false });
