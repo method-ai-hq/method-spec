@@ -7,6 +7,7 @@ import { startMethodTools } from './method-tools.js';
 import { agentEvent } from './progress.js';
 import { agentNotice } from './event-text.js';
 import { claudeTranscript, writeTranscript } from './transcript.js';
+import { modelFiles, fileList } from './model-files.js';
 
 // An absolute path in a Claude Code permission rule starts with //.
 const under = (tool, dir) => `${tool}(/${resolve(dir)}/**)`;
@@ -102,9 +103,11 @@ export async function executeClaude(execution, input, schema, context) {
   const directory = await mkdtemp(join(context.artifacts, 'claude', 'attempt-'));
   const bridge = await startMethodTools(execution, context);
   const clean = value => String(value).replaceAll(bridge.token, '[REDACTED]');
-  const prompt = [execution.prompt, 'Step inputs:', JSON.stringify(input),
+  // Claude Code reads PDFs, images and text files itself; the list says where each one is.
+  const files = await modelFiles(input, context.inputTypes, context.artifacts);
+  const prompt = [execution.prompt, 'Step inputs:', JSON.stringify(input), fileList(files),
     'Do only this step; Method runs the other steps. Use the Method tools for the operations they declare. Do not change the Method, its scripts, or its input files.',
-    `Save any output files under ${context.artifacts}. Return the step output in the requested JSON format.`].join('\n\n');
+    `Save any output files under ${context.artifacts}. Return the step output in the requested JSON format.`].filter(Boolean).join('\n\n');
   const args = claudeArgs({ schema, mcpConfig: join(directory, 'mcp.json'), profile, artifacts: context.artifacts, replay: context.replay, web: context.web !== false });
   // Tokens stay in a private file, never process arguments or run events.
   await writeJSON(join(directory, 'mcp.json'), { mcpServers: { method_step: { type: 'http', url: bridge.url, headers: { Authorization: `Bearer ${bridge.token}` } } } });

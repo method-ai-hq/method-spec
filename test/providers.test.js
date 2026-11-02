@@ -163,31 +163,49 @@ test('no default profile is chosen when every step names a configured profile', 
   assert.deepEqual(Object.keys(profiles), ['writer']);
 });
 
-test('a model step sends each PDF or image file in its input, and the run record names it by hash', async t => {
+test('a model step sends each file in its input by its declared type: PDFs and images as themselves, text as text', async t => {
   const make = {
-    purpose: 'Write a PDF and a PNG.',
+    purpose: 'Write a PDF, an image, a text file, and a record that only looks like a file.',
     do: { kind: 'run', runtime: 'node', entrypoint: 'make.mjs' },
-    out: { scan: { type: 'file', description: 'A PDF.' }, pages: { type: 'list', items: 'file', description: 'Images.' } },
+    out: {
+      scan: { type: 'file', description: 'A PDF with a name that does not say so.' },
+      pages: { type: 'list', items: 'file', description: 'Images.' },
+      notes: { type: 'file', description: 'A text file.' },
+      lookalike: { type: 'record', fields: { path: 'text', sha256: 'text' }, description: 'Text fields only.' },
+    },
   };
-  const read = { ...step(), in: { scan: 'scan', pages: 'pages' } };
+  const read = { ...step(), in: { scan: 'scan', pages: 'pages', notes: 'notes', lookalike: 'lookalike' } };
   const doc = { format: 'method/3.1', name: 'Test', goal: 'Read files.', steps: { make, read }, result: 'value' };
   const f = await fixture(t, doc);
   await writeFile(join(f.dir, 'make.mjs'), `import{writeFileSync}from'node:fs';import{createHash}from'node:crypto';import{join}from'node:path';
-for await(const _ of process.stdin);const out=process.env.METHOD_OUTPUT_DIR;const put=(name,text)=>{writeFileSync(join(out,name),text);return{path:name,sha256:createHash('sha256').update(text).digest('hex')}};
-console.log(JSON.stringify({scan:put('bill.pdf','%PDF-1.4 bill'),pages:[put('page.png','png bytes')]}))`);
-  const b64 = text => Buffer.from(text).toString('base64');
+for await(const _ of process.stdin);const out=process.env.METHOD_OUTPUT_DIR;const put=(name,bytes)=>{writeFileSync(join(out,name),bytes);return{path:name,sha256:createHash('sha256').update(bytes).digest('hex')}};
+const png=Buffer.concat([Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]),Buffer.from('rest')]);
+const scan=put('bill.bin',Buffer.from('%PDF-1.4 bill'));
+console.log(JSON.stringify({scan,pages:[put('page.png',png)],notes:put('notes.txt',Buffer.from('Net 30 for this vendor.')),lookalike:{path:'bill.pdf',sha256:scan.sha256}}))`);
+  const b64 = bytes => Buffer.from(bytes).toString('base64');
+  const png = b64(Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('rest')]));
+  const notes = 'notes (notes.txt):\nNet 30 for this vendor.';
   const cases = [
     ['openrouter-chat', router.text({ value: 1 }), content => {
-      assert.deepEqual(content[1], { type: 'file', file: { filename: 'bill.pdf', file_data: `data:application/pdf;base64,${b64('%PDF-1.4 bill')}` } });
-      assert.deepEqual(content[2], { type: 'image_url', image_url: { url: `data:image/png;base64,${b64('png bytes')}` } });
+      assert.deepEqual(content.slice(1), [
+        { type: 'file', file: { filename: 'bill.bin', file_data: `data:application/pdf;base64,${b64('%PDF-1.4 bill')}` } },
+        { type: 'image_url', image_url: { url: `data:image/png;base64,${png}` } },
+        { type: 'text', text: notes },
+      ]);
     }],
     ['anthropic-messages', claude.text({ value: 1 }), content => {
-      assert.deepEqual(content[1], { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64('%PDF-1.4 bill') } });
-      assert.equal(content[2].type, 'image');
+      assert.deepEqual(content.slice(1), [
+        { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64('%PDF-1.4 bill') } },
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: png } },
+        { type: 'text', text: notes },
+      ]);
     }],
     ['openai-responses', { status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: '{"value":1}' }] }] }, content => {
-      assert.deepEqual(content[1], { type: 'input_file', filename: 'bill.pdf', file_data: `data:application/pdf;base64,${b64('%PDF-1.4 bill')}` });
-      assert.equal(content[2].type, 'input_image');
+      assert.deepEqual(content.slice(1), [
+        { type: 'input_file', filename: 'bill.bin', file_data: `data:application/pdf;base64,${b64('%PDF-1.4 bill')}` },
+        { type: 'input_image', image_url: `data:image/png;base64,${png}` },
+        { type: 'input_text', text: notes },
+      ]);
     }],
   ];
   for (const [backend, reply, check] of cases) {
@@ -197,13 +215,28 @@ console.log(JSON.stringify({scan:put('bill.pdf','%PDF-1.4 bill'),pages:[put('pag
     assert.equal(result.status, 'completed', backend);
     const messages = backend === 'openai-responses' ? request.input : request.messages.filter(m => m.role === 'user');
     const content = messages[0].content;
-    assert.equal(JSON.parse(content[0].text).scan.path, 'bill.pdf');
+    assert.equal(JSON.parse(content[0].text).lookalike.path, 'bill.pdf');
     check(content);
     const { readFile } = await import('node:fs/promises');
     const events = await readFile(join(runDir, 'events.jsonl'), 'utf8');
     assert.ok(!events.includes(b64('%PDF-1.4 bill')), backend);
-    assert.ok(events.includes('(bill.pdf, sha256 '), backend);
+    assert.ok(events.includes('(bill.bin, sha256 '), backend);
   }
+});
+
+test('a model step stops on a file that a model cannot read', async t => {
+  const make = { purpose: 'Write a binary file.', do: { kind: 'run', runtime: 'node', entrypoint: 'make.mjs' }, out: { blob: { type: 'file', description: 'Bytes.' } } };
+  const doc = { format: 'method/3.1', name: 'Test', goal: 'Read a file.', steps: { make, read: { ...step(), in: { blob: 'blob' } } }, result: 'value' };
+  const f = await fixture(t, doc);
+  await writeFile(join(f.dir, 'make.mjs'), `import{writeFileSync}from'node:fs';import{createHash}from'node:crypto';import{join}from'node:path';
+for await(const _ of process.stdin);const b=Buffer.from([0x50,0x4b,0x03,0x04,0x00,0xff]);writeFileSync(join(process.env.METHOD_OUTPUT_DIR,'report.docx'),b);
+console.log(JSON.stringify({blob:{path:'report.docx',sha256:createHash('sha256').update(b).digest('hex')}}))`);
+  let sent = false;
+  const result = await f.run(config({ backend: 'openrouter-chat' }), async () => { sent = true; return router.text({ value: 1 }); });
+  assert.equal(result.status, 'failed');
+  assert.equal(result.failure.code, 'unreadable_file');
+  assert.match(result.failure.details, /blob \(report\.docx\) is a file that a model cannot read/);
+  assert.equal(sent, false);
 });
 
 test('a model step with no file input sends its input as one text', async t => {

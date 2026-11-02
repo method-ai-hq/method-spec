@@ -8,6 +8,7 @@ import { fail, safeData, assertSchema } from './validate.js';
 import { codexProgress, agentEvent } from './progress.js';
 import { agentNotice } from './event-text.js';
 import { codexTranscript, writeTranscript } from './transcript.js';
+import { modelFiles, fileList } from './model-files.js';
 
 /**
  * The Codex arguments of one step. A live run bypasses the sandbox, as before. A replay runs in Codex's workspace-write
@@ -16,7 +17,7 @@ import { codexTranscript, writeTranscript } from './transcript.js';
  * no plugins, apps or skill search, and runs in a sandbox rooted at its room, read-only unless it may write or edit,
  * with web search only when it may use the web. web: false (the config's web) turns web search off for a step.
  */
-export function codexArgs({ schemaFile, output, url, profile = {}, artifacts, replay = null, bare = null, web = true }) {
+export function codexArgs({ schemaFile, output, url, profile = {}, artifacts, replay = null, bare = null, web = true, images = [] }) {
   const model = [...(profile.model ? ['--model', profile.model] : []), ...(profile.reasoning_effort ? ['-c', `model_reasoning_effort=${JSON.stringify(profile.reasoning_effort)}`] : [])];
   if (bare) {
     const writes = bare.tools.includes('write') || bare.tools.includes('edit');
@@ -30,7 +31,8 @@ export function codexArgs({ schemaFile, output, url, profile = {}, artifacts, re
       // Codex also lets a workspace-write sandbox write to /tmp and $TMPDIR unless told not to; a replay must not.
       '-c', 'sandbox_workspace_write.exclude_tmpdir_env_var=true', '-c', 'sandbox_workspace_write.exclude_slash_tmp=true']
     : ['--dangerously-bypass-approvals-and-sandbox'];
-  return ['exec', '--ephemeral', ...sandbox, '--skip-git-repo-check',
+  // Images go with the prompt; a flag follows them, so the image list ends there.
+  return ['exec', ...(images.length ? ['--image', ...images] : []), '--ephemeral', ...sandbox, '--skip-git-repo-check',
     '--json', '--output-schema', schemaFile, '--output-last-message', output,
     '-c', `mcp_servers.method_step.url=${JSON.stringify(url)}`,
     '-c', 'mcp_servers.method_step.bearer_token_env_var="METHOD_CODEX_TOOL_TOKEN"',
@@ -104,12 +106,17 @@ export async function executeCodex(execution, input, schema, context) {
   const directory = await mkdtemp(join(context.artifacts, 'codex', 'attempt-'));
   const output = join(directory, 'result.json');
   await writeJSON(join(directory, 'schema.json'), schema);
-  const prompt = [execution.prompt, 'Step inputs:', JSON.stringify(input),
+  const files = await modelFiles(input, context.inputTypes, context.artifacts);
+  const unread = files.find(file => file.media === 'application/pdf');
+  if (unread) fail('method_code', `${unread.at} (${unread.path}) is a PDF, and Codex does not read PDF files.`, 'unreadable_file',
+    { fix: 'Run this step on a hosted model or Claude Code, or add a run step before it that turns the PDF into text.' });
+  const prompt = [execution.prompt, 'Step inputs:', JSON.stringify(input), fileList(files),
     'Give a short progress update when you start a new part of the work or finish a group of tool calls. Describe the work; do not quote sources or secrets. Updates do not replace the final output.',
     'Do only this step; Method runs the other steps. Use the Method tools for the operations they declare. Do not change the Method, its scripts, or its input files.',
-    `Save any output files under ${context.artifacts}. Return the step output in the requested JSON format.`].join('\n\n');
+    `Save any output files under ${context.artifacts}. Return the step output in the requested JSON format.`].filter(Boolean).join('\n\n');
   const bridge = await startMethodTools(execution, context);
-  const args = codexArgs({ schemaFile: join(directory, 'schema.json'), output, url: bridge.url, profile, artifacts: context.artifacts, replay: context.replay, web: context.web !== false });
+  const args = codexArgs({ schemaFile: join(directory, 'schema.json'), output, url: bridge.url, profile, artifacts: context.artifacts, replay: context.replay, web: context.web !== false,
+    images: files.filter(file => file.media.startsWith('image/')).map(file => file.absolute) });
   const clean = value => String(value).replaceAll(bridge.token, '[REDACTED]');
   let value;
   try {

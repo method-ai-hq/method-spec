@@ -5,7 +5,7 @@
  * no plugins, apps or skill search, and runs in a sandbox rooted at its room, read-only unless it may write or edit,
  * with web search only when it may use the web. web: false (the config's web) turns web search off for a step.
  */
-export function codexArgs({ schemaFile, output, url, profile, artifacts, replay, bare, web }: {
+export function codexArgs({ schemaFile, output, url, profile, artifacts, replay, bare, web, images }: {
     schemaFile: any;
     output: any;
     url: any;
@@ -14,6 +14,7 @@ export function codexArgs({ schemaFile, output, url, profile, artifacts, replay,
     replay?: any;
     bare?: any;
     web?: boolean;
+    images?: any[];
 }): any[];
 /**
  * Run one Codex process in its attempt folder; it saves its last message in output. The folder keeps prompt.md,

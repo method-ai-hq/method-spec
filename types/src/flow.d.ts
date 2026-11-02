@@ -1,3 +1,7 @@
+/** The declared type of each value a step receives, by its name in in and each. */
+export function stepInputTypes(method: any, id: any): {
+    [k: string]: any;
+};
 /**
  * Trace untrusted text through a valid Method. Returns its sources, its acting steps, and one finding per acting
  * step that untrusted text can reach without a question to the person.

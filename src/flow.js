@@ -67,6 +67,18 @@ function readsOf(step) {
   return reads;
 }
 
+/** The declared type of each value a step receives, by its name in in and each. */
+export function stepInputTypes(method, id) {
+  const { definitions } = valueTypes(method);
+  const step = method.steps[id];
+  const types = Object.fromEntries(Object.entries(step.in ?? {}).map(([name, ref]) => [name, typeAt(definitions, ref)]));
+  for (const [name, ref] of Object.entries(step.each ?? {})) {
+    const list = shape(typeAt(definitions, ref));
+    types[name] = list.fields ? { type: 'record', fields: list.fields } : list.items;
+  }
+  return types;
+}
+
 /** The declared type of every value a reference can start from, and the step that produces each output. */
 function valueTypes(method) {
   const definitions = {

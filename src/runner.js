@@ -16,6 +16,7 @@ import { validateMethod, validateConfig, assertSchema, outputSchema, dataSchema,
 import { checkResultSchema, object } from './schema.js';
 import { readDocument, hash, snapshotBundle, writeJSON, executeProcess, containedFile, tempFolder } from './io.js';
 import { executeModel } from './model.js';
+import { stepInputTypes } from './flow.js';
 import { executeCodex } from './codex.js';
 import { executeSession, writeBack } from './session.js';
 import { folderHashes } from './clean-room.js';
@@ -339,6 +340,7 @@ async function executeRun(file, config, options) {
       current = id;
       const step = method.steps[id];
       const stepOutputs = effectiveOutputs(step);
+      const inputTypes = stepInputTypes(method, id);
       const limits = { ...config.step_defaults, ...step.limits };
       const rules = activeRules(learned, id);
       const replayKey = options.replay ? stepKey(step, { files: manifest, profiles, tools, helpers: method.files ?? [], rules }) : null;
@@ -516,7 +518,8 @@ async function executeRun(file, config, options) {
               if (phase === 'action' && exec.kind === 'agent' && step.effects) rendered += `\n\nCorrelation token for this action: ${token}. Put it where the changed system keeps a reference (for example a message header, an idempotency key, or a note field), so that an observer can find this change.`;
               exec = { ...exec, prompt: rendered };
             }
-            const phaseContext = { ...context, record: (event, data) => scopedRecord(event, { phase, ...data }) };
+            // The action's input holds the step's in and each values; the model reads the files among them.
+            const phaseContext = { ...context, inputTypes: phase === 'action' ? inputTypes : {}, record: (event, data) => scopedRecord(event, { phase, ...data }) };
             // The run record names the backend and model that ran each model phase.
             if (['call', 'agent'].includes(exec.kind)) { const used = profiles[modelName(exec)]; await phaseContext.record('model.used', { model_name: modelName(exec), backend: used.backend, model: used.model ?? null }); }
             if (exec.kind === 'session') await phaseContext.record('model.used', { model_name: null, backend: exec.agent, model: exec.model ?? null });
