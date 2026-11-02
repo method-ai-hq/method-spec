@@ -3,8 +3,9 @@ import { assertSchema, fail, safeData } from './validate.js';
 import { withRetries, transientStatus, transientClass, attempts } from './retry.js';
 import { retryNotice } from './event-text.js';
 import { modelTranscript, writeTranscript } from './transcript.js';
-import { mkdir, mkdtemp } from 'node:fs/promises';
-import { join } from 'node:path';
+import { containedFile, hash } from './io.js';
+import { mkdir, mkdtemp, readFile } from 'node:fs/promises';
+import { basename, extname, join } from 'node:path';
 
 function abortable(operation, signal) {
   if (signal.aborted) return Promise.reject(signal.reason);
@@ -42,6 +43,8 @@ const object = value => value && typeof value === 'object' && !Array.isArray(val
  * conversation keeps from a response, unchanged, so that later requests replay it as the provider sent it.
  */
 const completeJson = text => { try { return JSON.parse(text) !== null && /^[\[{]/.test(text.trim()); } catch { return false; } };
+const dataUrl = file => `data:${file.media};base64,${file.data}`;
+const pdf = file => file.media === 'application/pdf';
 const adapters = {
   'openai-responses': {
     url: 'https://api.openai.com/v1/responses',
@@ -61,6 +64,8 @@ const adapters = {
       return { calls, refusal: content.some(x => x.type === 'refusal'), text: content.filter(x => x.type === 'output_text').map(x => x.text).join('') };
     },
     history: data => data.output,
+    content: (text, files) => [{ type: 'input_text', text }, ...files.map(file => pdf(file)
+      ? { type: 'input_file', filename: file.name, file_data: dataUrl(file) } : { type: 'input_image', image_url: dataUrl(file) })],
     results: results => results.map(({ call, output }) => ({ type: 'function_call_output', call_id: call.id, output: json(output) })),
     usage: data => data.usage,
   },
@@ -83,6 +88,8 @@ const adapters = {
     },
     // Thinking blocks stay in the history unchanged; current models reject an edited history.
     history: data => [{ role: 'assistant', content: data.content }],
+    content: (text, files) => [{ type: 'text', text }, ...files.map(file =>
+      ({ type: pdf(file) ? 'document' : 'image', source: { type: 'base64', media_type: file.media, data: file.data } }))],
     results: results => [{ role: 'user', content: results.map(({ call, output }) => ({ type: 'tool_result', tool_use_id: call.id, content: json(output) })) }],
     usage(data) {
       const usage = object(data.usage);
@@ -115,6 +122,8 @@ const adapters = {
       return { calls, refusal: false, text };
     },
     history: data => [data.choices[0].message],
+    content: (text, files) => [{ type: 'text', text }, ...files.map(file => pdf(file)
+      ? { type: 'file', file: { filename: file.name, file_data: dataUrl(file) } } : { type: 'image_url', image_url: { url: dataUrl(file) } })],
     results: results => results.map(({ call, output }) => ({ role: 'tool', tool_call_id: call.id, content: json(output) })),
     usage(data) {
       const usage = object(data.usage);
@@ -128,8 +137,8 @@ export const directBackends = Object.keys(adapters);
 const hostedOutputTokens = 16_000;
 
 /** A rate limit or a server error is retried like a classification; any other failure stops the step. */
-function providerRequest(body, profile, adapter, context) {
-  return withRetries(() => providerRequestOnce(body, profile, adapter, context),
+function providerRequest(body, profile, adapter, context, files = []) {
+  return withRetries(() => providerRequestOnce(body, profile, adapter, context, files),
     { transient: error => transientStatus(error.status), signal: context.signal, canRetry: () => context.canRequest?.() ?? true,
       beforeRetry: async (error, attempt) => {
         context.guard();
@@ -137,7 +146,7 @@ function providerRequest(body, profile, adapter, context) {
       } });
 }
 
-async function providerRequestOnce(body, profile, adapter, context) {
+async function providerRequestOnce(body, profile, adapter, context, files) {
   const text = json(body);
   if (Buffer.byteLength(text) > context.maxRequestBytes) fail('limit', 'Model input exceeds request limit', 'input_limit', { limit: 'request size', value: context.maxRequestBytes });
   const hosted = profile.backend === 'method';
@@ -145,7 +154,9 @@ async function providerRequestOnce(body, profile, adapter, context) {
   if (hosted && !context.hosted && !context.transport) fail('setup', 'Hosted models need Method sign-in. Run method login, then run again.', 'needs_input');
   if (!hosted && !key && !context.transport) fail('setup', `Missing environment variable: ${profile.api_key_env}`, 'preflight');
   context.reserveRequest();
-  const request = await context.record('model.request', { backend: profile.backend, model: profile.model, request: body });
+  // The run record names each attached file by its hash; the file itself is already in the run's artifacts.
+  const recorded = files.length ? JSON.parse(files.reduce((shown, file) => shown.replaceAll(file.data, `(${file.name}, sha256 ${file.sha256})`), text)) : body;
+  const request = await context.record('model.request', { backend: profile.backend, model: profile.model, request: recorded });
   try {
     const data = await abortable(() => context.transport
       ? context.transport(body, { signal: context.signal, backend: profile.backend })
@@ -173,6 +184,24 @@ async function providerRequestOnce(body, profile, adapter, context) {
   }
 }
 
+const attachmentTypes = { '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
+
+/** The PDF and image files in a model step's input. The model reads each one beside the JSON input, which names its path. */
+async function attachments(input, artifacts) {
+  const files = [];
+  async function visit(value) {
+    if (Array.isArray(value)) { for (const item of value) await visit(item); return; }
+    if (!value || typeof value !== 'object') return;
+    const media = typeof value.path === 'string' && typeof value.sha256 === 'string' ? attachmentTypes[extname(value.path).toLowerCase()] : undefined;
+    if (!media) { for (const child of Object.values(value)) await visit(child); return; }
+    const bytes = await readFile(await containedFile(artifacts, value.path));
+    if (hash(bytes) !== value.sha256) fail('setup', 'File hash mismatch', 'file_mismatch');
+    files.push({ name: basename(value.path), media, sha256: value.sha256, data: bytes.toString('base64') });
+  }
+  await visit(input);
+  return files;
+}
+
 /** One model step attempt. Its conversation is kept as transcript.jsonl in its own folder under the run's artifacts. */
 export async function executeModel(execution, input, schema, context) {
   await mkdir(join(context.artifacts, 'model'), { recursive: true, mode: 0o700 });
@@ -185,14 +214,15 @@ export async function executeModel(execution, input, schema, context) {
 async function converse(execution, input, schema, context, read) {
   const profile = context.models[modelName(execution)];
   const adapter = adapters[profile.backend];
-  const messages = [{ role: 'user', content: json(input) }];
+  const files = await attachments(input, context.artifacts);
+  const messages = [{ role: 'user', content: files.length ? adapter.content(json(input), files) : json(input) }];
   const tools = execution.kind === 'agent' ? (execution.tools ?? []).map(name => context.toolDefinition(name)) : [];
   const turns = execution.kind === 'agent' ? context.maxAgentTurns : 1;
   for (let turn = 0; turn < turns; turn++) {
     context.guard();
     if (execution.kind === 'agent') context.reserveAgentTurn();
     const settings = profile.backend === 'method' ? { max_output_tokens: hostedOutputTokens, ...profile } : profile;
-    const { data, request, sequence } = await providerRequest(adapter.body({ profile: settings, instructions: execution.prompt, messages, schema, tools }), profile, adapter, context);
+    const { data, request, sequence } = await providerRequest(adapter.body({ profile: settings, instructions: execution.prompt, messages, schema, tools }), profile, adapter, context, files);
     context.guard();
     const reply = adapter.read(data);
     const entry = { request, sequence, at: new Date().toISOString(), reply: { text: reply.text, calls: reply.calls }, results: [], final: !reply.calls?.length };
