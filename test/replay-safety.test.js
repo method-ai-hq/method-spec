@@ -106,6 +106,20 @@ test('a path that the case could not keep makes a live step unverifiable, with t
   assert.deepEqual([result.attempts[0].reason, result.attempts[0].path], ['missing_file', room]);
 });
 
+test('a case that came without its snapshot folder (a saved version keeps none) replays: a live step that names a copy it lacks is unverifiable, not an error', async t => {
+  const { dir, runs, file, created } = await roomCase(t);
+  // A saved version of the Method carries case.json and recording.json, never snapshot/: the copies stay on the computer
+  // that recorded the case. Here the case arrives that way, and the room and run that it read are gone.
+  await rm(join(created.dir, 'snapshot'), { recursive: true });
+  await rm(runs, { recursive: true }); await rm(join(dir, 'rooms'), { recursive: true });
+  const [item] = await listCases(file);
+  // Only work changes: prepare is served from the recording, and work reads the run copy that the case lacks.
+  await writeFile(join(dir, 'work.mjs'), work(' Tell the Board.'));
+  const result = await testCase(file, config(), item);
+  assert.equal(result.status, 'unverifiable', JSON.stringify(result.attempts));
+  assert.equal(result.attempts[0].reason, 'missing_file');
+});
+
 test('paths are rewritten as whole paths, below a path, and inside text, never inside a longer name', () => {
   const map = { '/a/run': '/s/run', '/a/run/artifacts/room': '/s/room' };
   assert.deepEqual(rewritePaths({ x: '/a/run', y: ['/a/run/artifacts/room/work/m.md'], z: 'see /a/run/bundle.', w: '/a/runner', v: '/b/a/run' }, map),
@@ -316,6 +330,25 @@ test('a case attempt whose copied folders are read-only is still removed after t
   await writeFile(join(dir, 'a', 'b', 'f.txt'), 'x');
   await chmod(join(dir, 'a', 'b', 'f.txt'), 0o444); await chmod(join(dir, 'a', 'b'), 0o555); await chmod(join(dir, 'a'), 0o555);
   await _removeTree(dir);
+  await assert.rejects(readdir(dir));
+});
+
+test('a folder is removed while a process that just ended still writes files into it', async () => {
+  const { mkdtemp, mkdir, writeFile, readdir } = await import('node:fs/promises');
+  const { spawn } = await import('node:child_process');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { _removeTree } = await import('../src/cases.js');
+  const dir = await mkdtemp(join(tmpdir(), 'busy-tree-'));
+  const cache = join(dir, 'home', 'Library', 'Caches', 'claude');
+  await mkdir(cache, { recursive: true });
+  for (let i = 0; i < 200; i++) await writeFile(join(cache, `old-${i}`), 'x');
+  // As a Claude Code cache flush does: for a short time, new files keep appearing in the folder.
+  const code = `const{writeFileSync}=require("node:fs");const end=Date.now()+1000;let i=0;console.log("go");while(Date.now()<end){try{writeFileSync(${JSON.stringify(cache)}+"/new-"+(i++),"x")}catch{}}`;
+  const writer = spawn(process.execPath, ['-e', code], { stdio: ['ignore', 'pipe', 'inherit'] });
+  await new Promise(done => writer.stdout.once('data', done));
+  const ended = new Promise(done => writer.on('close', done));
+  try { await _removeTree(dir); } finally { await ended; }
   await assert.rejects(readdir(dir));
 });
 

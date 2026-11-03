@@ -44,7 +44,11 @@ export async function snapshotBundle(root, paths, destination) {
 export async function tempFolder(prefix) {
   return realpath(await mkdtemp(join(process.platform === 'win32' ? tmpdir() : '/tmp', prefix)));
 }
-/** Remove a folder that may hold read-only folders (a run can make its own folders read-only): make it writable first. */
+/**
+ * Remove a folder that may hold read-only folders (a run can make its own folders read-only): make it writable first.
+ * A process that has just ended (an agent's cache flush) can still add files while the folder is removed; each retry
+ * removes those too.
+ */
 export async function removeTree(path) {
   async function writable(dir) {
     let entries;
@@ -52,7 +56,7 @@ export async function removeTree(path) {
     for (const entry of entries) if (entry.isDirectory() && !entry.isSymbolicLink()) await writable(join(dir, entry.name));
   }
   await writable(path);
-  await rm(path, { recursive: true, force: true });
+  await rm(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 export async function writeJSON(file, data) {
   // A unique name per write: items that run at once can write the same file without sharing a temporary file.

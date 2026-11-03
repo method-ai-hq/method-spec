@@ -485,9 +485,12 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
   try {
     for (let n = 0; n < total; n++) {
       const runDir = join(parent, `run-${n + 1}`), scratch = join(parent, `scratch-${n + 1}`);
-      const environment = { ...config.environment }, paths = {}, copies = {};
+      const environment = { ...config.environment }, paths = {}, copies = {}, missing = [...testCaseValue.snapshot_missing ?? []];
       await mkdir(scratch, { recursive: true, mode: 0o700 });
       for (const snapshot of snapshots) {
+        // A saved version carries a case without its snapshot/ folder (the copies stay on the computer that recorded
+        // it): a copy that is not here is a path that the case could not keep, as when it was too large.
+        if (!await exists(join(testCaseValue.dir, snapshot.copy))) { missing.push(snapshot.original); continue; }
         const copy = join(scratch, snapshot.copy);
         await mkdir(dirname(copy), { recursive: true, mode: 0o700 });
         await cp(join(testCaseValue.dir, snapshot.copy), copy, { recursive: true });
@@ -504,7 +507,7 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
       const before = await fileHashes(scratch);
       try {
         result = await runMethod(methodFile, { ...config, environment }, { ...runOptions, runDir, inputs: rewritePaths(recording.inputs, copies), state: rewritePaths(recording.initial_state, copies),
-          replay: { recording, paths, copies, missing: testCaseValue.snapshot_missing ?? [], live, scratch, observations: recording.observations ?? {}, artifacts: await exists(artifacts) ? artifacts : undefined, ...(only ? { only } : {}) } });
+          replay: { recording, paths, copies, missing, live, scratch, observations: recording.observations ?? {}, artifacts: await exists(artifacts) ? artifacts : undefined, ...(only ? { only } : {}) } });
       } catch (error) { attempts.push({ status: 'unverifiable', reason: error.message }); break; }
       // A usage limit is not a result of the Method: the test stops with it.
       if (result.status === 'failed' && result.failure?.code === 'usage_limit') fail('limit', result.failure.headline ?? result.failure.details, 'usage_limit');
