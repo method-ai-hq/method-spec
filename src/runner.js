@@ -26,7 +26,7 @@ import { progressMessage } from './progress.js';
 import { cacheable, iterationKey, readCache, copyOutputFiles } from './cache.js';
 import { effectKey, connectionsFor, testFixtures, runObserverScript, observeEffect, readLedger, appendLedger, currentEffects, effectSummary, statusWithEffects, waitUntil, nextObservation, horizonAt, previousObservations, listFolder, observeFiles, isBuiltin } from './effects.js';
 import { observerConnection } from './semantics.js';
-import { replayedCandidate, unverifiable, stepKey, namedPath, keepRunPaths } from './replay.js';
+import { replayedCandidate, savedCandidate, unverifiable, stepKey, namedPath, keepRunPaths } from './replay.js';
 import { readLearned, activeRules, rulesText, selectionPrompt, selectionSchema } from './learned.js';
 import { prepareObservation } from './observed-effects.js';
 import { failureRecord } from './failure.js';
@@ -569,8 +569,9 @@ async function executeRun(file, config, options) {
           active = `${id}:${iteration}`;
           await scopedRecord('step.started', { ...(eachEntry ? { total: count } : {}), inputs: bindings, state_before: state, external_effects_possible: (step.changes ?? []).some(x => x.startsWith('environment.')) });
           const answer = options.human?.steps?.[active];
-          // A replay serves recorded outputs for unchanged steps; a changed step that acts on the world cannot be replayed.
-          const replayed = options.replay ? replayedCandidate(options.replay, { id, step, iteration, bindings, key: replayKey }) : null;
+          // A replay serves recorded outputs for unchanged steps (from the case's recording, else from a passing run of the
+          // version that it is compared with); a changed step that acts on the world cannot be replayed.
+          const replayed = options.replay ? replayedCandidate(options.replay, { id, step, iteration, bindings, key: replayKey }) ?? await savedCandidate(options.replay, { id, iteration, bindings, key: replayKey }) : null;
           // A live step that names a path that the case could not keep would read a file that is gone or has changed.
           const missing = options.replay && !replayed ? namedPath(bindings, options.replay.missing ?? []) : null;
           if (missing) {

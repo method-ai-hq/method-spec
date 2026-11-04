@@ -77,6 +77,21 @@ export function replayedCandidate(replay, { id, step, iteration, bindings, key }
   if (!saved || !isDeepStrictEqual(saved.inputs, rewritePaths(bindings, replay.paths))) return null;
   return rewritePaths(structuredClone(saved.candidate), replay.copies);
 }
+/** The name of a saved step output: the step's key, its iteration, and its inputs with recorded paths. */
+export const savedStepKey = (key, iteration, inputs) => hash(['method-saved-step/1', key, iteration, inputs]);
+/**
+ * The output that a passing case run of another version saved for this iteration (replay.saved, cases.js), when the
+ * step is the same in both versions (saved.keys: the other version's step keys) and its inputs are the same. A step
+ * that the change touched, a step after it whose inputs changed, and a step forced to run live run again.
+ */
+export async function savedCandidate(replay, { id, iteration, bindings, key }) {
+  const saved = replay.saved;
+  if (!saved?.dir || !saved.keys || replay.live?.includes(id) || saved.keys[id] !== key) return null;
+  try {
+    const entry = JSON.parse(await readFile(join(saved.dir, `${savedStepKey(key, iteration, rewritePaths(bindings, replay.paths))}.json`), 'utf8'));
+    return rewritePaths(entry.candidate, replay.copies);
+  } catch { return null; }
+}
 export function unverifiable(id, iteration, step) {
   const why = step.ask ? 'it asks a person' : step.do?.kind === 'session' ? 'it is a session that can use a shell or the web' : 'it changes an external system';
   fail('setup', `Cannot replay ${id}:${iteration}: the step or its inputs changed, and ${why}. Record the case again from a new run.`, 'unverifiable');

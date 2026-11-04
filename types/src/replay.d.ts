@@ -30,6 +30,17 @@ export function replayedCandidate(replay: any, { id, step, iteration, bindings, 
     bindings: any;
     key: any;
 }): any;
+/**
+ * The output that a passing case run of another version saved for this iteration (replay.saved, cases.js), when the
+ * step is the same in both versions (saved.keys: the other version's step keys) and its inputs are the same. A step
+ * that the change touched, a step after it whose inputs changed, and a step forced to run live run again.
+ */
+export function savedCandidate(replay: any, { id, iteration, bindings, key }: {
+    id: any;
+    iteration: any;
+    bindings: any;
+    key: any;
+}): Promise<any>;
 export function unverifiable(id: any, iteration: any, step: any): void;
 /**
  * Keep a copy of each file or folder in the run folder that a script step's outputs name, as the step left it. A later
@@ -61,4 +72,5 @@ export function stepKeys(method: any, { files, profiles, tools, learned }: {
 }): {
     [k: string]: string;
 };
+export function savedStepKey(key: any, iteration: any, inputs: any): string;
 export function keptFolder(runDir: any): string;

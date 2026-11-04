@@ -12,6 +12,8 @@ import { fail } from './validate.js';
  */
 const defaults = { judge_runs: 3, classify_threshold: 0.9, max_value_bytes: 200_000 };
 export const rubricSettings = config => ({ ...defaults, ...config?.rubric });
+/** How close above the threshold a classifier's pass is narrow. */
+export const NARROW = 0.05;
 const judgeMethod = {
   format: 'method/3.3', name: 'Rubric judge', goal: 'Decide whether a value meets each criterion, with quotes.',
   inputs: { value: { type: 'text' }, criteria: { type: 'text' }, context: { type: 'text', default: '' } },
@@ -130,7 +132,9 @@ export async function judgeRubric({ value, criteria, context, judges = {}, confi
   for (const c of criteria) {
     if (judges[c.id] === 'classify') {
       const probability = await classifyPass(text, c, options);
-      results.push({ id: c.id, text: c.text, judge: 'classify', probability, pass: probability >= settings.classify_threshold,
+      const pass = probability >= settings.classify_threshold;
+      // A pass within NARROW of the threshold is narrow: a test that runs a case once runs it again (cases.js).
+      results.push({ id: c.id, text: c.text, judge: 'classify', probability, pass, ...(pass && probability - settings.classify_threshold < NARROW ? { narrow: true } : {}),
         reason: `Classification probability ${probability.toFixed(2)}; at least ${settings.classify_threshold} needed.` });
       continue;
     }

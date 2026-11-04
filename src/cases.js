@@ -2,12 +2,13 @@ import { createHash } from 'node:crypto';
 import { readFile, readdir, mkdir, mkdtemp, rm, writeFile, stat, cp, realpath } from 'node:fs/promises';
 import { resolve as pathResolve, dirname, basename, join, relative, isAbsolute, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { recordRun, stepKeys, rewritePaths, keptFolder } from './replay.js';
+import { recordRun, stepKeys, rewritePaths, keptFolder, savedStepKey } from './replay.js';
 import { readLearned } from './learned.js';
 import { runMethod } from './runner.js';
 import { copyOutputFiles } from './cache.js';
 import { configuration } from './defaults.js';
 import { fail, own, safeData, validateMethod, effectiveOutputs } from './validate.js';
+import { cacheable } from './cache.js';
 import { executable, executeProcess, hash, writeJSON, containedFile, readDocument, tempFolder, removeTree } from './io.js';
 import { readLedger, effectSummary } from './effects.js';
 import { judgeRubric, chooseJudges, findConflicts, valueText } from './rubric.js';
@@ -501,25 +502,58 @@ async function versionKeys(methodFile, config) {
 }
 
 /**
+ * Keep the model steps of a passing case run, so that a later test of another version runs again only the steps that
+ * its change touched: each iteration of a call or classify step (or an agent step without tools) that ran live, under its
+ * step key, iteration and inputs, with the case's recorded paths in place of the attempt's copies. A step that asks,
+ * acts outside the run, or returns files is not kept, nor a value that names the attempt's own folders. The first
+ * output kept for a key stays.
+ */
+async function saveSteps(dir, method, keys, events, paths, folders, tools) {
+  const replayed = new Set(events.filter(e => e.event === 'step.replayed').map(e => `${e.step}:${e.iteration}`));
+  const open = {};
+  for (const event of events) {
+    const at = `${event.step}:${event.iteration}`, step = method.steps[event.step];
+    if (event.event === 'step.started') open[at] = { inputs: event.inputs };
+    else if (event.event === 'step.candidate' && open[at]) open[at].candidate = event.candidate;
+    else if (event.event !== 'step.accepted' || !open[at]?.candidate || replayed.has(at) || !step || !keys[event.step]) continue;
+    else {
+      const kind = step.do?.kind;
+      if (!(kind === 'call' || kind === 'classify' || (kind === 'agent' && !step.do.tools?.length)) || !cacheable(step, tools)) continue;
+      if (Object.values(effectiveOutputs(step)).some(def => def?.type === 'file')) continue;
+      const inputs = rewritePaths(open[at].inputs, paths), candidate = rewritePaths(open[at].candidate, paths);
+      const text = JSON.stringify({ inputs, candidate });
+      if (folders.some(folder => text.includes(folder))) continue;
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      try { await writeFile(join(dir, `${savedStepKey(keys[event.step], event.iteration, inputs)}.json`), JSON.stringify({ step: event.step, candidate }), { flag: 'wx', mode: 0o600 }); }
+      catch (error) { if (error.code !== 'EEXIST') throw error; }
+    }
+  }
+}
+
+/**
  * Replay one case against a Method file. Each attempt has its own scratch folder: it holds a copy of every snapshot
  * of the case and of each files connection that a step writes, and the recorded paths are rewritten to these copies,
  * so attempts never share a folder and a replay never changes the source run or the real folders. Only the steps the
  * expectations need run. The runs of a case run at the same time when a model step will run live (a step it needs
  * differs from the recording), and the case stops as soon as its result is decided.
+ * sure: one run decides when it passes clearly; a first run that passes narrowly (a classifier close to its threshold)
+ * makes two more runs, which must pass too. A failing run decides at once.
+ * saved: {dir, keys}: a passing run keeps its model steps' outputs in dir; with keys (the step keys of the version that
+ * this one is compared with), a step whose key is the same there serves the output kept for the same inputs, so only the
+ * steps that differ, and those after them, run again.
  * once: one run decides (runs: 1). runs and minPass replace the case's own. live: steps that run live even when they
  * match the recording; target_live says whether they did. judgeCache: false judges again. keepDir: a folder that
  * keeps each attempt's run folder (attempt.run_dir). judges: a list of judge model profiles that must all pass a
- * rubric criterion; a disagreement fails it as unsure. upTo: make at most this many runs now; a case that passed them
- * and needs more is pass with more: the runs it still needs. signal: stops the case (status not_run). priority: its
+ * rubric criterion; a disagreement fails it as unsure. signal: stops the case (status not_run). priority: its
  * place in the queue of runs (lower first).
  * @param {string} methodFile
  * @param {any} config
  * @param {any} testCaseValue
  * @param {any} [runOptions]
  * @param {{once?: boolean, runs?: number | undefined, minPass?: number | undefined, live?: string[] | undefined, judgeCache?: boolean | undefined, keepDir?: string | undefined, judges?: any[] | undefined,
- *   upTo?: number | undefined, signal?: AbortSignal | undefined, priority?: number | undefined}} [check]
+ *   sure?: boolean | undefined, saved?: {dir: string, keys?: Record<string, string> | undefined} | undefined, signal?: AbortSignal | undefined, priority?: number | undefined}} [check]
  */
-export async function testCase(methodFile, config, testCaseValue, runOptions = {}, { once = false, runs, minPass, live = [], judgeCache = true, keepDir, judges, upTo, signal = runOptions.signal, priority = 0 } = {}) {
+export async function testCase(methodFile, config, testCaseValue, runOptions = {}, { once = false, runs, minPass, live = [], judgeCache = true, keepDir, judges, sure = false, saved, signal = runOptions.signal, priority = 0 } = {}) {
   const started = performance.now();
   const recording = await readJSON(join(testCaseValue.dir, 'recording.json'));
   const artifacts = join(testCaseValue.dir, 'artifacts');
@@ -535,7 +569,7 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
   if (needed > total) fail('setup', 'min_pass must be between 1 and runs', 'case_invalid');
   // A model step runs live when a step that the case needs differs from the recording, or is named live: then it needs
   // three runs, and they run at the same time.
-  const keys = fixedRuns === null ? await versionKeys(methodFile, config) : {};
+  const keys = fixedRuns === null || saved ? await versionKeys(methodFile, config) : {};
   const used = only ?? Object.keys(method.steps);
   const modelLive = fixedRuns === null && used.some(id => modelKinds.has(method.steps[id]?.do?.kind)) && (live.length > 0 || used.some(id => recording.keys?.[id] !== keys[id]));
   const stop = new AbortController();
@@ -545,6 +579,8 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
   // A real path: Claude Code compares its permission rules with resolved paths.
   const parent = keepDir ? await realpath(await mkdtemp(join(pathResolve(keepDir), 'c-'))) : await tempFolder('mc-');
 
+  // Whether one run passes is decided by evaluate (the case's expectations) alone; the code below only schedules runs
+  // and counts their statuses, so a change of what a check compares does not touch it.
   /** One run of the case in its own folders, or null when the case stopped first. busy: a model service failed it. */
   const attempt = async name => {
     if (stop.signal.aborted) return null;
@@ -571,7 +607,7 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
     const before = await fileHashes(scratch);
     try {
       result = await runMethod(methodFile, { ...config, environment }, { ...runOptions, signal: stop.signal, runDir, inputs: rewritePaths(recording.inputs, copies), state: rewritePaths(recording.initial_state, copies),
-        replay: { recording, paths, copies, missing, live, scratch, observations: recording.observations ?? {}, artifacts: await exists(artifacts) ? artifacts : undefined, ...(only ? { only } : {}) } });
+        replay: { recording, paths, copies, missing, live, scratch, observations: recording.observations ?? {}, artifacts: await exists(artifacts) ? artifacts : undefined, ...(only ? { only } : {}), ...(saved ? { saved } : {}) } });
     } catch (error) { return stop.signal.aborted ? null : { status: 'unverifiable', reason: error.message }; }
     if (stop.signal.aborted) return null;
     // A usage limit is not a result of the Method: the test stops with it.
@@ -591,6 +627,7 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
     if (testCaseValue.source?.run_dir) outcome.source_artifacts = join(pathResolve(testCaseValue.source.run_dir), 'artifacts');
     const evaluation = await evaluate(testCaseValue.expect, outcome, { caseDir: testCaseValue.dir, config, options: { runOptions, classification: runOptions.classification, cacheDir: runOptions.cacheDir, judgeCache, ...(judges?.length ? { judges } : {}) } });
     const liveModel = liveSteps.filter(id => modelKinds.has(method.steps[id]?.do?.kind));
+    if (saved && evaluation.status === 'pass') await saveSteps(saved.dir, method, keys, events, paths, [runDir, scratch, parent], { ...config.tools, ...method.tools });
     return { ...evaluation, output: await attemptOutput(outcome, before), run_status: result.status, ...(result.failure ? { failure: { code: result.failure.code, headline: result.failure.headline } } : {}), live_steps: liveSteps, live_model_steps: liveModel,
       ...(live.length ? { target_live: live.every(id => liveSteps.includes(id)) } : {}), standins, judge_calls: evaluation.results.reduce((sum, r) => sum + (r.judge_calls ?? 0), 0),
       duration_ms: Math.round(performance.now() - runStarted), tokens: eventTokens(events), ...kept, ...(result.status === 'failed' && result.failure?.owner === 'outside_service' ? { busy: true } : {}) };
@@ -608,9 +645,11 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
 
   const pending = new Map();
   let launched = 0, sized = fixedRuns !== null;
-  const launch = count => { while (launched < Math.min(count, upTo ?? count)) { const n = launched++; pending.set(n, run(n).then(done => ({ n, done }))); } };
+  const launch = count => { while (launched < count) { const n = launched++; pending.set(n, run(n).then(done => ({ n, done }))); } };
+  // A narrow pass: a classifier passed a criterion close to its threshold.
+  const narrow = done => done.results?.some(r => r.criteria?.some(c => c.narrow));
   try {
-    launch(fixedRuns ?? (modelLive ? 3 : 1));
+    launch(fixedRuns ?? (modelLive && !sure ? 3 : 1));
     while (pending.size) {
       const { n, done } = await Promise.race(pending.values());
       pending.delete(n);
@@ -618,7 +657,7 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
       attempts.push(done);
       if (done.status === 'unverifiable') break;
       // A model step that runs live can answer differently each time, so it must pass three runs.
-      if (!sized) { sized = true; total = done.live_model_steps.length ? 3 : 1; needed = fixedMin ?? total; }
+      if (!sized) { sized = true; total = done.live_model_steps.length && !(sure && done.status === 'pass' && !narrow(done)) ? 3 : 1; needed = fixedMin ?? total; }
       const passes = attempts.filter(a => a.status === 'pass').length, failures = attempts.length - passes;
       // Stop as soon as the result is decided.
       if (passes >= needed || failures > total - needed) break;
@@ -633,12 +672,10 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
   }
   if (!attempts.length && signal?.aborted) return { id: testCaseValue.id, status: 'not_run', passes: 0, runs: 0, min_pass: needed, attempts, duration_ms: Math.round(performance.now() - started) };
   const passes = attempts.filter(a => a.status === 'pass').length, failures = attempts.length - passes;
-  const decided = passes >= needed || failures > total - needed;
-  const status = attempts.some(a => a.status === 'unverifiable') ? 'unverifiable' : passes >= needed ? 'pass' : failures > total - needed ? 'fail' : signal?.aborted ? 'not_run' : 'pass';
+  const status = attempts.some(a => a.status === 'unverifiable') ? 'unverifiable' : passes >= needed ? 'pass' : failures > total - needed ? 'fail' : 'not_run';
   // Passing some runs and failing another means the Method does not follow the rule reliably.
   const unreliable = status === 'fail' && passes > 0;
   return { id: testCaseValue.id, status, passes, runs: attempts.length, min_pass: needed, ...(unreliable ? { unreliable: `passed ${passes} of ${attempts.length} runs: the Method does not follow this rule every time` } : {}),
-    ...(status === 'pass' && !decided ? { more: needed - passes } : {}),
     ...(live.length ? { target_live: attempts.length > 0 && attempts.every(a => a.target_live === true) } : {}), attempts, duration_ms: Math.round(performance.now() - started) };
 }
 /** Remove a folder that may hold read-only copies; tests call it. */
@@ -692,17 +729,19 @@ async function changedFirst(methodFile, config, cases) {
  * gate: decide only whether a change can be applied. The old version runs a case only when it is new or fails on the
  * new version (a case that passes is pass, whatever it did before), and the test stops at the first case that blocks
  * the change: a regression, a new case that is not fixed, or a case that cannot run safely any more. The cases that
- * did not run then are not_run.
- * firstRun: each case that is not new makes only its first run now; a case that passed it and needs more runs has
- * more: the runs it still needs. moreRuns: each case runs this many more times on the new version, and every run must
- * pass (the rest of a first-run test).
+ * did not run then are not_run. A gate runs each case that is not new once on the new version when that run passes
+ * clearly, and 3 times (every run must pass) when it passes narrowly (sure in testCase); a new case passes 3 runs in 3
+ * when a model step runs live, and fails on the old version.
+ * saved: a folder for the model steps' outputs of passing case runs. Every passing run keeps them there; with a
+ * baseline, each version serves the outputs of the steps that are the same in the other version, so a case runs again
+ * only the steps that the change touched and the steps after them.
  * @param {string} methodFile
  * @param {any} config
  * @param {{casesDir?: string | undefined, ids?: string[] | undefined, baseline?: string | undefined, newIds?: string[] | undefined, runOptions?: any, once?: boolean | undefined,
  *   runs?: number | undefined, minPass?: number | undefined, live?: string[] | undefined, judgeCache?: boolean | undefined, keepDir?: string | undefined, judges?: any[] | undefined,
- *   gate?: boolean | undefined, firstRun?: boolean | undefined, moreRuns?: number | undefined}} [options]
+ *   gate?: boolean | undefined, saved?: string | undefined}} [options]
  */
-export async function testSuite(methodFile, config, { casesDir = defaultCasesDir(methodFile), ids, baseline, newIds = [], runOptions = {}, once = false, runs, minPass, live, judgeCache, keepDir, judges, gate = false, firstRun = false, moreRuns } = {}) {
+export async function testSuite(methodFile, config, { casesDir = defaultCasesDir(methodFile), ids, baseline, newIds = [], runOptions = {}, once = false, runs, minPass, live, judgeCache, keepDir, judges, gate = false, saved } = {}) {
   const check = { once, runs, minPass, live, judgeCache, keepDir, judges };
   const suiteStarted = performance.now();
   const today = new Date().toISOString().slice(0, 10);
@@ -710,12 +749,15 @@ export async function testSuite(methodFile, config, { casesDir = defaultCasesDir
   for (const id of [...(ids ?? []), ...newIds]) if (!all.some(c => c.id === id)) fail('setup', `No case ${id} for ${basename(methodFile)}`, 'case_invalid');
   const selected = await changedFirst(methodFile, config, all.filter(c => c.status === 'active' && (!ids || ids.includes(c.id) || newIds.includes(c.id))));
   const stop = new AbortController();
+  // Each version serves the kept outputs of the steps that are the same in the other one.
+  const [newKeys, oldKeys] = saved && baseline ? await Promise.all([versionKeys(methodFile, config), versionKeys(baseline, config)]) : [];
+  const keep = keys => saved ? { saved: { dir: pathResolve(saved), ...(keys ? { keys } : {}) } } : {};
   const blocks = row => newIds.includes(row.id) ? row.verdict !== 'fixed' : row.verdict === 'regression' || (row.verdict === 'unverifiable' && row.baseline?.status !== 'unverifiable');
   const rows = selected.map(async (item, order) => {
     const isNew = newIds.includes(item.id);
-    const own = { ...check, signal: stop.signal, priority: order, ...(moreRuns && !isNew ? { runs: moreRuns, minPass: moreRuns } : {}), ...(firstRun && !isNew ? { upTo: 1 } : {}) };
+    const own = { ...check, signal: stop.signal, priority: order, ...(gate && !isNew ? { sure: true } : {}), ...keep(oldKeys) };
     // The old version's runs decide a case, so they go first.
-    const old = { ...check, signal: stop.signal, priority: -1 };
+    const old = { ...check, signal: stop.signal, priority: -1, ...keep(newKeys) };
     let candidate, before = null;
     if (baseline && (!gate || isNew)) [candidate, before] = await Promise.all([testCase(methodFile, config, item, runOptions, own), testCase(baseline, config, item, runOptions, old)]);
     else {
@@ -728,7 +770,7 @@ export async function testSuite(methodFile, config, { casesDir = defaultCasesDir
     else if (candidate.status === 'unverifiable') verdict = 'unverifiable';
     else if (candidate.status === 'pass') verdict = before && before.status !== 'pass' ? 'fixed' : 'pass';
     else verdict = before?.status === 'pass' ? 'regression' : 'fail';
-    const row = { id: item.id, verdict, note: item.note, ...(item.retention_until < today ? { expired: item.retention_until } : {}), ...(candidate.more ? { more: candidate.more } : {}), duration_ms: candidate.duration_ms, candidate, ...(before ? { baseline: before } : {}) };
+    const row = { id: item.id, verdict, note: item.note, ...(item.retention_until < today ? { expired: item.retention_until } : {}), duration_ms: candidate.duration_ms, candidate, ...(before ? { baseline: before } : {}) };
     if (gate && blocks(row)) stop.abort();
     return row;
   });

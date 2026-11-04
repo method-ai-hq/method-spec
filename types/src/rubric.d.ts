@@ -19,12 +19,13 @@ export function judgeRubric({ value, criteria, context, judges, config, options 
 }): Promise<{
     status: string;
     criteria: ({
+        reason: string;
+        narrow?: boolean;
         id: string;
         text: string;
         judge: string;
         probability: any;
         pass: boolean;
-        reason: string;
         votes?: undefined;
         unsure?: undefined;
     } | {
@@ -35,7 +36,6 @@ export function judgeRubric({ value, criteria, context, judges, config, options 
         pass: boolean;
         unsure: boolean;
         reason: string;
-        probability?: undefined;
     } | {
         id: string;
         text: string;
@@ -43,7 +43,6 @@ export function judgeRubric({ value, criteria, context, judges, config, options 
         votes: any[];
         pass: boolean;
         reason: any;
-        probability?: undefined;
         unsure?: undefined;
     })[];
     judge_calls: number;
@@ -80,4 +79,6 @@ export function chooseJudges({ criteria, examples, config, options }: {
     options?: {};
 }): Promise<{}>;
 export function rubricSettings(config: any): any;
+/** How close above the threshold a classifier's pass is narrow. */
+export const NARROW: 0.05;
 export function valueText(value: any): string;

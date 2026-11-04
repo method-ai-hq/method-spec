@@ -17,12 +17,13 @@ export function evaluate(expect: any, outcome: any, { caseDir, config, options }
     status: string;
     results: {
         criteria?: ({
+            reason: string;
+            narrow?: boolean;
             id: string;
             text: string;
             judge: string;
             probability: any;
             pass: boolean;
-            reason: string;
             votes?: undefined;
             unsure?: undefined;
         } | {
@@ -33,7 +34,6 @@ export function evaluate(expect: any, outcome: any, { caseDir, config, options }
             pass: boolean;
             unsure: boolean;
             reason: string;
-            probability?: undefined;
         } | {
             id: string;
             text: string;
@@ -41,7 +41,6 @@ export function evaluate(expect: any, outcome: any, { caseDir, config, options }
             votes: any[];
             pass: boolean;
             reason: any;
-            probability?: undefined;
             unsure?: undefined;
         })[];
         judge_calls?: number;
@@ -103,12 +102,13 @@ export function createCase({ methodFile, runDir, id, note, author, expect, rubri
 }): Promise<{
     on_passing_run?: {
         criteria?: ({
+            reason: string;
+            narrow?: boolean;
             id: string;
             text: string;
             judge: string;
             probability: any;
             pass: boolean;
-            reason: string;
             votes?: undefined;
             unsure?: undefined;
         } | {
@@ -119,7 +119,6 @@ export function createCase({ methodFile, runDir, id, note, author, expect, rubri
             pass: boolean;
             unsure: boolean;
             reason: string;
-            probability?: undefined;
         } | {
             id: string;
             text: string;
@@ -127,7 +126,6 @@ export function createCase({ methodFile, runDir, id, note, author, expect, rubri
             votes: any[];
             pass: boolean;
             reason: any;
-            probability?: undefined;
             unsure?: undefined;
         })[];
         judge_calls?: number;
@@ -138,12 +136,13 @@ export function createCase({ methodFile, runDir, id, note, author, expect, rubri
     }[];
     on_failing_run?: {
         criteria?: ({
+            reason: string;
+            narrow?: boolean;
             id: string;
             text: string;
             judge: string;
             probability: any;
             pass: boolean;
-            reason: string;
             votes?: undefined;
             unsure?: undefined;
         } | {
@@ -154,7 +153,6 @@ export function createCase({ methodFile, runDir, id, note, author, expect, rubri
             pass: boolean;
             unsure: boolean;
             reason: string;
-            probability?: undefined;
         } | {
             id: string;
             text: string;
@@ -162,7 +160,6 @@ export function createCase({ methodFile, runDir, id, note, author, expect, rubri
             votes: any[];
             pass: boolean;
             reason: any;
-            probability?: undefined;
             unsure?: undefined;
         })[];
         judge_calls?: number;
@@ -231,20 +228,24 @@ export function runSlots(start?: number, most?: number): {
  * so attempts never share a folder and a replay never changes the source run or the real folders. Only the steps the
  * expectations need run. The runs of a case run at the same time when a model step will run live (a step it needs
  * differs from the recording), and the case stops as soon as its result is decided.
+ * sure: one run decides when it passes clearly; a first run that passes narrowly (a classifier close to its threshold)
+ * makes two more runs, which must pass too. A failing run decides at once.
+ * saved: {dir, keys}: a passing run keeps its model steps' outputs in dir; with keys (the step keys of the version that
+ * this one is compared with), a step whose key is the same there serves the output kept for the same inputs, so only the
+ * steps that differ, and those after them, run again.
  * once: one run decides (runs: 1). runs and minPass replace the case's own. live: steps that run live even when they
  * match the recording; target_live says whether they did. judgeCache: false judges again. keepDir: a folder that
  * keeps each attempt's run folder (attempt.run_dir). judges: a list of judge model profiles that must all pass a
- * rubric criterion; a disagreement fails it as unsure. upTo: make at most this many runs now; a case that passed them
- * and needs more is pass with more: the runs it still needs. signal: stops the case (status not_run). priority: its
+ * rubric criterion; a disagreement fails it as unsure. signal: stops the case (status not_run). priority: its
  * place in the queue of runs (lower first).
  * @param {string} methodFile
  * @param {any} config
  * @param {any} testCaseValue
  * @param {any} [runOptions]
  * @param {{once?: boolean, runs?: number | undefined, minPass?: number | undefined, live?: string[] | undefined, judgeCache?: boolean | undefined, keepDir?: string | undefined, judges?: any[] | undefined,
- *   upTo?: number | undefined, signal?: AbortSignal | undefined, priority?: number | undefined}} [check]
+ *   sure?: boolean | undefined, saved?: {dir: string, keys?: Record<string, string> | undefined} | undefined, signal?: AbortSignal | undefined, priority?: number | undefined}} [check]
  */
-export function testCase(methodFile: string, config: any, testCaseValue: any, runOptions?: any, { once, runs, minPass, live, judgeCache, keepDir, judges, upTo, signal, priority }?: {
+export function testCase(methodFile: string, config: any, testCaseValue: any, runOptions?: any, { once, runs, minPass, live, judgeCache, keepDir, judges, sure, saved, signal, priority }?: {
     once?: boolean;
     runs?: number | undefined;
     minPass?: number | undefined;
@@ -252,14 +253,17 @@ export function testCase(methodFile: string, config: any, testCaseValue: any, ru
     judgeCache?: boolean | undefined;
     keepDir?: string | undefined;
     judges?: any[] | undefined;
-    upTo?: number | undefined;
+    sure?: boolean | undefined;
+    saved?: {
+        dir: string;
+        keys?: Record<string, string> | undefined;
+    } | undefined;
     signal?: AbortSignal | undefined;
     priority?: number | undefined;
 }): Promise<{
     attempts: any[];
     duration_ms: number;
     target_live?: boolean;
-    more?: number;
     unreliable?: string;
     id: any;
     status: string;
@@ -277,17 +281,19 @@ export function _removeTree(path: any): Promise<void>;
  * gate: decide only whether a change can be applied. The old version runs a case only when it is new or fails on the
  * new version (a case that passes is pass, whatever it did before), and the test stops at the first case that blocks
  * the change: a regression, a new case that is not fixed, or a case that cannot run safely any more. The cases that
- * did not run then are not_run.
- * firstRun: each case that is not new makes only its first run now; a case that passed it and needs more runs has
- * more: the runs it still needs. moreRuns: each case runs this many more times on the new version, and every run must
- * pass (the rest of a first-run test).
+ * did not run then are not_run. A gate runs each case that is not new once on the new version when that run passes
+ * clearly, and 3 times (every run must pass) when it passes narrowly (sure in testCase); a new case passes 3 runs in 3
+ * when a model step runs live, and fails on the old version.
+ * saved: a folder for the model steps' outputs of passing case runs. Every passing run keeps them there; with a
+ * baseline, each version serves the outputs of the steps that are the same in the other version, so a case runs again
+ * only the steps that the change touched and the steps after them.
  * @param {string} methodFile
  * @param {any} config
  * @param {{casesDir?: string | undefined, ids?: string[] | undefined, baseline?: string | undefined, newIds?: string[] | undefined, runOptions?: any, once?: boolean | undefined,
  *   runs?: number | undefined, minPass?: number | undefined, live?: string[] | undefined, judgeCache?: boolean | undefined, keepDir?: string | undefined, judges?: any[] | undefined,
- *   gate?: boolean | undefined, firstRun?: boolean | undefined, moreRuns?: number | undefined}} [options]
+ *   gate?: boolean | undefined, saved?: string | undefined}} [options]
  */
-export function testSuite(methodFile: string, config: any, { casesDir, ids, baseline, newIds, runOptions, once, runs, minPass, live, judgeCache, keepDir, judges, gate, firstRun, moreRuns }?: {
+export function testSuite(methodFile: string, config: any, { casesDir, ids, baseline, newIds, runOptions, once, runs, minPass, live, judgeCache, keepDir, judges, gate, saved }?: {
     casesDir?: string | undefined;
     ids?: string[] | undefined;
     baseline?: string | undefined;
@@ -301,8 +307,7 @@ export function testSuite(methodFile: string, config: any, { casesDir, ids, base
     keepDir?: string | undefined;
     judges?: any[] | undefined;
     gate?: boolean | undefined;
-    firstRun?: boolean | undefined;
-    moreRuns?: number | undefined;
+    saved?: string | undefined;
 }): Promise<{
     counts: {
         [k: string]: number;

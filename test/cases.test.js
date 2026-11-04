@@ -337,12 +337,12 @@ test('the runs of every case share about 12 places', async t => {
 
 test('a gate runs the old version only for a case that fails, and stops at the first break', async t => {
   const { file, before, cfg } = await modelCase(t, ['a', 'b', 'c', 'd']);
-  // Every case passes on the new version: the old version never runs.
+  // Every case passes its one run on the new version: the old version never runs.
   const old = slowModel(), fresh = slowModel();
   const passing = await testSuite(file, cfg, { baseline: before, gate: true, runOptions: { transport: async body => (JSON.stringify(body).includes('please') ? fresh : old).transport() } });
   assert.equal(passing.passed, true);
-  assert.equal(old.calls(), 0); assert.equal(fresh.calls(), 12);
-  assert.ok(passing.cases.every(c => c.verdict === 'pass' && !c.baseline));
+  assert.equal(old.calls(), 0); assert.equal(fresh.calls(), 4);
+  assert.ok(passing.cases.every(c => c.verdict === 'pass' && !c.baseline && c.candidate.runs === 1));
   // The new version breaks every case. The first confirmed break stops the test; cases that had not ended did not run.
   let k = 0;
   const broken = await testSuite(file, cfg, { baseline: before, gate: true, runOptions: { transport: async body => {
@@ -357,15 +357,58 @@ test('a gate runs the old version only for a case that fails, and stops at the f
   assert.ok(full.cases.every(c => c.baseline?.status === 'pass'));
 });
 
-test('a first-run test makes one run of each case now, and the rest runs later', async t => {
-  const { file, before, cfg } = await modelCase(t, ['a', 'b']);
-  const model = slowModel();
-  const first = await testSuite(file, cfg, { baseline: before, gate: true, firstRun: true, runOptions: { transport: model.transport } });
-  assert.equal(first.passed, true); assert.equal(model.calls(), 2);
-  assert.deepEqual(first.cases.map(c => [c.verdict, c.more, c.candidate.runs]), [['pass', 2, 1], ['pass', 2, 1]]);
-  const rest = await testSuite(file, cfg, { baseline: before, gate: true, ids: ['a', 'b'], moreRuns: 2, runOptions: { transport: model.transport } });
-  assert.equal(rest.passed, true); assert.equal(model.calls(), 6);
-  assert.deepEqual(rest.cases.map(c => c.candidate.runs), [2, 2]);
+test('a gate runs an earlier case once when it passes clearly, and 3 times when it passes narrowly', async t => {
+  const { dir, file, before, cfg } = await modelCase(t, ['a', 'b']);
+  // a is judged by a classifier: 0.99 passes clearly, 0.92 passes narrowly (the threshold is 0.9).
+  const made = JSON.parse(await readFile(join(dir, 'cases', 'a', 'case.json'), 'utf8'));
+  await writeFile(join(dir, 'cases', 'a', 'case.json'), JSON.stringify({ ...made, expect: [{ kind: 'rubric', ref: 'outputs.line', criteria: [{ id: 'c1', text: 'It greets.' }], judges: { c1: 'classify' } }] }));
+  const classifier = probability => ({ resolve: async () => ({ model: 'stub' }), evaluate: async () => ({ probabilities: { pass: probability } }) });
+  const model = slowModel(), transport = async body => JSON.stringify(body).includes('please') ? model.transport() : answer('hi');
+  const clear = await testSuite(file, cfg, { baseline: before, gate: true, runOptions: { transport, classification: classifier(0.99) } });
+  assert.equal(clear.passed, true, JSON.stringify(clear.counts));
+  assert.deepEqual(clear.cases.map(c => [c.id, c.verdict, c.candidate.runs]), [['a', 'pass', 1], ['b', 'pass', 1]]);
+  const narrow = await testSuite(file, cfg, { baseline: before, gate: true, ids: ['a'], runOptions: { transport, classification: classifier(0.92) } });
+  assert.deepEqual(narrow.cases.map(c => [c.verdict, c.candidate.runs]), [['pass', 3]]);
+  // A failed first run decides: the case fails, and the old version shows whether the change broke it.
+  const failing = await testSuite(file, cfg, { baseline: before, gate: true, ids: ['b'], runOptions: { transport: async body => answer(JSON.stringify(body).includes('please') ? 'hi' : 'hello') } });
+  assert.deepEqual(failing.cases.map(c => [c.verdict, c.candidate.runs]), [['regression', 1]]);
+});
+
+test('a gate runs again only the steps that the change touched; the others give the outputs that a passing run kept', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'method-runs-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  // read (model) -> write (model). A change of write keeps read's output; a change of read runs both again.
+  const doc = (read, write) => ({ format: 'method/3.3', name: 'Two', goal: 'Read, then write.', steps: {
+    read: { name: 'Read', do: { kind: 'call', model: 'model', prompt: read }, out: { facts: { type: 'text' } } },
+    write: { name: 'Write', in: { facts: 'facts' }, do: { kind: 'call', model: 'model', prompt: write }, out: { line: { type: 'text' } } } }, result: 'line' });
+  const file = join(dir, 'm.method'), before = join(dir, 'm-before.method'), saved = join(dir, 'saved');
+  const cfg = { ...config({}), models: { model: { backend: 'openai-responses', model: 'test-model', api_key_env: 'METHOD_TEST_UNUSED_KEY', max_output_tokens: 100 } } };
+  const reply = body => { const text = JSON.stringify(body); return text.includes('Read v') ? { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ facts: text.includes('Read v2') ? 'g' : 'f' }) }] }], usage: { input_tokens: 1, output_tokens: 1 } } : answer('hello'); };
+  await writeFile(file, JSON.stringify(doc('Read v0.', 'Write v0.')));
+  await runMethod(file, cfg, { runDir: join(dir, 'run'), transport: async body => reply(body) });
+  await createCase({ methodFile: file, passingRun: join(dir, 'run'), id: 'a', note: 'Keep it.', expect: [{ kind: 'equals', ref: 'outputs.line', value: 'hello' }], config: cfg });
+  // Both steps changed since the case was recorded; this version passes its test, which keeps its outputs.
+  await writeFile(file, JSON.stringify(doc('Read v1.', 'Write v1.')));
+  await writeFile(before, JSON.stringify(doc('Read v1.', 'Write v1.')));
+  const calls = [];
+  const transport = async body => { const text = JSON.stringify(body); calls.push(text.includes('Read v') ? 'read' : 'write'); return reply(body); };
+  await testSuite(file, cfg, { saved, runOptions: { transport } });
+  assert.deepEqual(calls.sort(), ['read', 'read', 'read', 'write', 'write', 'write']);
+  // The change touches write only: read is the same in both versions, so its kept output serves every run.
+  calls.length = 0;
+  await writeFile(file, JSON.stringify(doc('Read v1.', 'Write v2.')));
+  const gate = await testSuite(file, cfg, { baseline: before, gate: true, saved, runOptions: { transport } });
+  assert.equal(gate.passed, true);
+  assert.deepEqual(calls, ['write']);
+  // A change of read gives write other facts: both run again.
+  calls.length = 0;
+  await writeFile(file, JSON.stringify(doc('Read v2.', 'Write v1.')));
+  await testSuite(file, cfg, { baseline: before, gate: true, saved, runOptions: { transport } });
+  assert.deepEqual(calls.sort(), ['read', 'write']);
+  // Without a version to compare with, nothing kept is served.
+  calls.length = 0;
+  await testSuite(file, cfg, { saved, runOptions: { transport } });
+  assert.equal(calls.length, 6);
 });
 
 test('a run that the model service failed runs again, with fewer places', async t => {
