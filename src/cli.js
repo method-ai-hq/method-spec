@@ -41,7 +41,7 @@ try {
     'run-dir': { type: 'string' },
     pending: { type: 'string', multiple: true }, case: { type: 'string', multiple: true }, baseline: { type: 'string' }, new: { type: 'string', multiple: true }, cases: { type: 'string' },
     run: { type: 'string' }, id: { type: 'string' }, note: { type: 'string' }, expect: { type: 'string' }, observations: { type: 'string' }, redact: { type: 'string' },
-    runs: { type: 'string' }, 'min-pass': { type: 'string' }, rubric: { type: 'string', multiple: true }, ref: { type: 'string' }, context: { type: 'string', multiple: true }, 'passing-run': { type: 'string' }, supersedes: { type: 'string', multiple: true }, author: { type: 'string' }, reason: { type: 'string' }, by: { type: 'string' },
+    runs: { type: 'string' }, 'min-pass': { type: 'string' }, rubric: { type: 'string', multiple: true }, 'every-input': { type: 'string', multiple: true }, ref: { type: 'string' }, context: { type: 'string', multiple: true }, 'passing-run': { type: 'string' }, supersedes: { type: 'string', multiple: true }, author: { type: 'string' }, reason: { type: 'string' }, by: { type: 'string' },
   } });
   const [command, file, ...extra] = positionals;
   if (extra.length && !['observe', 'case'].includes(command)) throw new Error('Unexpected positional arguments');
@@ -78,7 +78,7 @@ try {
     if (!target) throw new Error('Use case new|retire|list METHOD');
     if (action === 'new') {
       const integer = (value, name) => { if (value === undefined) return undefined; const n = Number(value); if (!Number.isSafeInteger(n)) throw new Error(`${name} must be an integer`); return n; };
-      const created = await createCase({ methodFile: target, runDir: values.run, passingRun: values['passing-run'], rubric: values.rubric ?? [], ref: values.ref, context: values.context ?? [], id: values.id, note: values.note, author: values.author, expect: (await json(values.expect)) ?? [],
+      const created = await createCase({ methodFile: target, runDir: values.run, passingRun: values['passing-run'], rubric: values.rubric ?? [], everyInput: values['every-input'] ?? [], ref: values.ref, context: values.context ?? [], id: values.id, note: values.note, author: values.author, expect: (await json(values.expect)) ?? [],
         observations: await json(values.observations), redact: await json(values.redact), runs: integer(values.runs, '--runs'), minPass: integer(values['min-pass'], '--min-pass'),
         supersedes: values.supersedes ?? [], casesDir: values.cases, config: await localConfig() });
       console.log(JSON.stringify(created, null, 2));

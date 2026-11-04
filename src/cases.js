@@ -56,12 +56,78 @@ function validateExpectations(expect) {
     else if (item.kind === 'equals') { if (typeof item.ref !== 'string' || !own(item, 'value')) fail('setup', 'An equals expectation needs ref and value', 'case_invalid'); }
     else if (item.kind === 'effect') { if (typeof item.effect !== 'string' || !Array.isArray(item.verdict)) fail('setup', 'An effect expectation needs effect and a verdict list', 'case_invalid'); }
     else if (item.kind === 'predicate') { if (typeof item.runtime !== 'string' || typeof item.entrypoint !== 'string') fail('setup', 'A predicate expectation needs runtime and entrypoint', 'case_invalid'); }
+    else if (item.kind === 'parts') validateParts(item);
     else if (item.kind === 'rubric') {
       if (typeof item.ref !== 'string') fail('setup', 'A rubric expectation needs ref, the output to judge, such as outputs.report', 'case_invalid');
       if (!Array.isArray(item.criteria) || !item.criteria.length || item.criteria.some(c => typeof c?.text !== 'string' || !c.text.trim() || typeof c.id !== 'string')) fail('setup', 'A rubric lists criteria as plain sentences', 'case_invalid');
       if (item.context !== undefined && (!Array.isArray(item.context) || item.context.some(ref => typeof ref !== 'string'))) fail('setup', 'Rubric context lists references, such as outputs.material or inputs.notes', 'case_invalid');
     } else fail('setup', `Unknown expectation kind: ${item.kind}`, 'case_invalid');
+    if (item.scope !== undefined && (item.scope !== 'every_input' || !['rubric', 'predicate'].includes(item.kind))) fail('setup', 'scope "every_input" marks a rubric or predicate rule that holds on every input', 'case_invalid');
   }
+}
+
+/** The longest text that a parts check compares: a label or a short value. Longer text is judged by a rubric. */
+export const PART_CHARS = 200;
+function validateParts(item) {
+  if (typeof item.ref !== 'string') fail('setup', 'A parts expectation needs ref, the list or record of parts, such as outputs.review.answers', 'case_invalid');
+  if (item.key !== undefined && typeof item.key !== 'string') fail('setup', 'The key of a parts expectation names the field that identifies a part, such as question', 'case_invalid');
+  const groups = ['corrected', 'kept'].filter(name => item[name] !== undefined);
+  for (const name of groups) if (!item[name] || typeof item[name] !== 'object' || Array.isArray(item[name])) fail('setup', `${name} maps each part to its value, such as {"6": {"answer": "no"}}`, 'case_invalid');
+  if (!groups.some(name => Object.keys(item[name]).length)) fail('setup', 'A parts expectation names at least one corrected or kept part', 'case_invalid');
+  const long = [];
+  const walk = (value, at) => {
+    if (typeof value === 'string') { if (value.length > PART_CHARS) long.push(at); }
+    else if (value && typeof value === 'object') for (const [key, inner] of Object.entries(value)) walk(inner, `${at}.${key}`);
+  };
+  for (const name of groups) walk(item[name], name);
+  if (long.length) fail('setup', `A parts check compares labels and short values (${PART_CHARS} characters at most), not copied text: ${long.slice(0, 3).join(', ')}. Leave quotes and long text out, or judge them with a rubric.`, 'case_invalid');
+}
+
+/** A label or short value as a person reads it: case, spaces, typographic quotes and end punctuation do not count. */
+const label = value => typeof value === 'string' ? value.normalize('NFKC').toLowerCase().replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, ' ').trim().replace(/^["'`]+|["'`.,;:!]+$/g, '').trim() : value;
+const sameValue = (actual, expected) => {
+  if (typeof expected === 'string' || typeof actual === 'string') {
+    if (typeof expected === 'number' || typeof actual === 'number') return Number(actual) === Number(expected) && String(actual).trim() !== '';
+    return label(actual) === label(expected);
+  }
+  if (expected && typeof expected === 'object' && actual && typeof actual === 'object' && !Array.isArray(expected)) return Object.entries(expected).every(([key, inner]) => sameValue(actual[key], inner));
+  return isDeepStrictEqual(actual, expected);
+};
+/** The parts of a value by their IDs: a list of records by the key field, or a record by its own keys. */
+function partsOf(value, key) {
+  if (typeof value === 'string') { try { value = JSON.parse(value); } catch { return null; } }
+  if (Array.isArray(value)) {
+    if (!key) return null;
+    return new Map(value.filter(entry => entry && typeof entry === 'object' && own(entry, key)).map(entry => [String(entry[key]), entry]));
+  }
+  if (value && typeof value === 'object') return new Map(Object.entries(value));
+  return null;
+}
+/**
+ * A parts check: each corrected part has the value that the correction gives, and each kept part (a part that the
+ * person read and left) keeps the value that they accepted. A value is compared as a label: case, spaces, typographic
+ * quotes and end punctuation do not count, and fields that the check does not name (a quote, a reason) are not compared.
+ */
+function checkParts(item, value) {
+  const parts = partsOf(value, item.key);
+  if (!parts) return { status: 'fail', reason: `${item.ref} is not a list of parts${item.key ? ` with the field ${item.key}` : ''} or a record of parts` };
+  const wrong = [];
+  const show = v => JSON.stringify(v);
+  for (const [group, expected] of [['corrected', item.corrected ?? {}], ['kept', item.kept ?? {}]]) {
+    for (const [id, want] of Object.entries(expected)) {
+      const part = parts.get(id);
+      if (part === undefined) { wrong.push(`part ${id} is missing`); continue; }
+      const fields = want && typeof want === 'object' && !Array.isArray(want) ? Object.entries(want) : [[null, want]];
+      for (const [field, target] of fields) {
+        const actual = field === null ? part : part?.[field];
+        if (sameValue(actual, target)) continue;
+        const name = field === null ? `part ${id}` : `part ${id} ${field}`;
+        wrong.push(group === 'corrected' ? `${name} is ${show(actual)}; the correction says ${show(target)}` : `${name} was accepted as ${show(target)} and is now ${show(actual)}`);
+      }
+    }
+  }
+  const count = Object.keys(item.corrected ?? {}).length + Object.keys(item.kept ?? {}).length;
+  return wrong.length ? { status: 'fail', reason: wrong.join('; ') } : { status: 'pass', reason: `all ${count} parts are right` };
 }
 /** Turn plain sentences into rubric criteria with stable IDs. */
 export const rubricCriteria = sentences => sentences.map((text, i) => typeof text === 'string' ? { id: `c${i + 1}`, text } : text);
@@ -131,10 +197,11 @@ export async function evaluate(expect, outcome, { caseDir, config, options = {} 
   for (const item of expect) {
     let status, reason, detail;
     if (item.kind === 'status') { status = item.in.includes(outcome.status) ? 'pass' : 'fail'; reason = `run status ${outcome.status}`; }
-    else if (item.kind === 'equals' || item.kind === 'rubric') {
+    else if (item.kind === 'equals' || item.kind === 'rubric' || item.kind === 'parts') {
       const found = await refValue(outcome, item.ref);
       if (found.missing || found.value === null) { status = outcome.status === 'failed' ? 'fail' : 'unverifiable'; reason = `${item.ref} is missing${outcome.failure ? ` (the run ${outcome.status}: ${outcome.failure.headline})` : ''}`; }
       else if (item.kind === 'equals') { status = isDeepStrictEqual(found.value, item.value) ? 'pass' : 'fail'; reason = `${item.ref} = ${JSON.stringify(found.value)}`; }
+      else if (item.kind === 'parts') ({ status, reason } = checkParts(item, await judgedValue(found.value, outcome)));
       else {
         // Context values (sources, the person's words) are read by the judge but not judged.
         const context = item.context?.length ? Object.fromEntries(await Promise.all(item.context.map(async ref => { const c = await refValue(outcome, ref); return [ref, c.missing ? null : await judgedValue(c.value, outcome)]; }))) : undefined;
@@ -158,7 +225,7 @@ export async function evaluate(expect, outcome, { caseDir, config, options = {} 
         status = value.pass === true ? 'pass' : 'fail'; reason = String(value.reason ?? '');
       } catch (error) { status = 'fail'; reason = `predicate failed: ${error.message}`; }
     }
-    results.push({ ...(item.text ? { text: item.text } : {}), kind: item.kind, status, reason, ...(detail ? { criteria: detail.criteria, judge_calls: detail.judge_calls } : {}) });
+    results.push({ ...(item.text ? { text: item.text } : {}), kind: item.kind, ...(item.scope ? { scope: item.scope } : {}), status, reason, ...(detail ? { criteria: detail.criteria, judge_calls: detail.judge_calls } : {}) });
   }
   const status = results.some(r => r.status === 'fail') ? 'fail' : results.some(r => r.status === 'unverifiable') ? 'unverifiable' : 'pass';
   return { status, results };
@@ -285,7 +352,8 @@ function standingInstructions(recorded) {
 }
 /** The rules of a case as plain sentences, for the conflict judge. */
 const caseRules = expect => expect.flatMap((item, i) => item.kind === 'rubric' ? item.criteria.map(c => ({ id: c.id, text: c.text }))
-  : item.kind === 'equals' ? [{ id: `e${i + 1}`, text: `${item.ref} equals ${JSON.stringify(item.value)}` }] : []);
+  : item.kind === 'equals' ? [{ id: `e${i + 1}`, text: `${item.ref} equals ${JSON.stringify(item.value)}` }]
+  : item.kind === 'parts' ? [{ id: `p${i + 1}`, text: `In ${item.ref}, ${Object.entries({ ...item.kept, ...item.corrected }).map(([id, v]) => `part ${id} is ${JSON.stringify(v)}`).join(', ')}` }] : []);
 
 /** The files connections that some step writes. A replay gives each one a scratch copy of the real folder. */
 const writtenConnections = method => new Set(Object.values(method.steps).flatMap(step => (step.changes ?? []).filter(x => x.startsWith('environment.')).map(x => x.slice(12)))
@@ -337,20 +405,22 @@ async function snapshotRun(recorded, dir) {
  * the case must pass on it. A case from a passing run alone pins behaviour that is already right. A rubric's judge
  * is calibrated on the runs it has. A case that can pass only by breaking an instruction of the Method's model steps is
  * refused, unless the person's answer accepts the conflict.
- * @param {{methodFile: string, runDir?: string | undefined, id: string, note: string, author?: string | null | undefined, expect?: any[] | undefined, rubric?: string[] | undefined,
+ * @param {{methodFile: string, runDir?: string | undefined, id: string, note: string, author?: string | null | undefined, expect?: any[] | undefined, rubric?: string[] | undefined, everyInput?: string[] | undefined,
  *   ref?: string | undefined, context?: string[] | undefined, passingRun?: string | undefined, observations?: Record<string, any[]> | undefined, redact?: Record<string, string> | undefined,
  *   runs?: number | undefined, minPass?: number | undefined, retentionDays?: number | undefined, supersedes?: string[] | undefined, casesDir?: string | undefined,
  *   acceptConflict?: string | undefined, config?: any, options?: any}} input
  */
-export async function createCase({ methodFile, runDir, id, note, author, expect = [], rubric = [], ref, context = [], passingRun, observations = {}, redact, runs, minPass, retentionDays = 365, supersedes = [], casesDir = defaultCasesDir(methodFile), acceptConflict, config = {}, options = {} }) {
+export async function createCase({ methodFile, runDir, id, note, author, expect = [], rubric = [], everyInput = [], ref, context = [], passingRun, observations = {}, redact, runs, minPass, retentionDays = 365, supersedes = [], casesDir = defaultCasesDir(methodFile), acceptConflict, config = {}, options = {} }) {
   if (!caseId.test(id ?? '')) fail('setup', 'Case IDs use lowercase letters, digits and hyphens', 'case_invalid');
   if (typeof note !== 'string' || !note.trim()) fail('setup', 'A case records the correction note: --note "the person\'s words"', 'case_invalid');
   if (!runDir && !passingRun) fail('setup', 'Give the run that went wrong (--run), the run that was right (--passing-run), or both', 'case_invalid');
   const method = await readDocument(methodFile);
-  if (rubric.length) {
+  if (rubric.length || everyInput.length) {
     ref ??= typeof method.result === 'string' ? `outputs.${method.result.split('.')[0]}` : undefined;
     if (!ref) fail('setup', 'Name the output to judge with --ref outputs.NAME; the Method result has several values', 'case_invalid');
-    expect = [...expect, { kind: 'rubric', ref, criteria: rubricCriteria(rubric), ...(context.length ? { context } : {}) }];
+    if (rubric.length) expect = [...expect, { kind: 'rubric', ref, criteria: rubricCriteria(rubric), ...(context.length ? { context } : {}) }];
+    // A rule that holds on every input: the learner's gate also judges it on the inputs of the earlier cases.
+    if (everyInput.length) expect = [...expect, { kind: 'rubric', scope: 'every_input', ref, criteria: everyInput.map((text, i) => ({ id: `r${i + 1}`, text })), ...(context.length ? { context } : {}) }];
   }
   validateExpectations(expect);
   // Without runs, a test decides: one run when only scripts run, three when a model step runs live.
@@ -450,7 +520,7 @@ function neededSteps(method, expect, live = []) {
   for (const [id, step] of Object.entries(method.steps)) for (const name of Object.keys(effectiveOutputs(step))) producers[name] = id;
   const roots = [...live];
   for (const item of expect) {
-    if (!['equals', 'rubric'].includes(item.kind)) return null;
+    if (!['equals', 'rubric', 'parts'].includes(item.kind)) return null;
     for (const ref of [item.ref, ...(item.context ?? [])]) {
       if (ref.startsWith('inputs.')) continue;
       if (!ref.startsWith('outputs.')) return null;

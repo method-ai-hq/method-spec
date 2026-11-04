@@ -44,9 +44,10 @@ export function evaluate(expect: any, outcome: any, { caseDir, config, options }
             unsure?: undefined;
         })[];
         judge_calls?: number;
-        kind: any;
         status: string;
         reason: string;
+        scope?: any;
+        kind: any;
         text?: any;
     }[];
 }>;
@@ -73,12 +74,12 @@ export function outcomeOfRun(runDir: string, { paths, copies }?: {
  * the case must pass on it. A case from a passing run alone pins behaviour that is already right. A rubric's judge
  * is calibrated on the runs it has. A case that can pass only by breaking an instruction of the Method's model steps is
  * refused, unless the person's answer accepts the conflict.
- * @param {{methodFile: string, runDir?: string | undefined, id: string, note: string, author?: string | null | undefined, expect?: any[] | undefined, rubric?: string[] | undefined,
+ * @param {{methodFile: string, runDir?: string | undefined, id: string, note: string, author?: string | null | undefined, expect?: any[] | undefined, rubric?: string[] | undefined, everyInput?: string[] | undefined,
  *   ref?: string | undefined, context?: string[] | undefined, passingRun?: string | undefined, observations?: Record<string, any[]> | undefined, redact?: Record<string, string> | undefined,
  *   runs?: number | undefined, minPass?: number | undefined, retentionDays?: number | undefined, supersedes?: string[] | undefined, casesDir?: string | undefined,
  *   acceptConflict?: string | undefined, config?: any, options?: any}} input
  */
-export function createCase({ methodFile, runDir, id, note, author, expect, rubric, ref, context, passingRun, observations, redact, runs, minPass, retentionDays, supersedes, casesDir, acceptConflict, config, options }: {
+export function createCase({ methodFile, runDir, id, note, author, expect, rubric, everyInput, ref, context, passingRun, observations, redact, runs, minPass, retentionDays, supersedes, casesDir, acceptConflict, config, options }: {
     methodFile: string;
     runDir?: string | undefined;
     id: string;
@@ -86,6 +87,7 @@ export function createCase({ methodFile, runDir, id, note, author, expect, rubri
     author?: string | null | undefined;
     expect?: any[] | undefined;
     rubric?: string[] | undefined;
+    everyInput?: string[] | undefined;
     ref?: string | undefined;
     context?: string[] | undefined;
     passingRun?: string | undefined;
@@ -129,9 +131,10 @@ export function createCase({ methodFile, runDir, id, note, author, expect, rubri
             unsure?: undefined;
         })[];
         judge_calls?: number;
-        kind: any;
         status: string;
         reason: string;
+        scope?: any;
+        kind: any;
         text?: any;
     }[];
     on_failing_run?: {
@@ -163,9 +166,10 @@ export function createCase({ methodFile, runDir, id, note, author, expect, rubri
             unsure?: undefined;
         })[];
         judge_calls?: number;
-        kind: any;
         status: string;
         reason: string;
+        scope?: any;
+        kind: any;
         text?: any;
     }[];
     warnings?: string[];
@@ -325,5 +329,7 @@ export function testSuite(methodFile: string, config: any, { casesDir, ids, base
     method: string;
 }>;
 export function defaultCasesDir(methodFile: any): string;
+/** The longest text that a parts check compares: a label or a short value. Longer text is judged by a rubric. */
+export const PART_CHARS: 200;
 export function rubricCriteria(sentences: any): any;
 export function isAgentRecord(name: any): boolean;

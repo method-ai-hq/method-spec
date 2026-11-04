@@ -514,3 +514,36 @@ test('a check script reads the files the run wrote and the arguments of its tool
   const checked = await evaluate([{ kind: 'predicate', runtime: 'node', entrypoint: 'check.mjs' }], outcome, { caseDir: dir, config: cfg });
   assert.equal(checked.status, 'fail'); assert.match(checked.results[0].reason, /read no redline here/);
 });
+
+test('a parts check tests what a correction says: corrected parts by label, kept parts must not get worse, quotes are not compared', async () => {
+  const { evaluate } = await import('../src/cases.js');
+  const answers = rows => ({ status: 'completed', failure: null, result: null, effects: [], outputs: { review: { answers: rows } } });
+  const check = [{ kind: 'parts', ref: 'outputs.review.answers', key: 'question', corrected: { 6: { answer: 'no' } }, kept: { 1: { answer: 'yes' }, 2: { answer: 'Not mentioned' } } }];
+  const run = (rows) => evaluate(check, answers(rows), { caseDir: tmpdir(), config: {} });
+  // The quote changed, the labels differ only in case, spaces and typographic quotes: it passes.
+  const right = await run([{ question: 1, answer: 'Yes', quote: 'A new quote.' }, { question: 2, answer: ' not  mentioned.', quote: '' }, { question: 6, answer: '“no”', quote: 'Other words.' }]);
+  assert.equal(right.status, 'pass', JSON.stringify(right.results));
+  assert.equal(right.results[0].reason, 'all 3 parts are right');
+  // The corrected part is still wrong, and a part that the person left got worse.
+  const wrong = await run([{ question: 1, answer: 'no' }, { question: 2, answer: 'not mentioned' }, { question: 6, answer: 'yes' }]);
+  assert.equal(wrong.status, 'fail');
+  assert.equal(wrong.results[0].reason, 'part 6 answer is "yes"; the correction says "no"; part 1 answer was accepted as "yes" and is now "no"');
+  // A missing part fails; a record of parts by its own keys works, and a value can be the part itself.
+  assert.equal((await run([{ question: 6, answer: 'no' }])).results[0].reason, 'part 1 is missing; part 2 is missing');
+  const record = await evaluate([{ kind: 'parts', ref: 'outputs.labels', corrected: { q6: 'no' }, kept: { q7: 3 } }], { status: 'completed', outputs: { labels: { q6: 'No', q7: '3' } }, effects: [] }, { caseDir: tmpdir(), config: {} });
+  assert.equal(record.status, 'pass', JSON.stringify(record.results));
+});
+
+test('a parts check compares labels and short values, not copied text; every_input marks a rule for every input', async t => {
+  const { cfg, current, dir, pin } = await setup(t);
+  const quote = 'x'.repeat(201);
+  await assert.rejects(pin('copied', [{ kind: 'parts', ref: 'outputs.report', corrected: { a: { quote } } }]), /compares labels and short values \(200 characters at most\), not copied text: corrected\.a\.quote/);
+  await assert.rejects(pin('empty-parts', [{ kind: 'parts', ref: 'outputs.report', corrected: {} }]), /at least one corrected or kept part/);
+  await assert.rejects(pin('scoped-equals', [{ kind: 'equals', ref: 'outputs.total', value: 10, scope: 'every_input' }]), /every_input/);
+  // --every-input sentences make a rubric scoped to every input, with criteria r1, r2; its result says its scope.
+  const transport = async () => ({ status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ verdicts: [{ id: 'r1', pass: false, quote: '', reason: 'It does not say so.' }] }) }] }], usage: { input_tokens: 1, output_tokens: 1 } });
+  const created = await createCase({ methodFile: current, runDir: join(dir, 'run'), id: 'rule', note: 'Say that delivery is not yet confirmed.', config: withJudge(cfg),
+    everyInput: ['When a summary is sent, the report says that delivery is not yet confirmed.'], options: { runOptions: { transport }, cacheDir: join(dir, 'cache') } });
+  assert.deepEqual(created.expect.map(e => [e.kind, e.scope, e.ref, e.criteria[0].id]), [['rubric', 'every_input', 'outputs.report', 'r1']]);
+  assert.equal(created.on_failing_run[0].scope, 'every_input');
+});

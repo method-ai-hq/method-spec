@@ -428,9 +428,10 @@ Expectations (`--expect` is a JSON list):
 - `{"kind": "status", "in": ["failed"]}` checks the run status.
 - `{"kind": "effect", "effect": "send/0/delivered", "verdict": ["contradicted"]}` checks an effect verdict.
 - `{"kind": "predicate", "runtime": "node", "entrypoint": "check.mjs"}` runs a script on `{status, failure, result, inputs, outputs, effects, tools, tool_calls, effect_inputs, files}` that returns `{"pass": true|false, "reason": "..."}`. The script is copied into the case. `tool_calls` lists each call of a Method tool as `{tool, step, iteration, arguments, standin}`, stand-ins of a replay included (`standin: true`); `effect_inputs` lists the recorded inputs of declared effects; `files` maps each file the run wrote (a path under `artifacts/`, or a path in a `files` connection) to an absolute path that the script can read.
+- `{"kind": "parts", "ref": "outputs.review.answers", "key": "question", "corrected": {"6": {"answer": "no"}}, "kept": {"1": {"answer": "yes"}}}` checks what a correction says about the parts of a result, not an exact copy of it. `ref` names a list of records (each part found by its `key` field) or a record (each part found by its own key). Each `corrected` part must have the value that the correction gives; each `kept` part (one that the person read and left) must keep the value that they accepted, so a later change cannot make it worse. A value maps fields to values (only the fields named are compared; a quote or a reason that the check does not name can change) or is the part itself. Values are compared as labels: letter case, spaces, typographic quotes and end punctuation do not count, and a number equals the same number in text. A value is a label or a short value of 200 characters at most; longer text is judged by a rubric.
 - `{"kind": "rubric", "ref": "outputs.report", "criteria": [{"id": "c1", "text": "..."}]}` judges text, a record (as JSON), or a text file output against plain sentences. `--rubric SENTENCE` (repeatable) makes one; `--ref` defaults to the Method's result. `"context": ["outputs.material", "inputs.claim"]` (`--context REF`, repeatable) gives the judge other values to check against, such as the sources or the person's words; the judge reads them but does not judge them, and quotes come only from the judged value.
 
-The `ref` of an `equals` or `rubric` expectation, and each `context` ref, names what the person saw:
+The `ref` of an `equals`, `parts` or `rubric` expectation, and each `context` ref, names what the person saw:
 
 - `outputs.NAME` (or a field below it): a step output. `inputs.NAME`: a run input.
 - `result`: the whole run result.
@@ -438,6 +439,8 @@ The `ref` of an `equals` or `rubric` expectation, and each `context` ref, names 
 - `effect:NAME`: for a Method tool, the list of the arguments of each of its calls, stand-ins included; for a declared effect, by key (`send/0/delivered`) or by name (`delivered`), its recorded inputs.
 
 A case whose refs are all `outputs.NAME` or `inputs.NAME` runs only the steps that produce them; another ref runs the whole Method.
+
+A rubric or predicate expectation can carry `"scope": "every_input"`: its rule holds for every input, not only for the input of this case (for example, "When the NDA allows sharing only after the discloser's written approval, the answer to question 6 is no."). `--every-input SENTENCE` (repeatable) makes a rubric of such rules, with criteria `r1`, `r2`, .... On its own case it is checked like any expectation. Method's learner also judges it on the inputs of the earlier cases, to test that a change follows the rule on inputs that it was not taught on.
 
 Each expectation can carry `text`, a plain-language statement for people. A case is refused if its non-rubric expectations pass on an empty result: such a case cannot detect the error.
 
