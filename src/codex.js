@@ -16,14 +16,17 @@ import { unnamedInput } from './prompt.js';
  * sandbox rooted at its scratch folder, with the run's artifacts as the only other writable folder and no network.
  * A bare session ({room, tools}) has no output form and no Method tools: it ignores the user's config and rules, has
  * no plugins, apps or skill search, and runs in a sandbox rooted at its room, read-only unless it may write or edit,
- * with web search only when it may use the web. web: false (the config's web) turns web search off for a step.
+ * with web search only when it may use the web. A bare session that may write and use the shell runs its commands as a
+ * Claude Code session does, outside Codex's sandbox: in the sandbox, the method CLI that it runs (method run, method
+ * test) could not start its local server, reach its model or write its cache. web: false (the config's web) turns web search off for a step.
  */
 export function codexArgs({ schemaFile, output, url, profile = {}, artifacts, replay = null, bare = null, web = true, images = [] }) {
   const model = [...(profile.model ? ['--model', profile.model] : []), ...(profile.reasoning_effort ? ['-c', `model_reasoning_effort=${JSON.stringify(profile.reasoning_effort)}`] : [])];
   if (bare) {
     const writes = bare.tools.includes('write') || bare.tools.includes('edit');
+    const sandbox = writes && bare.tools.includes('shell') ? ['--dangerously-bypass-approvals-and-sandbox'] : ['--sandbox', writes ? 'workspace-write' : 'read-only'];
     return ['exec', '--ephemeral', '--ignore-user-config', '--ignore-rules', '--skip-git-repo-check',
-      '--sandbox', writes ? 'workspace-write' : 'read-only', '-C', bare.room, '--json', '--output-last-message', output,
+      ...sandbox, '-C', bare.room, '--json', '--output-last-message', output,
       ...['plugins', 'remote_plugin', 'apps', 'plugin_sharing', 'skill_search', 'skill_mcp_dependency_install'].flatMap(feature => ['--disable', feature]),
       '-c', `web_search=${bare.tools.includes('web') ? '"live"' : '"disabled"'}`, ...model, '-'];
   }

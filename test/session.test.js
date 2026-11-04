@@ -37,7 +37,7 @@ test('a bare Claude Code session has no output form, Method tools or MCP servers
   assert.ok(!none.includes('--allowedTools'));
 });
 
-test('a bare Codex session ignores the user config and rules, has no plugins, apps or skill search, and gets web search and writing only when named', () => {
+test('a bare Codex session ignores the user config and rules, has no plugins, apps or skill search, and gets web search and writing only when named, and the shell outside the sandbox when it may write', () => {
   const read = codexArgs({ output: '/d/last.txt', bare: { room: '/room', tools: ['shell', 'read'] } });
   for (const flag of ['--output-schema', '--dangerously-bypass-approvals-and-sandbox']) assert.ok(!read.includes(flag), flag);
   assert.ok(!read.join(' ').includes('mcp_servers'));
@@ -49,8 +49,12 @@ test('a bare Codex session ignores the user config and rules, has no plugins, ap
   assert.deepEqual(disabled, ['plugins', 'remote_plugin', 'apps', 'plugin_sharing', 'skill_search', 'skill_mcp_dependency_install']);
   assert.ok(read.includes('web_search="disabled"'));
   assert.equal(read.at(-1), '-');
-  const write = codexArgs({ output: '/d/last.txt', profile: { model: 'gpt-test' }, bare: { room: '/room', tools: ['shell', 'write', 'web'] } });
+  const write = codexArgs({ output: '/d/last.txt', profile: { model: 'gpt-test' }, bare: { room: '/room', tools: ['write', 'web'] } });
   assert.equal(write[write.indexOf('--sandbox') + 1], 'workspace-write');
+  // With the shell it may run the method CLI (method run, method test), as a Claude Code session does: no sandbox.
+  const shell = codexArgs({ output: '/d/last.txt', bare: { room: '/room', tools: ['read', 'write', 'edit', 'search', 'shell'] } });
+  assert.ok(shell.includes('--dangerously-bypass-approvals-and-sandbox'));
+  assert.ok(!shell.includes('--sandbox'));
   assert.ok(write.includes('web_search="live"'));
   assert.equal(write[write.indexOf('--model') + 1], 'gpt-test');
 });
