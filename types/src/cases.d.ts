@@ -52,6 +52,11 @@ export function evaluate(expect: any, outcome: any, { caseDir, config, options }
     }[];
 }>;
 /**
+ * The tokens that a run's model work reported in its events: Codex and Claude Code steps and sessions (input, cached
+ * input and output) and hosted model calls. 0 when nothing reported usage.
+ */
+export function eventTokens(events: any): number;
+/**
  * What a finished run produced, as a case sees it: its status, result, inputs and outputs, effects, the files it wrote
  * (files: path -> kept copy), the calls of its Method tools (tool_calls, with each stand-in of a replay) and the
  * inputs of its declared effects (effect_inputs). A replay passes paths (copy -> original), so the outcome names the

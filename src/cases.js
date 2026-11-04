@@ -187,6 +187,21 @@ async function writtenFiles(outcome) {
 }
 
 const outputsFrom = checkpoint => Object.fromEntries(Object.entries(checkpoint?.root ?? {}).filter(([key]) => !reservedRoots.has(key)));
+/**
+ * The tokens that a run's model work reported in its events: Codex and Claude Code steps and sessions (input, cached
+ * input and output) and hosted model calls. 0 when nothing reported usage.
+ */
+export function eventTokens(events) {
+  let total = 0;
+  const add = usage => {
+    for (const u of Array.isArray(usage) ? usage : usage ? [usage] : []) {
+      if (!u || typeof u !== 'object') continue;
+      total += ['input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens', 'prompt_tokens', 'completion_tokens'].reduce((sum, key) => sum + (Number(u[key]) || 0), 0);
+    }
+  };
+  for (const e of events) if (['codex.completed', 'agent.completed', 'model.response'].includes(e.event)) add(e.usage);
+  return total;
+}
 const readEvents = async runDir => (await readFile(join(runDir, 'events.jsonl'), 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line));
 /**
  * What a finished run produced, as a case sees it: its status, result, inputs and outputs, effects, the files it wrote
@@ -578,7 +593,7 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
     const liveModel = liveSteps.filter(id => modelKinds.has(method.steps[id]?.do?.kind));
     return { ...evaluation, output: await attemptOutput(outcome, before), run_status: result.status, ...(result.failure ? { failure: { code: result.failure.code, headline: result.failure.headline } } : {}), live_steps: liveSteps, live_model_steps: liveModel,
       ...(live.length ? { target_live: live.every(id => liveSteps.includes(id)) } : {}), standins, judge_calls: evaluation.results.reduce((sum, r) => sum + (r.judge_calls ?? 0), 0),
-      duration_ms: Math.round(performance.now() - runStarted), ...kept, ...(result.status === 'failed' && result.failure?.owner === 'outside_service' ? { busy: true } : {}) };
+      duration_ms: Math.round(performance.now() - runStarted), tokens: eventTokens(events), ...kept, ...(result.status === 'failed' && result.failure?.owner === 'outside_service' ? { busy: true } : {}) };
   };
   /** Run n in a place; a run that a model service failed runs again after a wait, with fewer places. */
   const run = async n => {
