@@ -278,6 +278,20 @@ export function testCase(methodFile: string, config: any, testCaseValue: any, ru
 /** Remove a folder that may hold read-only copies; tests call it. */
 export function _removeTree(path: any): Promise<void>;
 /**
+ * The steps that a change touched, for each case: the steps that the case needs (its expectations' producers and the
+ * steps before them) whose step key differs between the baseline and this version. A case with none serves every step
+ * it needs from the outputs kept when it last passed, so the change cannot alter its result.
+ * @param {string} methodFile
+ * @param {string} baseline
+ * @param {any} config
+ * @param {{casesDir?: string | undefined, ids?: string[] | undefined}} [options]
+ * @returns {Promise<Record<string, string[]>>}
+ */
+export function touchedSteps(methodFile: string, baseline: string, config: any, { casesDir, ids }?: {
+    casesDir?: string | undefined;
+    ids?: string[] | undefined;
+}): Promise<Record<string, string[]>>;
+/**
  * Test a Method version against its active cases. Every active case must pass. With a baseline (the version
  * before a change), each case also runs on the old version, to show what the change fixed or broke. New cases
  * must fail on the baseline and pass on the candidate. once, runs, minPass, live, judgeCache, keepDir and judges apply to each

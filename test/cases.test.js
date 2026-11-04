@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runMethod, createCase, retireCase, listCases, testSuite } from '../src/index.js';
+import { runMethod, createCase, retireCase, listCases, testSuite, touchedSteps } from '../src/index.js';
+import { dirname } from 'node:path';
 
 const text = { type: 'text', description: 'A test value.' };
 const number = { type: 'number', description: 'A test number.' };
@@ -112,6 +113,19 @@ test('a case runs only the steps it needs, so a change elsewhere does not block 
   const report = await testSuite(current, cfg);
   assert.deepEqual(report.cases.map(c => [c.id, c.verdict]).sort(), [['report-text', 'unverifiable'], ['total', 'pass']]);
   assert.match(report.cases.find(c => c.id === 'report-text').candidate.attempts[0].reason, /Cannot replay send:0/);
+});
+
+test('the steps that a change touched, for each case: only the steps that the case needs and whose key differs', async t => {
+  const { cfg, current, pin, write } = await setup(t);
+  await pin('total', [{ kind: 'equals', ref: 'outputs.total', value: 10 }]);
+  await pin('report-text', [{ kind: 'equals', ref: 'outputs.report', value: 'Paid 10; summary sent' }]);
+  await mkdir(join(dirname(current), 'old'));
+  const old = join(dirname(current), 'old', 'invoices.method');
+  await writeFile(old, await readFile(current, 'utf8'));
+  for (const [name, source] of Object.entries(sources)) await writeFile(join(dirname(current), 'old', name), source);
+  await write('invoices.method', version({ report: 'report-v2.mjs' }));
+  assert.deepEqual(await touchedSteps(current, old, cfg), { 'report-text': ['report'], total: [] });
+  assert.deepEqual(await touchedSteps(old, old, cfg, { casesDir: join(dirname(current), 'cases'), ids: ['total'] }), { total: [] });
 });
 
 test('a changed step that writes files runs in a scratch folder during a replay', async t => {

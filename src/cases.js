@@ -780,6 +780,22 @@ async function scratchCopy(real, scratch) {
   await cp(real, scratch, { recursive: true, filter: source => source === real || !scratchSkip.has(basename(source)) });
   return true;
 }
+/**
+ * The steps that a change touched, for each case: the steps that the case needs (its expectations' producers and the
+ * steps before them) whose step key differs between the baseline and this version. A case with none serves every step
+ * it needs from the outputs kept when it last passed, so the change cannot alter its result.
+ * @param {string} methodFile
+ * @param {string} baseline
+ * @param {any} config
+ * @param {{casesDir?: string | undefined, ids?: string[] | undefined}} [options]
+ * @returns {Promise<Record<string, string[]>>}
+ */
+export async function touchedSteps(methodFile, baseline, config, { casesDir = defaultCasesDir(methodFile), ids } = {}) {
+  const [method, newKeys, oldKeys] = await Promise.all([readDocument(methodFile), versionKeys(methodFile, config), versionKeys(baseline, config)]);
+  const cases = (await listCases(methodFile, casesDir)).filter(item => !ids || ids.includes(item.id));
+  return Object.fromEntries(cases.map(item => [item.id, (neededSteps(method, item.expect ?? []) ?? Object.keys(method.steps)).filter(id => newKeys[id] !== oldKeys[id])]));
+}
+
 /** Cases whose recorded steps differ from this version run first, because they answer fastest whether a change works. */
 async function changedFirst(methodFile, config, cases) {
   const keys = await versionKeys(methodFile, config);

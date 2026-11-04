@@ -16,7 +16,7 @@ export type ClassificationProvider = import("./api-types.js").ClassificationProv
 export type HostedModels = import("./api-types.js").HostedModels;
 export { parsePrompt, validatePrompt, renderPrompt } from "./prompt.js";
 export { observeRun, pendingRuns } from "./observe.js";
-export { createCase, retireCase, listCases, testCase, testSuite, outcomeOfRun, defaultCasesDir } from "./cases.js";
+export { createCase, retireCase, listCases, testCase, testSuite, outcomeOfRun, defaultCasesDir, touchedSteps } from "./cases.js";
 export { recordRun, stepKey, stepKeys } from "./replay.js";
 export { readLearned, activeRules, learnedFile } from "./learned.js";
 export { effectSummary, readLedger } from "./effects.js";
