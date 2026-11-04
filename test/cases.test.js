@@ -471,6 +471,24 @@ test('a quote matches the words of a Markdown value without its markup; an inven
     assert.match((await judged(q)).criteria[0].reason, /quote is not in the text/, q);
 });
 
+test('a judge may quote the fields of a record, one per line, as they stand in the value', async t => {
+  const { cfg } = await setup(t);
+  const { judgeRubric } = await import('../src/index.js');
+  let quote = '';
+  const transport = async () => {
+    const verdicts = [{ id: 'c1', pass: true, quote, reason: 'It says so.' }];
+    return { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ verdicts }) }] }], usage: { input_tokens: 1, output_tokens: 1 } };
+  };
+  const value = { answers: [{ question: 6, answer: 'no', quote: 'only with written approval', unsure: false }, { question: 8, answer: 'yes', quote: 'the terms of this agreement', unsure: false }] };
+  const criteria = [{ id: 'c1', text: 'Question 6 is no and question 8 is yes.' }];
+  const judged = q => { quote = q; return judgeRubric({ value, criteria, config: withJudge(cfg), options: { runOptions: { transport }, judgeCache: false } }); };
+  // The judge quotes the fields of two answers, each on its own line: the fields between them are left out.
+  assert.equal((await judged('"question": 6,\n      "answer": "no"\n"question": 8,\n      "answer": "yes"')).status, 'pass');
+  // A field value that the record does not hold, or fields out of order, is still not a quote of it.
+  for (const q of ['"question": 6,\n"answer": "not mentioned"', '"question": 8,\n"question": 6'])
+    assert.match((await judged(q)).criteria[0].reason, /quote is not in the text/, q);
+});
+
 test('a list of judges must agree: a disagreement fails the criterion as unsure, and testSuite passes the list on', async t => {
   const { dir, cfg, current } = await setup(t);
   const { judgeRubric } = await import('../src/index.js');

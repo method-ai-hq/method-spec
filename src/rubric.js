@@ -39,10 +39,13 @@ const normalize = text => text.replace(/\s+/g, ' ').trim().toLowerCase();
  * markup (bold, list numbers, table bars, typographic quotes), so only letters and digits are compared.
  */
 const words = text => text.replace(/^\s*\d+[.)]\s+/gm, ' ').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-/** Whether a quote is in the text: each passage of the quote, in order. A quote may join passages with an ellipsis. */
+/**
+ * Whether a quote is in the text: each passage of the quote, in order. A quote may join passages with an ellipsis or a
+ * line break, so a judge may quote the fields of a record (each on its own line) as they stand in the value.
+ */
 const quotedIn = (quote, textWords) => {
   let from = 0;
-  for (const part of quote.split(/\.{3}|…/).map(words).filter(Boolean)) {
+  for (const part of quote.split(/\.{3}|…|\r?\n/).map(words).filter(Boolean)) {
     const at = textWords.indexOf(` ${part} `, from);
     if (at < 0) return false;
     from = at + part.length + 1;
