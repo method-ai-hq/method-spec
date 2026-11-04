@@ -19,11 +19,10 @@ import { executeModel } from './model.js';
 import { stepInputTypes } from './flow.js';
 import { executeCodex } from './codex.js';
 import { executeSession, writeBack } from './session.js';
-import { folderHashes } from './clean-room.js';
 import { renderPrompt } from './prompt.js';
 import { preflight } from './preflight.js';
 import { progressMessage } from './progress.js';
-import { cacheable, iterationKey, readCache, copyOutputFiles } from './cache.js';
+import { cacheable, iterationKey, readCache, copyOutputFiles, readPaths, pathContents } from './cache.js';
 import { effectKey, connectionsFor, testFixtures, runObserverScript, observeEffect, readLedger, appendLedger, currentEffects, effectSummary, statusWithEffects, waitUntil, nextObservation, horizonAt, previousObservations, listFolder, observeFiles, isBuiltin } from './effects.js';
 import { observerConnection } from './semantics.js';
 import { replayedCandidate, savedCandidate, unverifiable, stepKey, namedPath, keepRunPaths } from './replay.js';
@@ -383,9 +382,10 @@ async function executeRun(file, config, options) {
         }
         const bindings = Object.fromEntries(Object.entries(step.in ?? {}).map(([k, ref]) => [k, structuredClone(resolve(root, ref))]));
         if (eachEntry) bindings[eachEntry[0]] = collection[iteration];
-        // A session's key covers what its room folder holds, not only the folder's name.
-        const room = step.do?.kind === 'session' && step.do.room ? await folderHashes(resolve(bindings, step.do.room)).catch(() => null) : undefined;
-        const key = cacheable(step, tools) ? iterationKey({ method, step, bindings, iteration, profiles, config, runtimeInfo, manifest, rules, repeat, room }) : null;
+        // The key covers what the files and folders that the iteration reads hold, not only their names.
+        const room = step.do?.kind === 'session' && step.do.room ? resolve(bindings, step.do.room) : undefined;
+        const read = cacheable(step, tools) ? await pathContents(readPaths({ method, step, bindings, environment: config.environment, tools, room: typeof room === 'string' ? room : undefined })) : null;
+        const key = read ? iterationKey({ method, step, bindings, iteration, profiles, config, runtimeInfo, manifest, rules, repeat, read }) : null;
         const hit = key && !fresh.has(id) ? cache.get(key) : undefined;
         if (hit) {
           // An earlier run accepted this exact iteration. Its outputs and files are reused; nothing executes.

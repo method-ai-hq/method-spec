@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runMethod } from '../src/index.js';
@@ -97,4 +97,51 @@ test('a step that changes state is not reused', async t => {
   await f.run({}, doc);
   const result = await f.run({}, doc);
   assert.deepEqual(result.reused, { prepare: 1, write: 1 });
+});
+
+test('a step that reads a bound folder runs again when a file in the folder changes', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'method-cache-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const matter = join(dir, 'matter');
+  await mkdir(matter);
+  await writeFile(join(matter, 'NDA_177.txt'), 'first');
+  // read takes the folder as an input; peek finds it in METHOD_ENVIRONMENT. Every script gets METHOD_ENVIRONMENT, so
+  // count, which reads only peek's output, runs again too.
+  await writeFile(join(dir, 'read.mjs'), 'import{readFileSync,readdirSync}from"node:fs";const a=JSON.parse(readFileSync(0,"utf8"));const name=readdirSync(a.matter).find(n=>n.endsWith(".txt"));console.log(JSON.stringify({name}))');
+  await writeFile(join(dir, 'peek.mjs'), 'import{readFileSync}from"node:fs";const m=JSON.parse(process.env.METHOD_ENVIRONMENT).matter;const t=readFileSync(m+"/"+JSON.parse(readFileSync(0,"utf8")).name,"utf8");console.log(JSON.stringify({text:t}))');
+  await writeFile(join(dir, 'count.mjs'), 'import{readFileSync}from"node:fs";console.log(JSON.stringify({length:JSON.parse(readFileSync(0,"utf8")).text.length}))');
+  const text = { type: 'text', description: 'A test text.' };
+  const doc = {
+    format: 'method/3.3', name: 'Matter', goal: 'Test reuse of a bound folder.',
+    environment: { matter: { type: 'files', description: 'The folder with the NDA.' } },
+    steps: {
+      read: { in: { matter: 'environment.matter' }, do: script('read.mjs'), out: { name: text } },
+      peek: { in: { name: 'name' }, do: script('peek.mjs'), out: { text } },
+      count: { in: { text: 'text' }, do: script('count.mjs'), out: { length: number } },
+    },
+    result: 'text',
+  };
+  const path = join(dir, 'matter.method');
+  await writeFile(path, JSON.stringify(doc));
+  const dirs = [];
+  const run = async () => {
+    const result = await runMethod(path, { ...config, environment: { matter } }, { runDir: join(dir, `run-${dirs.length + 1}`), cacheFrom: [...dirs].reverse() });
+    dirs.push(result.run_dir);
+    return result;
+  };
+  assert.equal((await run()).result, 'first');
+  const same = await run();
+  assert.deepEqual(same.reused, { read: 1, peek: 1, count: 1 }, 'nothing changed, so every step is reused');
+  await rm(join(matter, 'NDA_177.txt'));
+  await writeFile(join(matter, 'NDA_120.txt'), 'other');
+  const swapped = await run();
+  assert.equal(swapped.result, 'other');
+  assert.deepEqual(await started(swapped.run_dir), ['read', 'peek', 'count']);
+  assert.equal(swapped.reused, undefined);
+  // The same file name with new text changes the key too.
+  await writeFile(join(matter, 'NDA_120.txt'), 'changed');
+  const edited = await run();
+  assert.equal(edited.result, 'changed');
+  assert.deepEqual(await started(edited.run_dir), ['read', 'peek', 'count']);
+  assert.deepEqual((await run()).reused, { read: 1, peek: 1, count: 1 });
 });
