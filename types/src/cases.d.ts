@@ -208,21 +208,38 @@ export function retireCase(methodFile: string, id: string, { by, reason, casesDi
     casesDir?: string | undefined;
 }): Promise<void>;
 /**
+ * The places where case runs run: about 12 at once, for every case of every test in this process. The number sets
+ * itself. A run that a model service failed (as when too many runs reach one subscription at once) halves it, and that
+ * run waits and runs again, at most twice; as many good runs in a row as there are places add one, up to 16. Runs with
+ * a lower priority number start first. A usage limit of the person's plan is not a busy service: the test stops with it.
+ */
+export function runSlots(start?: number, most?: number): {
+    readonly limit: number;
+    /** Run work in a place; priority orders the queue (lower first). */
+    run(work: any, priority?: number): Promise<any>;
+    busy(): void;
+    ok(): void;
+};
+/**
  * Replay one case against a Method file. Each attempt has its own scratch folder: it holds a copy of every snapshot
  * of the case and of each files connection that a step writes, and the recorded paths are rewritten to these copies,
  * so attempts never share a folder and a replay never changes the source run or the real folders. Only the steps the
- * expectations need run. A strict case stops at its first failed run.
+ * expectations need run. The runs of a case run at the same time when a model step will run live (a step it needs
+ * differs from the recording), and the case stops as soon as its result is decided.
  * once: one run decides (runs: 1). runs and minPass replace the case's own. live: steps that run live even when they
  * match the recording; target_live says whether they did. judgeCache: false judges again. keepDir: a folder that
  * keeps each attempt's run folder (attempt.run_dir). judges: a list of judge model profiles that must all pass a
- * rubric criterion; a disagreement fails it as unsure.
+ * rubric criterion; a disagreement fails it as unsure. upTo: make at most this many runs now; a case that passed them
+ * and needs more is pass with more: the runs it still needs. signal: stops the case (status not_run). priority: its
+ * place in the queue of runs (lower first).
  * @param {string} methodFile
  * @param {any} config
  * @param {any} testCaseValue
  * @param {any} [runOptions]
- * @param {{once?: boolean, runs?: number | undefined, minPass?: number | undefined, live?: string[] | undefined, judgeCache?: boolean | undefined, keepDir?: string | undefined, judges?: any[] | undefined}} [check]
+ * @param {{once?: boolean, runs?: number | undefined, minPass?: number | undefined, live?: string[] | undefined, judgeCache?: boolean | undefined, keepDir?: string | undefined, judges?: any[] | undefined,
+ *   upTo?: number | undefined, signal?: AbortSignal | undefined, priority?: number | undefined}} [check]
  */
-export function testCase(methodFile: string, config: any, testCaseValue: any, runOptions?: any, { once, runs, minPass, live, judgeCache, keepDir, judges }?: {
+export function testCase(methodFile: string, config: any, testCaseValue: any, runOptions?: any, { once, runs, minPass, live, judgeCache, keepDir, judges, upTo, signal, priority }?: {
     once?: boolean;
     runs?: number | undefined;
     minPass?: number | undefined;
@@ -230,143 +247,14 @@ export function testCase(methodFile: string, config: any, testCaseValue: any, ru
     judgeCache?: boolean | undefined;
     keepDir?: string | undefined;
     judges?: any[] | undefined;
+    upTo?: number | undefined;
+    signal?: AbortSignal | undefined;
+    priority?: number | undefined;
 }): Promise<{
-    attempts: ({
-        run_dir: string;
-        standins: {
-            step: any;
-            iteration: any;
-            tool: any;
-            arguments: any;
-        }[];
-        judge_calls: number;
-        target_live?: boolean;
-        live_steps: any[];
-        live_model_steps: any[];
-        failure?: {
-            code: any;
-            headline: any;
-        };
-        output: {
-            result: any;
-            files: {};
-        };
-        run_status: "completed" | "unconfirmed" | "failed" | "needs_input";
-        status: string;
-        results: {
-            criteria?: ({
-                id: string;
-                text: string;
-                judge: string;
-                probability: any;
-                pass: boolean;
-                reason: string;
-                votes?: undefined;
-                unsure?: undefined;
-            } | {
-                id: string;
-                text: string;
-                judge: string;
-                votes: any[];
-                pass: boolean;
-                unsure: boolean;
-                reason: string;
-                probability?: undefined;
-            } | {
-                id: string;
-                text: string;
-                judge: string;
-                votes: any[];
-                pass: boolean;
-                reason: any;
-                probability?: undefined;
-                unsure?: undefined;
-            })[];
-            judge_calls?: number;
-            kind: any;
-            status: string;
-            reason: string;
-            text?: any;
-        }[];
-        reason?: undefined;
-    } | {
-        run_dir?: undefined;
-        standins: {
-            step: any;
-            iteration: any;
-            tool: any;
-            arguments: any;
-        }[];
-        judge_calls: number;
-        target_live?: boolean;
-        live_steps: any[];
-        live_model_steps: any[];
-        failure?: {
-            code: any;
-            headline: any;
-        };
-        output: {
-            result: any;
-            files: {};
-        };
-        run_status: "completed" | "unconfirmed" | "failed" | "needs_input";
-        status: string;
-        results: {
-            criteria?: ({
-                id: string;
-                text: string;
-                judge: string;
-                probability: any;
-                pass: boolean;
-                reason: string;
-                votes?: undefined;
-                unsure?: undefined;
-            } | {
-                id: string;
-                text: string;
-                judge: string;
-                votes: any[];
-                pass: boolean;
-                unsure: boolean;
-                reason: string;
-                probability?: undefined;
-            } | {
-                id: string;
-                text: string;
-                judge: string;
-                votes: any[];
-                pass: boolean;
-                reason: any;
-                probability?: undefined;
-                unsure?: undefined;
-            })[];
-            judge_calls?: number;
-            kind: any;
-            status: string;
-            reason: string;
-            text?: any;
-        }[];
-        reason?: undefined;
-    } | {
-        status: string;
-        reason: any;
-    } | {
-        run_dir: string;
-        status: string;
-        reason: string;
-        path: any;
-    } | {
-        run_dir?: undefined;
-        status: string;
-        reason: string;
-        path: any;
-    } | {
-        run_dir: string;
-        status: string;
-        reason: string;
-    })[];
+    attempts: any[];
     duration_ms: number;
     target_live?: boolean;
+    more?: number;
     unreliable?: string;
     id: any;
     status: string;
@@ -380,19 +268,26 @@ export function _removeTree(path: any): Promise<void>;
  * Test a Method version against its active cases. Every active case must pass. With a baseline (the version
  * before a change), each case also runs on the old version, to show what the change fixed or broke. New cases
  * must fail on the baseline and pass on the candidate. once, runs, minPass, live, judgeCache, keepDir and judges apply to each
- * case run, on both versions, as in testCase.
+ * case run, on both versions, as in testCase. Every case runs at once; their runs share the places of runSlots.
+ * gate: decide only whether a change can be applied. The old version runs a case only when it is new or fails on the
+ * new version (a case that passes is pass, whatever it did before), and the test stops at the first case that blocks
+ * the change: a regression, a new case that is not fixed, or a case that cannot run safely any more. The cases that
+ * did not run then are not_run.
+ * firstRun: each case that is not new makes only its first run now; a case that passed it and needs more runs has
+ * more: the runs it still needs. moreRuns: each case runs this many more times on the new version, and every run must
+ * pass (the rest of a first-run test).
  * @param {string} methodFile
  * @param {any} config
- * @param {{casesDir?: string | undefined, ids?: string[] | undefined, baseline?: string | undefined, newIds?: string[] | undefined, runOptions?: any, concurrency?: number | undefined, once?: boolean | undefined,
- *   runs?: number | undefined, minPass?: number | undefined, live?: string[] | undefined, judgeCache?: boolean | undefined, keepDir?: string | undefined, judges?: any[] | undefined}} [options]
+ * @param {{casesDir?: string | undefined, ids?: string[] | undefined, baseline?: string | undefined, newIds?: string[] | undefined, runOptions?: any, once?: boolean | undefined,
+ *   runs?: number | undefined, minPass?: number | undefined, live?: string[] | undefined, judgeCache?: boolean | undefined, keepDir?: string | undefined, judges?: any[] | undefined,
+ *   gate?: boolean | undefined, firstRun?: boolean | undefined, moreRuns?: number | undefined}} [options]
  */
-export function testSuite(methodFile: string, config: any, { casesDir, ids, baseline, newIds, runOptions, concurrency, once, runs, minPass, live, judgeCache, keepDir, judges }?: {
+export function testSuite(methodFile: string, config: any, { casesDir, ids, baseline, newIds, runOptions, once, runs, minPass, live, judgeCache, keepDir, judges, gate, firstRun, moreRuns }?: {
     casesDir?: string | undefined;
     ids?: string[] | undefined;
     baseline?: string | undefined;
     newIds?: string[] | undefined;
     runOptions?: any;
-    concurrency?: number | undefined;
     once?: boolean | undefined;
     runs?: number | undefined;
     minPass?: number | undefined;
@@ -400,6 +295,9 @@ export function testSuite(methodFile: string, config: any, { casesDir, ids, base
     judgeCache?: boolean | undefined;
     keepDir?: string | undefined;
     judges?: any[] | undefined;
+    gate?: boolean | undefined;
+    firstRun?: boolean | undefined;
+    moreRuns?: number | undefined;
 }): Promise<{
     counts: {
         [k: string]: number;

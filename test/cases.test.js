@@ -282,31 +282,98 @@ test('a rubric reads context, such as the sources, without judging it', async t 
   assert.equal(report.cases[0].verdict, 'pass');
 });
 
-test('a case with a live model step runs more than once, stops at a failed run, and a rule kept only sometimes is unreliable', async t => {
+/** A Method with one model step, a case that pins its greeting, and the prompt changed so that the step runs live. */
+async function modelCase(t, cases = ['says-hello']) {
   const dir = await mkdtemp(join(tmpdir(), 'method-runs-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const doc = prompt => ({ format: 'method/3.3', name: 'Model', goal: 'Write a line.', steps: { write: { name: 'Write', do: { kind: 'call', model: 'model', prompt }, out: { line: { type: 'text' } } } }, result: 'line' });
   const file = join(dir, 'm.method');
   const cfg = { ...config({}), models: { model: { backend: 'openai-responses', model: 'test-model', api_key_env: 'METHOD_TEST_UNUSED_KEY', max_output_tokens: 100 } } };
-  const answer = line => ({ status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ line }) }] }], usage: { input_tokens: 1, output_tokens: 1 } });
   await writeFile(file, JSON.stringify(doc('Say hello.')));
   await runMethod(file, cfg, { runDir: join(dir, 'run'), transport: async () => answer('hello') });
-  await createCase({ methodFile: file, passingRun: join(dir, 'run'), id: 'says-hello', note: 'Keep the greeting.', expect: [{ kind: 'equals', ref: 'outputs.line', value: 'hello' }], config: cfg });
+  for (const id of cases) await createCase({ methodFile: file, passingRun: join(dir, 'run'), id, note: 'Keep the greeting.', expect: [{ kind: 'equals', ref: 'outputs.line', value: 'hello' }], config: cfg });
   // The prompt changes, so the model step runs live in the test.
   await writeFile(file, JSON.stringify(doc('Say hello, please.')));
-  const steady = await testSuite(file, cfg, { runOptions: { transport: async () => answer('hello') } });
-  assert.ok(steady.cases[0].candidate.runs > 1); assert.equal(steady.cases[0].verdict, 'pass');
-  assert.equal(steady.totals.live_model_steps, steady.cases[0].candidate.runs);
-  let n = 0;
-  const flaky = await testSuite(file, cfg, { runOptions: { transport: async () => answer(++n === 2 ? 'hi' : 'hello') } });
+  const before = join(dir, 'm-before.method');
+  await writeFile(before, JSON.stringify(doc('Say hello.')));
+  return { dir, file, before, cfg };
+}
+const answer = line => ({ status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ line }) }] }], usage: { input_tokens: 1, output_tokens: 1 } });
+/** A model that answers after a pause and counts the calls that run at the same time. */
+function slowModel(reply = () => 'hello', ms = 150) {
+  let now = 0, most = 0, calls = 0;
+  const transport = async () => { const n = ++calls; now++; most = Math.max(most, now); await new Promise(done => setTimeout(done, ms)); now--; return answer(reply(n)); };
+  return { transport, most: () => most, calls: () => calls };
+}
+
+test('a case with a live model step runs three times at once, stops at a failed run, and a rule kept only sometimes is unreliable', async t => {
+  const { file, cfg } = await modelCase(t);
+  const steady = slowModel();
+  const passed = await testSuite(file, cfg, { runOptions: { transport: steady.transport } });
+  assert.equal(passed.cases[0].candidate.runs, 3); assert.equal(passed.cases[0].verdict, 'pass');
+  assert.equal(passed.totals.live_model_steps, 3);
+  assert.equal(steady.most(), 3, 'the three runs run together');
+  // The second run fails sooner than the others: the case fails at once, and the runs still going are stopped.
+  let calls = 0;
+  const flaky = await testSuite(file, cfg, { runOptions: { transport: async () => { const second = ++calls === 2; await new Promise(done => setTimeout(done, second ? 10 : 300)); return answer(second ? 'hi' : 'hello'); } } });
   assert.equal(flaky.cases[0].verdict, 'fail');
-  assert.ok(flaky.cases[0].candidate.unreliable);
-  // The case stops at its first failed run.
-  assert.equal(flaky.cases[0].candidate.runs, n);
-  assert.equal(flaky.cases[0].candidate.attempts.at(-1).status, 'fail');
+  assert.deepEqual(flaky.cases[0].candidate.attempts.map(a => a.status), ['fail']);
   // A quick check runs each case once, also with a live model step.
   const quick = await testSuite(file, cfg, { once: true, runOptions: { transport: async () => answer('hello') } });
   assert.equal(quick.cases[0].candidate.runs, 1); assert.equal(quick.cases[0].verdict, 'pass'); assert.equal(quick.totals.live_model_steps, 1);
+  // Passing one run and failing another is unreliable.
+  let n = 0;
+  const sometimes = await testSuite(file, cfg, { runs: 3, minPass: 2, runOptions: { transport: async () => { const k = ++n; await new Promise(done => setTimeout(done, k * 50)); return answer(k === 1 ? 'hello' : 'hi'); } } });
+  assert.equal(sometimes.cases[0].verdict, 'fail'); assert.match(sometimes.cases[0].candidate.unreliable, /passed 1 of 3 runs/);
+});
+
+test('the runs of every case share about 12 places', async t => {
+  const { file, cfg } = await modelCase(t, ['a', 'b', 'c', 'd', 'e', 'f']);
+  const model = slowModel();
+  const report = await testSuite(file, cfg, { runOptions: { transport: model.transport } });
+  assert.equal(report.passed, true); assert.equal(model.calls(), 18);
+  assert.ok(model.most() >= 12 && model.most() <= 16, `at most 16 and about 12 at once, not ${model.most()}`);
+});
+
+test('a gate runs the old version only for a case that fails, and stops at the first break', async t => {
+  const { file, before, cfg } = await modelCase(t, ['a', 'b', 'c', 'd']);
+  // Every case passes on the new version: the old version never runs.
+  const old = slowModel(), fresh = slowModel();
+  const passing = await testSuite(file, cfg, { baseline: before, gate: true, runOptions: { transport: async body => (JSON.stringify(body).includes('please') ? fresh : old).transport() } });
+  assert.equal(passing.passed, true);
+  assert.equal(old.calls(), 0); assert.equal(fresh.calls(), 12);
+  assert.ok(passing.cases.every(c => c.verdict === 'pass' && !c.baseline));
+  // The new version breaks every case. The first confirmed break stops the test; cases that had not ended did not run.
+  let k = 0;
+  const broken = await testSuite(file, cfg, { baseline: before, gate: true, runOptions: { transport: async body => {
+    // One run of the new version ends first; it decides its case. The old version is quick.
+    const now = JSON.stringify(body).includes('please'), wait = now ? (++k === 1 ? 10 : 400) : 10;
+    await new Promise(done => setTimeout(done, wait)); return answer(now ? 'hi' : 'hello'); } } });
+  assert.equal(broken.passed, false);
+  assert.equal(broken.counts.regression, 1, JSON.stringify(broken.counts));
+  assert.equal(broken.counts.not_run, 3);
+  // Without gate, a baseline test still runs the old version of every case, to show what the change fixed.
+  const full = await testSuite(file, cfg, { baseline: before, runOptions: { transport: async () => answer('hello') } });
+  assert.ok(full.cases.every(c => c.baseline?.status === 'pass'));
+});
+
+test('a first-run test makes one run of each case now, and the rest runs later', async t => {
+  const { file, before, cfg } = await modelCase(t, ['a', 'b']);
+  const model = slowModel();
+  const first = await testSuite(file, cfg, { baseline: before, gate: true, firstRun: true, runOptions: { transport: model.transport } });
+  assert.equal(first.passed, true); assert.equal(model.calls(), 2);
+  assert.deepEqual(first.cases.map(c => [c.verdict, c.more, c.candidate.runs]), [['pass', 2, 1], ['pass', 2, 1]]);
+  const rest = await testSuite(file, cfg, { baseline: before, gate: true, ids: ['a', 'b'], moreRuns: 2, runOptions: { transport: model.transport } });
+  assert.equal(rest.passed, true); assert.equal(model.calls(), 6);
+  assert.deepEqual(rest.cases.map(c => c.candidate.runs), [2, 2]);
+});
+
+test('a run that the model service failed runs again, with fewer places', async t => {
+  const { file, cfg } = await modelCase(t);
+  let calls = 0;
+  const odd = { status: 'completed', output: [{ type: 'image', url: 'x' }], usage: { input_tokens: 1, output_tokens: 1 } };
+  const report = await testSuite(file, cfg, { runOptions: { transport: async () => ++calls === 1 ? odd : answer('hello') } });
+  assert.equal(report.cases[0].verdict, 'pass'); assert.equal(report.cases[0].candidate.runs, 3); assert.equal(calls, 4);
 });
 
 test('a case that can pass only by breaking an instruction is refused until the person accepts the conflict', async t => {

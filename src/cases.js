@@ -451,21 +451,60 @@ function neededSteps(method, expect, live = []) {
 }
 
 /**
+ * The places where case runs run: about 12 at once, for every case of every test in this process. The number sets
+ * itself. A run that a model service failed (as when too many runs reach one subscription at once) halves it, and that
+ * run waits and runs again, at most twice; as many good runs in a row as there are places add one, up to 16. Runs with
+ * a lower priority number start first. A usage limit of the person's plan is not a busy service: the test stops with it.
+ */
+export function runSlots(start = 12, most = 16) {
+  let limit = start, active = 0, streak = 0;
+  const queue = [];
+  const pump = () => { while (active < limit && queue.length) { active++; queue.shift().go(); } };
+  return {
+    get limit() { return limit; },
+    /** Run work in a place; priority orders the queue (lower first). */
+    async run(work, priority = 0) {
+      await new Promise(go => { const at = queue.findIndex(q => q.priority > priority); queue.splice(at < 0 ? queue.length : at, 0, { priority, go }); pump(); });
+      try { return await work(); } finally { active--; pump(); }
+    },
+    busy() { limit = Math.max(1, Math.floor(limit / 2)); streak = 0; },
+    ok() { if (++streak >= limit && limit < most) { limit++; streak = 0; } },
+  };
+}
+const sharedSlots = runSlots();
+
+/** The step keys of this version of a Method, to compare with a case's recording. */
+async function versionKeys(methodFile, config) {
+  const method = await readDocument(methodFile), root = dirname(pathResolve(methodFile));
+  const tools = { ...config.tools, ...method.tools };
+  const files = {};
+  const scripts = Object.values(method.steps).flatMap(step => [step.do, step.check]).filter(exec => exec?.kind === 'run').map(exec => exec.entrypoint);
+  for (const file of new Set([...scripts, ...Object.values(tools).map(tool => tool.run?.entrypoint).filter(Boolean), ...(method.files ?? [])])) {
+    try { files[file] = hash(await readFile(join(root, file))); } catch { /* the run reports a missing file */ }
+  }
+  return stepKeys(method, { files, profiles: config.models ?? {}, tools, learned: await readLearned(root) });
+}
+
+/**
  * Replay one case against a Method file. Each attempt has its own scratch folder: it holds a copy of every snapshot
  * of the case and of each files connection that a step writes, and the recorded paths are rewritten to these copies,
  * so attempts never share a folder and a replay never changes the source run or the real folders. Only the steps the
- * expectations need run. A strict case stops at its first failed run.
+ * expectations need run. The runs of a case run at the same time when a model step will run live (a step it needs
+ * differs from the recording), and the case stops as soon as its result is decided.
  * once: one run decides (runs: 1). runs and minPass replace the case's own. live: steps that run live even when they
  * match the recording; target_live says whether they did. judgeCache: false judges again. keepDir: a folder that
  * keeps each attempt's run folder (attempt.run_dir). judges: a list of judge model profiles that must all pass a
- * rubric criterion; a disagreement fails it as unsure.
+ * rubric criterion; a disagreement fails it as unsure. upTo: make at most this many runs now; a case that passed them
+ * and needs more is pass with more: the runs it still needs. signal: stops the case (status not_run). priority: its
+ * place in the queue of runs (lower first).
  * @param {string} methodFile
  * @param {any} config
  * @param {any} testCaseValue
  * @param {any} [runOptions]
- * @param {{once?: boolean, runs?: number | undefined, minPass?: number | undefined, live?: string[] | undefined, judgeCache?: boolean | undefined, keepDir?: string | undefined, judges?: any[] | undefined}} [check]
+ * @param {{once?: boolean, runs?: number | undefined, minPass?: number | undefined, live?: string[] | undefined, judgeCache?: boolean | undefined, keepDir?: string | undefined, judges?: any[] | undefined,
+ *   upTo?: number | undefined, signal?: AbortSignal | undefined, priority?: number | undefined}} [check]
  */
-export async function testCase(methodFile, config, testCaseValue, runOptions = {}, { once = false, runs, minPass, live = [], judgeCache = true, keepDir, judges } = {}) {
+export async function testCase(methodFile, config, testCaseValue, runOptions = {}, { once = false, runs, minPass, live = [], judgeCache = true, keepDir, judges, upTo, signal = runOptions.signal, priority = 0 } = {}) {
   const started = performance.now();
   const recording = await readJSON(join(testCaseValue.dir, 'recording.json'));
   const artifacts = join(testCaseValue.dir, 'artifacts');
@@ -475,75 +514,118 @@ export async function testCase(methodFile, config, testCaseValue, runOptions = {
   const attempts = [];
   const written = writtenConnections(method);
   const snapshots = testCaseValue.snapshots ?? [];
-  if (keepDir) await mkdir(keepDir, { recursive: true, mode: 0o700 });
-  // A real path: Claude Code compares its permission rules with resolved paths.
-  const parent = keepDir ? await realpath(await mkdtemp(join(pathResolve(keepDir), 'c-'))) : await tempFolder('mc-');
   const fixedRuns = runs ?? (once ? 1 : testCaseValue.runs ?? null);
   const fixedMin = minPass ?? (runs !== undefined ? runs : once ? 1 : testCaseValue.min_pass ?? null);
   let total = fixedRuns ?? 1, needed = fixedMin ?? total;
   if (needed > total) fail('setup', 'min_pass must be between 1 and runs', 'case_invalid');
+  // A model step runs live when a step that the case needs differs from the recording, or is named live: then it needs
+  // three runs, and they run at the same time.
+  const keys = fixedRuns === null ? await versionKeys(methodFile, config) : {};
+  const used = only ?? Object.keys(method.steps);
+  const modelLive = fixedRuns === null && used.some(id => modelKinds.has(method.steps[id]?.do?.kind)) && (live.length > 0 || used.some(id => recording.keys?.[id] !== keys[id]));
+  const stop = new AbortController();
+  const outer = () => stop.abort();
+  if (signal?.aborted) stop.abort(); else signal?.addEventListener('abort', outer, { once: true });
+  if (keepDir) await mkdir(keepDir, { recursive: true, mode: 0o700 });
+  // A real path: Claude Code compares its permission rules with resolved paths.
+  const parent = keepDir ? await realpath(await mkdtemp(join(pathResolve(keepDir), 'c-'))) : await tempFolder('mc-');
+
+  /** One run of the case in its own folders, or null when the case stopped first. busy: a model service failed it. */
+  const attempt = async name => {
+    if (stop.signal.aborted) return null;
+    const runDir = join(parent, `run-${name}`), scratch = join(parent, `scratch-${name}`);
+    const environment = { ...config.environment }, paths = {}, copies = {}, missing = [...testCaseValue.snapshot_missing ?? []];
+    const runStarted = performance.now();
+    await mkdir(scratch, { recursive: true, mode: 0o700 });
+    for (const snapshot of snapshots) {
+      // A saved version carries a case without its snapshot/ folder (the copies stay on the computer that recorded
+      // it): a copy that is not here is a path that the case could not keep, as when it was too large.
+      if (!await exists(join(testCaseValue.dir, snapshot.copy))) { missing.push(snapshot.original); continue; }
+      const copy = join(scratch, snapshot.copy);
+      await mkdir(dirname(copy), { recursive: true, mode: 0o700 });
+      await cp(join(testCaseValue.dir, snapshot.copy), copy, { recursive: true });
+      copies[snapshot.original] = copy; paths[copy] = snapshot.original;
+      if (snapshot.kind === 'env') environment[basename(snapshot.copy)] = copy;
+    }
+    for (const name of written) {
+      const real = pathResolve(config.environment?.[name] ?? '.'), copy = join(scratch, 'env', name);
+      if (await scratchCopy(real, copy)) { environment[name] = copy; paths[copy] = recording.environment?.[name] ?? config.environment?.[name]; }
+      else return { status: 'unverifiable', reason: `${name} is too large to copy for a safe replay (more than ${scratchLimit.files} files or ${scratchLimit.bytes / 1e6} MB).` };
+    }
+    let result;
+    const before = await fileHashes(scratch);
+    try {
+      result = await runMethod(methodFile, { ...config, environment }, { ...runOptions, signal: stop.signal, runDir, inputs: rewritePaths(recording.inputs, copies), state: rewritePaths(recording.initial_state, copies),
+        replay: { recording, paths, copies, missing, live, scratch, observations: recording.observations ?? {}, artifacts: await exists(artifacts) ? artifacts : undefined, ...(only ? { only } : {}) } });
+    } catch (error) { return stop.signal.aborted ? null : { status: 'unverifiable', reason: error.message }; }
+    if (stop.signal.aborted) return null;
+    // A usage limit is not a result of the Method: the test stops with it.
+    if (result.status === 'failed' && result.failure?.code === 'usage_limit') fail('limit', result.failure.headline ?? result.failure.details, 'usage_limit');
+    const events = await readEvents(runDir);
+    const kept = keepDir ? { run_dir: runDir } : {};
+    if (result.status === 'failed' && result.failure.code === 'unverifiable') {
+      const gone = events.find(e => e.event === 'replay.missing_file');
+      return gone ? { status: 'unverifiable', reason: 'missing_file', path: gone.path, ...kept } : { status: 'unverifiable', reason: result.failure.details, ...kept };
+    }
+    const replayed = new Set(events.filter(e => e.event === 'step.replayed').map(e => `${e.step}:${e.iteration}`));
+    const liveSteps = [...new Set(events.filter(e => e.event === 'step.candidate' && !replayed.has(`${e.step}:${e.iteration}`)).map(e => e.step))];
+    const standins = events.filter(e => e.event === 'tool.standin').map(e => ({ step: e.step, iteration: e.iteration, tool: e.tool, arguments: rewritePaths(e.arguments, paths) }));
+    const outcome = await outcomeOfRun(runDir, { paths, copies });
+    // A replayed step's path refers to the source run's file; the case kept a copy of it.
+    for (const [path, name] of Object.entries(testCaseValue.files ?? {})) outcome.files[path] ??= join(testCaseValue.dir, name);
+    if (testCaseValue.source?.run_dir) outcome.source_artifacts = join(pathResolve(testCaseValue.source.run_dir), 'artifacts');
+    const evaluation = await evaluate(testCaseValue.expect, outcome, { caseDir: testCaseValue.dir, config, options: { runOptions, classification: runOptions.classification, cacheDir: runOptions.cacheDir, judgeCache, ...(judges?.length ? { judges } : {}) } });
+    const liveModel = liveSteps.filter(id => modelKinds.has(method.steps[id]?.do?.kind));
+    return { ...evaluation, output: await attemptOutput(outcome, before), run_status: result.status, ...(result.failure ? { failure: { code: result.failure.code, headline: result.failure.headline } } : {}), live_steps: liveSteps, live_model_steps: liveModel,
+      ...(live.length ? { target_live: live.every(id => liveSteps.includes(id)) } : {}), standins, judge_calls: evaluation.results.reduce((sum, r) => sum + (r.judge_calls ?? 0), 0),
+      duration_ms: Math.round(performance.now() - runStarted), ...kept, ...(result.status === 'failed' && result.failure?.owner === 'outside_service' ? { busy: true } : {}) };
+  };
+  /** Run n in a place; a run that a model service failed runs again after a wait, with fewer places. */
+  const run = async n => {
+    for (let again = 0; ; again++) {
+      const done = await sharedSlots.run(() => attempt(again ? `${n + 1}-${again + 1}` : `${n + 1}`), priority);
+      if (!done?.busy) { if (done && done.status !== 'unverifiable') sharedSlots.ok(); return done; }
+      sharedSlots.busy();
+      if (again >= 2 || stop.signal.aborted) { const { busy: _busy, ...counted } = done; return counted; }
+      await new Promise(wait => setTimeout(wait, 2000 * (again + 1)));
+    }
+  };
+
+  const pending = new Map();
+  let launched = 0, sized = fixedRuns !== null;
+  const launch = count => { while (launched < Math.min(count, upTo ?? count)) { const n = launched++; pending.set(n, run(n).then(done => ({ n, done }))); } };
   try {
-    for (let n = 0; n < total; n++) {
-      const runDir = join(parent, `run-${n + 1}`), scratch = join(parent, `scratch-${n + 1}`);
-      const environment = { ...config.environment }, paths = {}, copies = {}, missing = [...testCaseValue.snapshot_missing ?? []];
-      await mkdir(scratch, { recursive: true, mode: 0o700 });
-      for (const snapshot of snapshots) {
-        // A saved version carries a case without its snapshot/ folder (the copies stay on the computer that recorded
-        // it): a copy that is not here is a path that the case could not keep, as when it was too large.
-        if (!await exists(join(testCaseValue.dir, snapshot.copy))) { missing.push(snapshot.original); continue; }
-        const copy = join(scratch, snapshot.copy);
-        await mkdir(dirname(copy), { recursive: true, mode: 0o700 });
-        await cp(join(testCaseValue.dir, snapshot.copy), copy, { recursive: true });
-        copies[snapshot.original] = copy; paths[copy] = snapshot.original;
-        if (snapshot.kind === 'env') environment[basename(snapshot.copy)] = copy;
-      }
-      for (const name of written) {
-        const real = pathResolve(config.environment?.[name] ?? '.'), copy = join(scratch, 'env', name);
-        if (await scratchCopy(real, copy)) { environment[name] = copy; paths[copy] = recording.environment?.[name] ?? config.environment?.[name]; }
-        else { attempts.push({ status: 'unverifiable', reason: `${name} is too large to copy for a safe replay (more than ${scratchLimit.files} files or ${scratchLimit.bytes / 1e6} MB).` }); break; }
-      }
-      if (attempts.at(-1)?.status === 'unverifiable') break;
-      let result;
-      const before = await fileHashes(scratch);
-      try {
-        result = await runMethod(methodFile, { ...config, environment }, { ...runOptions, runDir, inputs: rewritePaths(recording.inputs, copies), state: rewritePaths(recording.initial_state, copies),
-          replay: { recording, paths, copies, missing, live, scratch, observations: recording.observations ?? {}, artifacts: await exists(artifacts) ? artifacts : undefined, ...(only ? { only } : {}) } });
-      } catch (error) { attempts.push({ status: 'unverifiable', reason: error.message }); break; }
-      // A usage limit is not a result of the Method: the test stops with it.
-      if (result.status === 'failed' && result.failure?.code === 'usage_limit') fail('limit', result.failure.headline ?? result.failure.details, 'usage_limit');
-      const events = await readEvents(runDir);
-      const kept = keepDir ? { run_dir: runDir } : {};
-      if (result.status === 'failed' && result.failure.code === 'unverifiable') {
-        const gone = events.find(e => e.event === 'replay.missing_file');
-        attempts.push(gone ? { status: 'unverifiable', reason: 'missing_file', path: gone.path, ...kept } : { status: 'unverifiable', reason: result.failure.details, ...kept });
-        break;
-      }
-      const replayed = new Set(events.filter(e => e.event === 'step.replayed').map(e => `${e.step}:${e.iteration}`));
-      const liveSteps = [...new Set(events.filter(e => e.event === 'step.candidate' && !replayed.has(`${e.step}:${e.iteration}`)).map(e => e.step))];
-      const standins = events.filter(e => e.event === 'tool.standin').map(e => ({ step: e.step, iteration: e.iteration, tool: e.tool, arguments: rewritePaths(e.arguments, paths) }));
-      const outcome = await outcomeOfRun(runDir, { paths, copies });
-      // A replayed step's path refers to the source run's file; the case kept a copy of it.
-      for (const [path, name] of Object.entries(testCaseValue.files ?? {})) outcome.files[path] ??= join(testCaseValue.dir, name);
-      if (testCaseValue.source?.run_dir) outcome.source_artifacts = join(pathResolve(testCaseValue.source.run_dir), 'artifacts');
-      const evaluation = await evaluate(testCaseValue.expect, outcome, { caseDir: testCaseValue.dir, config, options: { runOptions, classification: runOptions.classification, cacheDir: runOptions.cacheDir, judgeCache, ...(judges?.length ? { judges } : {}) } });
-      const liveModel = liveSteps.filter(id => modelKinds.has(method.steps[id]?.do?.kind));
-      attempts.push({ ...evaluation, output: await attemptOutput(outcome, before), run_status: result.status, ...(result.failure ? { failure: { code: result.failure.code, headline: result.failure.headline } } : {}), live_steps: liveSteps, live_model_steps: liveModel,
-        ...(live.length ? { target_live: live.every(id => liveSteps.includes(id)) } : {}), standins, judge_calls: evaluation.results.reduce((sum, r) => sum + (r.judge_calls ?? 0), 0), ...kept });
+    launch(fixedRuns ?? (modelLive ? 3 : 1));
+    while (pending.size) {
+      const { n, done } = await Promise.race(pending.values());
+      pending.delete(n);
+      if (!done) continue;
+      attempts.push(done);
+      if (done.status === 'unverifiable') break;
       // A model step that runs live can answer differently each time, so it must pass three runs.
-      if (fixedRuns === null && n === 0 && liveModel.length) { total = 3; needed = fixedMin ?? 3; }
+      if (!sized) { sized = true; total = done.live_model_steps.length ? 3 : 1; needed = fixedMin ?? total; }
       const passes = attempts.filter(a => a.status === 'pass').length, failures = attempts.length - passes;
       // Stop as soon as the result is decided.
       if (passes >= needed || failures > total - needed) break;
+      launch(total);
     }
-  } finally { if (!keepDir) await removeTree(parent); }
-  const passes = attempts.filter(a => a.status === 'pass').length;
-  const status = attempts.some(a => a.status === 'unverifiable') ? 'unverifiable' : passes >= needed ? 'pass' : 'fail';
+  } finally {
+    stop.abort();
+    signal?.removeEventListener('abort', outer);
+    // The runs that were stopped end before their folders are removed.
+    await Promise.allSettled(pending.values());
+    if (!keepDir) await removeTree(parent);
+  }
+  if (!attempts.length && signal?.aborted) return { id: testCaseValue.id, status: 'not_run', passes: 0, runs: 0, min_pass: needed, attempts, duration_ms: Math.round(performance.now() - started) };
+  const passes = attempts.filter(a => a.status === 'pass').length, failures = attempts.length - passes;
+  const decided = passes >= needed || failures > total - needed;
+  const status = attempts.some(a => a.status === 'unverifiable') ? 'unverifiable' : passes >= needed ? 'pass' : failures > total - needed ? 'fail' : signal?.aborted ? 'not_run' : 'pass';
   // Passing some runs and failing another means the Method does not follow the rule reliably.
   const unreliable = status === 'fail' && passes > 0;
   return { id: testCaseValue.id, status, passes, runs: attempts.length, min_pass: needed, ...(unreliable ? { unreliable: `passed ${passes} of ${attempts.length} runs: the Method does not follow this rule every time` } : {}),
+    ...(status === 'pass' && !decided ? { more: needed - passes } : {}),
     ...(live.length ? { target_live: attempts.length > 0 && attempts.every(a => a.target_live === true) } : {}), attempts, duration_ms: Math.round(performance.now() - started) };
 }
-
 /** Remove a folder that may hold read-only copies; tests call it. */
 export async function _removeTree(path) { return removeTree(path); }
 
@@ -576,24 +658,9 @@ async function scratchCopy(real, scratch) {
   await cp(real, scratch, { recursive: true, filter: source => source === real || !scratchSkip.has(basename(source)) });
   return true;
 }
-async function parallel(items, limit, work) {
-  const results = new Array(items.length);
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) { const i = next++; results[i] = await work(items[i]); }
-  }));
-  return results;
-}
 /** Cases whose recorded steps differ from this version run first, because they answer fastest whether a change works. */
 async function changedFirst(methodFile, config, cases) {
-  const method = await readDocument(methodFile), root = dirname(pathResolve(methodFile));
-  const tools = { ...config.tools, ...method.tools };
-  const files = {};
-  const scripts = Object.values(method.steps).flatMap(step => [step.do, step.check]).filter(exec => exec?.kind === 'run').map(exec => exec.entrypoint);
-  for (const file of new Set([...scripts, ...Object.values(tools).map(tool => tool.run?.entrypoint).filter(Boolean), ...(method.files ?? [])])) {
-    try { files[file] = hash(await readFile(join(root, file))); } catch { /* the run reports a missing file */ }
-  }
-  const keys = stepKeys(method, { files, profiles: config.models ?? {}, tools, learned: await readLearned(root) });
+  const keys = await versionKeys(methodFile, config);
   const touched = [];
   for (const item of cases) {
     const recorded = (await readJSON(join(item.dir, 'recording.json'))).keys;
@@ -606,30 +673,56 @@ async function changedFirst(methodFile, config, cases) {
  * Test a Method version against its active cases. Every active case must pass. With a baseline (the version
  * before a change), each case also runs on the old version, to show what the change fixed or broke. New cases
  * must fail on the baseline and pass on the candidate. once, runs, minPass, live, judgeCache, keepDir and judges apply to each
- * case run, on both versions, as in testCase.
+ * case run, on both versions, as in testCase. Every case runs at once; their runs share the places of runSlots.
+ * gate: decide only whether a change can be applied. The old version runs a case only when it is new or fails on the
+ * new version (a case that passes is pass, whatever it did before), and the test stops at the first case that blocks
+ * the change: a regression, a new case that is not fixed, or a case that cannot run safely any more. The cases that
+ * did not run then are not_run.
+ * firstRun: each case that is not new makes only its first run now; a case that passed it and needs more runs has
+ * more: the runs it still needs. moreRuns: each case runs this many more times on the new version, and every run must
+ * pass (the rest of a first-run test).
  * @param {string} methodFile
  * @param {any} config
- * @param {{casesDir?: string | undefined, ids?: string[] | undefined, baseline?: string | undefined, newIds?: string[] | undefined, runOptions?: any, concurrency?: number | undefined, once?: boolean | undefined,
- *   runs?: number | undefined, minPass?: number | undefined, live?: string[] | undefined, judgeCache?: boolean | undefined, keepDir?: string | undefined, judges?: any[] | undefined}} [options]
+ * @param {{casesDir?: string | undefined, ids?: string[] | undefined, baseline?: string | undefined, newIds?: string[] | undefined, runOptions?: any, once?: boolean | undefined,
+ *   runs?: number | undefined, minPass?: number | undefined, live?: string[] | undefined, judgeCache?: boolean | undefined, keepDir?: string | undefined, judges?: any[] | undefined,
+ *   gate?: boolean | undefined, firstRun?: boolean | undefined, moreRuns?: number | undefined}} [options]
  */
-export async function testSuite(methodFile, config, { casesDir = defaultCasesDir(methodFile), ids, baseline, newIds = [], runOptions = {}, concurrency = 4, once = false, runs, minPass, live, judgeCache, keepDir, judges } = {}) {
+export async function testSuite(methodFile, config, { casesDir = defaultCasesDir(methodFile), ids, baseline, newIds = [], runOptions = {}, once = false, runs, minPass, live, judgeCache, keepDir, judges, gate = false, firstRun = false, moreRuns } = {}) {
   const check = { once, runs, minPass, live, judgeCache, keepDir, judges };
   const suiteStarted = performance.now();
   const today = new Date().toISOString().slice(0, 10);
   const all = await listCases(methodFile, casesDir);
   for (const id of [...(ids ?? []), ...newIds]) if (!all.some(c => c.id === id)) fail('setup', `No case ${id} for ${basename(methodFile)}`, 'case_invalid');
   const selected = await changedFirst(methodFile, config, all.filter(c => c.status === 'active' && (!ids || ids.includes(c.id) || newIds.includes(c.id))));
-  const report = await parallel(selected, concurrency, async item => {
-    const candidate = await testCase(methodFile, config, item, runOptions, check);
-    const before = baseline ? await testCase(baseline, config, item, runOptions, check) : null;
+  const stop = new AbortController();
+  const blocks = row => newIds.includes(row.id) ? row.verdict !== 'fixed' : row.verdict === 'regression' || (row.verdict === 'unverifiable' && row.baseline?.status !== 'unverifiable');
+  const rows = selected.map(async (item, order) => {
+    const isNew = newIds.includes(item.id);
+    const own = { ...check, signal: stop.signal, priority: order, ...(moreRuns && !isNew ? { runs: moreRuns, minPass: moreRuns } : {}), ...(firstRun && !isNew ? { upTo: 1 } : {}) };
+    // The old version's runs decide a case, so they go first.
+    const old = { ...check, signal: stop.signal, priority: -1 };
+    let candidate, before = null;
+    if (baseline && (!gate || isNew)) [candidate, before] = await Promise.all([testCase(methodFile, config, item, runOptions, own), testCase(baseline, config, item, runOptions, old)]);
+    else {
+      candidate = await testCase(methodFile, config, item, runOptions, own);
+      if (baseline && !['pass', 'not_run'].includes(candidate.status)) before = await testCase(baseline, config, item, runOptions, old);
+    }
+    if (candidate.status === 'not_run' || before?.status === 'not_run') return { id: item.id, verdict: 'not_run', note: item.note };
     let verdict;
-    if (newIds.includes(item.id)) verdict = before?.status === 'pass' ? 'not_red' : candidate.status === 'pass' ? 'fixed' : candidate.status === 'unverifiable' ? 'unverifiable' : 'not_fixed';
+    if (isNew) verdict = before?.status === 'pass' ? 'not_red' : candidate.status === 'pass' ? 'fixed' : candidate.status === 'unverifiable' ? 'unverifiable' : 'not_fixed';
     else if (candidate.status === 'unverifiable') verdict = 'unverifiable';
     else if (candidate.status === 'pass') verdict = before && before.status !== 'pass' ? 'fixed' : 'pass';
     else verdict = before?.status === 'pass' ? 'regression' : 'fail';
-    return { id: item.id, verdict, note: item.note, ...(item.retention_until < today ? { expired: item.retention_until } : {}), duration_ms: candidate.duration_ms, candidate, ...(before ? { baseline: before } : {}) };
+    const row = { id: item.id, verdict, note: item.note, ...(item.retention_until < today ? { expired: item.retention_until } : {}), ...(candidate.more ? { more: candidate.more } : {}), duration_ms: candidate.duration_ms, candidate, ...(before ? { baseline: before } : {}) };
+    if (gate && blocks(row)) stop.abort();
+    return row;
   });
-  const blocking = new Set(['fail', 'regression', 'unverifiable', 'not_fixed', 'not_red']);
+  // A usage limit or another error stops every case; the test ends after their runs have ended.
+  const settled = await Promise.allSettled(rows.map(row => row.catch(error => { stop.abort(); throw error; })));
+  const failed = settled.find(s => s.status === 'rejected');
+  if (failed) throw failed.reason;
+  const report = settled.map(s => s.value);
+  const blocking = new Set(['fail', 'regression', 'unverifiable', 'not_fixed', 'not_red', 'not_run']);
   const count = verdict => report.filter(r => r.verdict === verdict).length;
   const everyAttempt = report.flatMap(r => [r.candidate, r.baseline].filter(Boolean).flatMap(c => c.attempts));
   return {
@@ -637,7 +730,7 @@ export async function testSuite(methodFile, config, { casesDir = defaultCasesDir
     // What the check cost: model steps that ran live and judge calls that were not cached.
     totals: { duration_ms: Math.round(performance.now() - suiteStarted), live_model_steps: everyAttempt.reduce((sum, a) => sum + (a.live_model_steps?.length ?? 0), 0), judge_calls: everyAttempt.reduce((sum, a) => sum + (a.judge_calls ?? 0), 0) },
     method: pathResolve(methodFile), ...(baseline ? { baseline: pathResolve(baseline) } : {}),
-    counts: Object.fromEntries(['pass', 'fixed', 'regression', 'fail', 'unverifiable', 'not_fixed', 'not_red'].map(v => [v, count(v)])),
+    counts: Object.fromEntries(['pass', 'fixed', 'regression', 'fail', 'unverifiable', 'not_fixed', 'not_red', 'not_run'].map(v => [v, count(v)])),
     retired: all.filter(c => c.status === 'retired').length,
     expired: report.filter(r => r.expired).map(r => r.id),
     cases: report,
