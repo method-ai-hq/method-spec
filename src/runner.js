@@ -25,7 +25,7 @@ import { progressMessage } from './progress.js';
 import { cacheable, iterationKey, readCache, copyOutputFiles, readPaths, pathContents } from './cache.js';
 import { effectKey, connectionsFor, testFixtures, runObserverScript, observeEffect, readLedger, appendLedger, currentEffects, effectSummary, statusWithEffects, waitUntil, nextObservation, horizonAt, previousObservations, listFolder, observeFiles, isBuiltin } from './effects.js';
 import { observerConnection } from './semantics.js';
-import { replayedCandidate, savedCandidate, unverifiable, stepKey, namedPath, keepRunPaths } from './replay.js';
+import { replayedCandidate, savedCandidate, unverifiable, stepKey, namedPath, keepRunPaths, keepInputFolders } from './replay.js';
 import { readLearned, activeRules, rulesText, selectionPrompt, selectionSchema } from './learned.js';
 import { prepareObservation } from './observed-effects.js';
 import { failureRecord } from './failure.js';
@@ -277,6 +277,7 @@ async function executeRun(file, config, options) {
       }
     }
     await writeJSON(pathResolve(runDir, 'summary.json'), { status: 'running', execution_id: executionId, started_at: startedAt });
+    if (!saved) await keepInputFolders(runDir, method, config.environment);
     await record(saved ? 'run.resumed' : 'run.started', { executor_version: executorVersion, execution_id: executionId, device_name: deviceName, method, config, inputs, initial_state: state, runtime_profiles: runtimeInfo, isolation: 'trusted-local-processes; not an OS sandbox' });
     await options.onStart?.({ method, inputs, state, runDir });
     stopRunWatch = timeWatch({}, config.limits.timeout_ms, performance.now() - started);

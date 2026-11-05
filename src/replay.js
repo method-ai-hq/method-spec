@@ -5,7 +5,7 @@ import { resolve as pathResolve, relative, isAbsolute, dirname, join, sep } from
 import { isDeepStrictEqual } from 'node:util';
 import { executionTools } from './tool-connections.js';
 import { fail } from './validate.js';
-import { hash } from './io.js';
+import { hash, writeJSON } from './io.js';
 import { readLedger, currentEffects } from './effects.js';
 import { readLearned, activeRules } from './learned.js';
 
@@ -100,6 +100,24 @@ export function unverifiable(id, iteration, step) {
 /** The folder in a run folder that keeps each path a script made in the run folder, as the script left it. */
 export const keptFolder = runDir => join(pathResolve(runDir), 'kept');
 const keptLimit = { files: 5000, bytes: 100_000_000 };
+/** Keep read-only file connections while their input still belongs to this run, for later corrections. */
+export async function keepInputFolders(runDir, method, environment) {
+  const written = new Set(Object.values(method.steps).flatMap(step => step.changes ?? []));
+  const folders = {};
+  for (const [name, definition] of Object.entries(method.environment ?? {})) {
+    if (definition.type !== 'files' || written.has(`environment.${name}`) || typeof environment?.[name] !== 'string') continue;
+    const original = pathResolve(environment[name]), copy = `input-files/${name}`, target = join(runDir, copy);
+    const runInsideInput = relative(original, pathResolve(runDir));
+    folders[name] = { original, copy: null };
+    if (!runInsideInput || (!runInsideInput.startsWith('..') && !isAbsolute(runInsideInput)) || !await withinLimit(original)) continue;
+    try {
+      await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+      await cp(original, target, { recursive: true, verbatimSymlinks: true });
+      folders[name].copy = copy;
+    } catch { /* A missing input stays missing; a later case must not use a replacement. */ }
+  }
+  await writeJSON(join(runDir, 'input-folders.json'), folders);
+}
 /**
  * Keep a copy of each file or folder in the run folder that a script step's outputs name, as the step left it. A later
  * step can change or remove it before the run ends; a case made from the run copies the kept version, which is what the
@@ -119,10 +137,11 @@ export async function keepRunPaths(runDir, outputs) {
   }
 }
 async function withinLimit(path) {
-  const { readdir, stat } = await import('node:fs/promises');
+  const { readdir, lstat } = await import('node:fs/promises');
   let files = 0, bytes = 0;
   const visit = async p => {
-    const info = await stat(p);
+    const info = await lstat(p);
+    if (info.isSymbolicLink()) return false;
     if (info.isFile()) { files++; bytes += info.size; return files <= keptLimit.files && bytes <= keptLimit.bytes; }
     if (!info.isDirectory()) return true;
     for (const name of await readdir(p)) if (!await visit(join(p, name))) return false;
@@ -155,5 +174,6 @@ export async function recordRun(runDir) {
   return {
     format: 'method-recording/1', method_sha256: hash(documentForDigest(method)), execution_id: started.execution_id, source_run_dir: pathResolve(runDir),
     inputs: started.inputs ?? {}, initial_state: started.initial_state ?? {}, environment: started.config?.environment ?? {}, keys, iterations, observations, method,
+    input_folders: await read('input-folders.json').catch(() => ({})),
   };
 }

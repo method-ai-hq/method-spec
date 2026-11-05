@@ -60,6 +60,33 @@ test('a case keeps a copy of every folder its run read, and replays after the ru
   await assert.rejects(readdir(runs)); await assert.rejects(readdir(join(dir, 'rooms')));
 });
 
+test('a late correction uses the read-only input of its run after the working folder changes', async t => {
+  const dir = await folder(t, 'method-late-input-'), matter = join(dir, 'matter');
+  await mkdir(matter); await writeFile(join(matter, 'value.txt'), 'first');
+  const file = join(dir, 'read.method'), source = join(dir, 'source');
+  const doc = { format: 'method/3.4', name: 'Read', goal: 'Read a document.', environment: { matter: { type: 'files', description: 'The document folder.' } },
+    steps: { read: { name: 'Read', in: { matter: 'environment.matter' }, do: script('read.mjs'), out: { value: text } } }, result: 'value' };
+  await writeFile(file, JSON.stringify(doc));
+  const code = suffix => `import{readFileSync}from'node:fs';const{matter}=JSON.parse(readFileSync(0,'utf8'));console.log(JSON.stringify({value:readFileSync(matter+'/value.txt','utf8')+${JSON.stringify(suffix)}}));`;
+  await writeFile(join(dir, 'read.mjs'), code(''));
+  const cfg = config({ environment: { matter } });
+  assert.equal((await runMethod(file, cfg, { runDir: source })).result, 'first');
+  await writeFile(join(matter, 'value.txt'), 'second');
+  const made = await createCase({ methodFile: file, runDir: source, id: 'first-document', config: cfg,
+    note: 'Add the review suffix.', expect: [{ kind: 'equals', ref: 'result', value: 'first reviewed' }] });
+  assert.equal(await readFile(join(made.dir, 'snapshot/env/matter/value.txt'), 'utf8'), 'first');
+  await writeFile(join(dir, 'read.mjs'), code(' reviewed'));
+  const result = await testCase(file, cfg, (await listCases(file))[0]);
+  assert.equal(result.status, 'pass', JSON.stringify(result.attempts));
+  assert.equal(await readFile(join(matter, 'value.txt'), 'utf8'), 'second');
+  // If the kept input is lost, a later case must not take the replacement document.
+  await rm(join(source, 'input-files'), { recursive: true });
+  const missing = await createCase({ methodFile: file, runDir: source, id: 'missing-first', config: cfg,
+    note: 'Add the review suffix.', expect: [{ kind: 'equals', ref: 'result', value: 'first reviewed' }] });
+  assert.ok(missing.snapshot_missing.includes(matter));
+  assert.equal((await testCase(file, cfg, (await listCases(file)).find(c => c.id === missing.id))).status, 'unverifiable');
+});
+
 test('a file ref names the file that the live step wrote in the replay copy of the run folder', async t => {
   const { dir, runs, file, created } = await roomCase(t);
   const caseFile = join(created.dir, 'case.json'), value = JSON.parse(await readFile(caseFile, 'utf8'));

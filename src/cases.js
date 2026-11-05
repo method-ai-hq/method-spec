@@ -379,7 +379,11 @@ async function snapshotRun(recorded, dir) {
   const copy = async root => {
     // A path that a script made in the run folder: the copy kept as the script left it, else the path as it is now.
     const kept = root.kind === 'run' ? join(keptFolder(run), relative(run, pathResolve(root.original))) : null;
-    const source = kept && await exists(kept) ? kept : pathResolve(root.original);
+    const input = root.kind === 'env' ? recorded.input_folders?.[basename(root.copy)] : null;
+    // Read-only inputs come from the run, never from a working folder that may now hold another task.
+    if (root.kind === 'env' && !input?.copy) { missing.push(root.original); return; }
+    const source = input?.copy ? join(run, input.copy) : kept && await exists(kept) ? kept : pathResolve(root.original);
+    if (root.kind === 'env' && !await exists(source)) { missing.push(root.original); return; }
     if (!await exists(source)) return;
     const size = await treeSize(source, { files: scratchLimit.files - used.files, bytes: scratchLimit.bytes - used.bytes });
     if (size) try {
@@ -393,7 +397,7 @@ async function snapshotRun(recorded, dir) {
   };
   for (const root of roots) await copy(root);
   for (const path of found) {
-    if ((path !== run && inside(run, path)) || snapshots.some(root => inside(path, pathResolve(root.original)))) continue;
+    if ((path !== run && inside(run, path)) || [...roots, ...snapshots].some(root => inside(path, pathResolve(root.original)))) continue;
     await copy(inside(path, run) ? { original: path, copy: ['snapshot/run', relative(run, path)].filter(Boolean).join('/'), kind: 'run' } : { original: path, copy: `snapshot/ext/${ext++}/${basename(path)}`, kind: 'ext' });
   }
   return { snapshots, missing };

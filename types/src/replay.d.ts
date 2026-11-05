@@ -42,6 +42,8 @@ export function savedCandidate(replay: any, { id, iteration, bindings, key }: {
     key: any;
 }): Promise<any>;
 export function unverifiable(id: any, iteration: any, step: any): void;
+/** Keep read-only file connections while their input still belongs to this run, for later corrections. */
+export function keepInputFolders(runDir: any, method: any, environment: any): Promise<void>;
 /**
  * Keep a copy of each file or folder in the run folder that a script step's outputs name, as the step left it. A later
  * step can change or remove it before the run ends; a case made from the run copies the kept version, which is what the
@@ -63,6 +65,7 @@ export function recordRun(runDir: any): Promise<{
     iterations: {};
     observations: {};
     method: any;
+    input_folders: any;
 }>;
 export function stepKeys(method: any, { files, profiles, tools, learned }: {
     files: any;
