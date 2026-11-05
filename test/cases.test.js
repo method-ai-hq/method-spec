@@ -371,6 +371,14 @@ test('a gate runs the old version only for a case that fails, and stops at the f
   assert.ok(full.cases.every(c => c.baseline?.status === 'pass'));
 });
 
+test('a full check keeps testing every case after a regression', async t => {
+  const { file, before, cfg } = await modelCase(t, ['a', 'b', 'c', 'd']);
+  const report = await testSuite(file, cfg, { baseline: before, gate: true, stopOnFailure: false, runOptions: { transport: async body => answer(JSON.stringify(body).includes('please') ? 'broken' : 'hello') } });
+  assert.equal(report.passed, false);
+  assert.equal(report.counts.regression, 4, JSON.stringify(report.counts));
+  assert.equal(report.counts.not_run, 0);
+});
+
 test('a gate runs an earlier case once when it passes clearly, and 3 times when it passes narrowly', async t => {
   const { dir, file, before, cfg } = await modelCase(t, ['a', 'b']);
   // a is judged by a classifier: 0.99 passes clearly, 0.92 passes narrowly (the threshold is 0.9).

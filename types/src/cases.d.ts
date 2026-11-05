@@ -302,6 +302,7 @@ export function touchedSteps(methodFile: string, baseline: string, config: any, 
  * did not run then are not_run. A gate runs each case that is not new once on the new version when that run passes
  * clearly, and 3 times (every run must pass) when it passes narrowly (sure in testCase); a new case passes 3 runs in 3
  * when a model step runs live, and fails on the old version.
+ * stopOnFailure: false keeps a gate running after a break, so a full check reports every case.
  * saved: a folder for the model steps' outputs of passing case runs. Every passing run keeps them there; with a
  * baseline, each version serves the outputs of the steps that are the same in the other version, so a case runs again
  * only the steps that the change touched and the steps after them.
@@ -309,9 +310,9 @@ export function touchedSteps(methodFile: string, baseline: string, config: any, 
  * @param {any} config
  * @param {{casesDir?: string | undefined, ids?: string[] | undefined, baseline?: string | undefined, newIds?: string[] | undefined, runOptions?: any, once?: boolean | undefined,
  *   runs?: number | undefined, minPass?: number | undefined, live?: string[] | undefined, judgeCache?: boolean | undefined, keepDir?: string | undefined, judges?: any[] | undefined,
- *   gate?: boolean | undefined, saved?: string | undefined}} [options]
+ *   gate?: boolean | undefined, stopOnFailure?: boolean | undefined, saved?: string | undefined}} [options]
  */
-export function testSuite(methodFile: string, config: any, { casesDir, ids, baseline, newIds, runOptions, once, runs, minPass, live, judgeCache, keepDir, judges, gate, saved }?: {
+export function testSuite(methodFile: string, config: any, { casesDir, ids, baseline, newIds, runOptions, once, runs, minPass, live, judgeCache, keepDir, judges, gate, stopOnFailure, saved }?: {
     casesDir?: string | undefined;
     ids?: string[] | undefined;
     baseline?: string | undefined;
@@ -325,6 +326,7 @@ export function testSuite(methodFile: string, config: any, { casesDir, ids, base
     keepDir?: string | undefined;
     judges?: any[] | undefined;
     gate?: boolean | undefined;
+    stopOnFailure?: boolean | undefined;
     saved?: string | undefined;
 }): Promise<{
     counts: {
