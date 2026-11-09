@@ -1,6 +1,7 @@
 /**
  * Profiles for the Method's own models and for model IDs that steps name directly: hosted (backend method),
- * or a local agent for an entry {agent: codex | claude, model?, reasoning_effort?}.
+ * a local agent for an entry {agent: codex | claude, model?, reasoning_effort?}, or a direct provider for an entry
+ * {provider: anthropic | openai, model, key, ...} (directProfile).
  */
 export function methodProfiles(method: any): {
     [k: string]: any;
@@ -27,3 +28,8 @@ export function localAgent(env?: NodeJS.ProcessEnv): Promise<string>;
  * hosted model (hostedModel, on account credit) only when no local agent can run it.
  */
 export function resolveModels(method: any, config: any, options?: {}): Promise<any>;
+/**
+ * A direct provider entry {provider, model, key, max_output_tokens?, reasoning_effort?} as the profile of its backend:
+ * the provider's fixed endpoint, called with the value of the declared secret `key`. Anthropic names the effort `effort`.
+ */
+export const directOutputTokens: 16000;

@@ -190,6 +190,10 @@ export const modelName = exec => exec.model ?? 'default';
 export const isModelId = model => typeof model === 'string' && new RegExp(modelIdPattern).test(model);
 /** Method 3.4 fields: id, models (hosted or a local agent), accept, a step model that is a model ID or absent. */
 function validateModels(method) {
+  // A direct provider reads its key from a declared secret, so the host supplies it and the run redacts it.
+  for (const [name, spec] of Object.entries(method.models ?? {})) if (spec?.provider && !own(method.secrets ?? {}, spec.key))
+    fail('method_code', `models.${name}.key: ${spec.key} is not in secrets`, 'undeclared_model_key',
+      { fix: `Declare ${spec.key} under secrets: with its purpose, for example ${spec.key}: ${spec.provider} API key for ${name}.`, field: `models.${name}.key` });
   // Documents saved before method/3.4 name configured profiles (or a saved package's runtime.json models), so they still run.
   if (formatRank(method.format) < 4) return;
   const executions = Object.entries(method.steps).flatMap(([id, step]) => [['do', step.do], ['check', step.check]]

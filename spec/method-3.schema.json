@@ -84,6 +84,117 @@
               "agent"
             ],
             "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "const": "anthropic"
+              },
+              "model": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                "maxLength": 200
+              },
+              "key": {
+                "type": "string",
+                "pattern": "^[A-Z][A-Z0-9_]*$",
+                "not": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "PATH",
+                        "LANG",
+                        "HOME",
+                        "USER",
+                        "TMPDIR",
+                        "CLAUDECODE",
+                        "CODEX_THREAD_ID"
+                      ]
+                    },
+                    {
+                      "pattern": "^METHOD_"
+                    }
+                  ]
+                }
+              },
+              "max_output_tokens": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "reasoning_effort": {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ]
+              }
+            },
+            "required": [
+              "provider",
+              "model",
+              "key"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "const": "openai"
+              },
+              "model": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                "maxLength": 200
+              },
+              "key": {
+                "type": "string",
+                "pattern": "^[A-Z][A-Z0-9_]*$",
+                "not": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "PATH",
+                        "LANG",
+                        "HOME",
+                        "USER",
+                        "TMPDIR",
+                        "CLAUDECODE",
+                        "CODEX_THREAD_ID"
+                      ]
+                    },
+                    {
+                      "pattern": "^METHOD_"
+                    }
+                  ]
+                }
+              },
+              "max_output_tokens": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "reasoning_effort": {
+                "enum": [
+                  "none",
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh"
+                ]
+              }
+            },
+            "required": [
+              "provider",
+              "model",
+              "key"
+            ],
+            "additionalProperties": false
           }
         ]
       }

@@ -14,6 +14,18 @@ export function object(properties: any, required?: string[]): {
 };
 export const modelIdPattern: "^[a-z0-9-]+/[A-Za-z0-9._:-]+$";
 export const sessionTools: string[];
+export namespace directProviders {
+    namespace anthropic {
+        let backend: string;
+        let efforts: string[];
+    }
+    namespace openai {
+        let backend_1: string;
+        export { backend_1 as backend };
+        let efforts_1: string[];
+        export { efforts_1 as efforts };
+    }
+}
 export const formats: string[];
 /** @type {Record<string, any>} */
 export const methodSchema: Record<string, any>;

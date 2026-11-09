@@ -35,10 +35,22 @@ export const sessionTools = ['read', 'write', 'edit', 'search', 'shell', 'web'];
 // the files it wrote go back into the folder when it ends.
 const session = object({ kind: { const: 'session' }, agent: { enum: ['claude', 'codex'] }, model: text, reasoning_effort: text,
   prompt: text, tools: list({ type: 'string', enum: sessionTools }), room: ref }, ['kind', 'agent', 'prompt', 'tools']);
-// What a models name means: a hosted model ID, or one with its output limit and reasoning effort,
-// or a local agent (codex or claude) with its own model and reasoning effort.
+// A direct provider's own model name, without a provider prefix, for example claude-sonnet-4-6.
+const providerModel = { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$', maxLength: 200 };
+// The providers that a Method can call directly with the operator's own key, the runtime backend of each, and the
+// reasoning efforts that the provider accepts. Each backend has a fixed endpoint.
+export const directProviders = {
+  anthropic: { backend: 'anthropic-messages', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+  openai: { backend: 'openai-responses', efforts: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
+};
+const directModel = ([provider, { efforts }]) => object({ provider: { const: provider }, model: providerModel, key: secretName,
+  max_output_tokens: positive, reasoning_effort: { enum: efforts } }, ['provider', 'model', 'key']);
+// What a models name means: a hosted model ID, or one with its output limit and reasoning effort; a local agent
+// (codex or claude) with its own model and reasoning effort; or a direct provider called with the key that the
+// declared secret `key` holds, so that no request goes through the Method account or OpenRouter.
 const methodModel = { anyOf: [modelId, object({ model: modelId, max_output_tokens: positive, reasoning_effort: { enum: ['minimal', 'low', 'medium', 'high'] } }, ['model']),
-  object({ agent: { enum: ['codex', 'claude'] }, model: text, reasoning_effort: text }, ['agent'])] };
+  object({ agent: { enum: ['codex', 'claude'] }, model: text, reasoning_effort: text }, ['agent']),
+  ...Object.entries(directProviders).map(directModel)] };
 // An accepted warning: the issue code and the reason the author accepts it on this step.
 const runLimits = { timeout_ms: positive, max_model_requests: { type: 'integer', minimum: 0 }, max_invocations: positive, max_tool_calls: { type: 'integer', minimum: 0 }, max_output_bytes: positive, max_request_bytes: positive, max_concurrency: positive };
 const stepLimits = { timeout_ms: positive, max_agent_turns: positive, max_model_requests: positive };

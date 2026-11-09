@@ -6,17 +6,30 @@ import { constants } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { fail, own, validateConfig } from './validate.js';
 import { modelName, isModelId } from './semantics.js';
+import { directProviders } from './schema.js';
 
 /**
  * Profiles for the Method's own models and for model IDs that steps name directly: hosted (backend method),
- * or a local agent for an entry {agent: codex | claude, model?, reasoning_effort?}.
+ * a local agent for an entry {agent: codex | claude, model?, reasoning_effort?}, or a direct provider for an entry
+ * {provider: anthropic | openai, model, key, ...} (directProfile).
  */
 export function methodProfiles(method) {
   const hosted = spec => typeof spec === 'string' ? { backend: 'method', model: spec }
-    : spec.agent ? (({ agent, ...rest }) => ({ backend: agent, ...rest }))(spec) : { backend: 'method', ...spec };
+    : spec.agent ? (({ agent, ...rest }) => ({ backend: agent, ...rest }))(spec)
+    : spec.provider ? directProfile(spec) : { backend: 'method', ...spec };
   const profiles = Object.fromEntries(Object.entries(method.models ?? {}).map(([name, spec]) => [name, hosted(spec)]));
   for (const name of modelNames(method)) if (isModelId(name) && !own(profiles, name)) profiles[name] = hosted(name);
   return profiles;
+}
+/**
+ * A direct provider entry {provider, model, key, max_output_tokens?, reasoning_effort?} as the profile of its backend:
+ * the provider's fixed endpoint, called with the value of the declared secret `key`. Anthropic names the effort `effort`.
+ */
+export const directOutputTokens = 16_000;
+function directProfile({ provider, model, key, max_output_tokens = directOutputTokens, reasoning_effort }) {
+  const backend = directProviders[provider].backend;
+  const effort = reasoning_effort ? { [backend === 'anthropic-messages' ? 'effort' : 'reasoning_effort']: reasoning_effort } : {};
+  return { backend, model, api_key_env: key, max_output_tokens, ...effort };
 }
 const modelNames = method => [...new Set(Object.values(method.steps).flatMap(step => [step.do, step.check])
   .filter(exec => ['call', 'agent'].includes(exec?.kind)).map(modelName))];
